@@ -1,5 +1,7 @@
 #![doc(html_logo_url = "file:///home/diego/Software/shutter/assets/logo.png")]
 
+#![allow(unused)]
+
 // pub(crate) mod foreign;
 
 pub mod image;

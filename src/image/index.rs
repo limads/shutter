@@ -1,12 +1,4 @@
-use nalgebra::*;
-use nalgebra::storage::*;
-use std::iter::Iterator;
-use std::fmt::Display;
-use std::convert::TryFrom;
-use std::ops::Range;
-use super::*;
-use std::ffi;
-use std::mem;
+// use nalgebra::*;
 
 /// Returns position relative to the current linear index in the image with the given number of columns.
 pub fn coordinate_index(lin_ix : usize, ncol : usize) -> (usize, usize) {

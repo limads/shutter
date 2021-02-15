@@ -96,3 +96,41 @@ impl Interpolation2D {
 
 }
 
+/*
+fn interpolate2d(
+    x : &[f64],
+    y : &[f64],
+    z : &[f64],
+    nx : usize,
+    ny : usize,
+    x_domain : (f64, f64),
+    y_domain : (f64, f64)
+) -> Result<Vec<Vec<f64>>, &'static str> {
+    if x.len() != y.len() {
+        return Err("Incompatible (x,y) domain lengths");
+    }
+    if x.len() < 2 {
+        return Err("(x, y) domain lengths too small");
+    }
+    if z.len() != x.len() * y.len() {
+        return Err("Invalid height dimension");
+    }
+    unsafe {
+        let spline2d_type = spline2d::gsl_interp2d_bilinear;
+        let spline = spline2d::gsl_spline2d_alloc(spline2d_type, x.len(), y.len());
+        let xacc = spline2d::gsl_interp_accel_alloc();
+        let yacc = spline2d::gsl_interp_accel_alloc();
+        spline2d::gsl_spline2d_init(spline, &x[0] as *const f64, &y[0] as *const f64, &z[0] as *const f64, x.len(), y.len());
+        let xvals = define_homogeneous_domain(x_domain.0, x_domain.1, nx);
+        let yvals = define_homogeneous_domain(y_domain.0, y_domain.1, ny);
+        let mut ans = Vec::new();
+        for yv in yvals.iter() {
+            let mut row = Vec::new();
+            for xv in xvals.iter() {
+                row.push(spline2d::gsl_spline2d_eval(spline, *xv, *yv, xacc, yacc));
+            }
+            ans.push(row);
+        }
+        Ok(ans)
+    }
+*/

@@ -1,12 +1,12 @@
 use nalgebra::*;
-use nalgebra::storage::*;
+
 use std::iter::Iterator;
-use std::fmt::Display;
+
 use std::convert::TryFrom;
 use std::ops::Range;
 use super::*;
-use std::ffi;
-use std::mem;
+
+
 
 // Wait for stabilization of f64 const fn here
 // const fn half_pi() -> f64 { std::f64::consts::PI / 2.0 }
@@ -277,12 +277,13 @@ impl Digit {
 
     fn to_points(&self, dim : usize) -> Vec<(usize, usize)> {
         let top_row : Vec<_> = (0..(dim / 2)).map(|c| (0, c as usize)).collect();
-        let mid_row : Vec<_> = top_row.iter().map(|(r, c)| ((dim / 2) as usize, *c) ).collect();
+        let mid_row : Vec<_> = top_row.iter().map(|(_r, c)| ((dim / 2) as usize, *c) ).collect();
         let bottom_row : Vec<_> = mid_row.iter().map(|(_, c)| ((dim - 1 as usize), *c) ).collect();
         let tl_col : Vec<_> = (0..(dim / 2)).map(|r| (r as usize, 0)).collect();
         let bl_col : Vec<_> = tl_col.iter().map(|(r, _)| ((r + dim/2) as usize, 0) ).collect();
         let tr_col : Vec<_> = (0..(dim/2)).map(|r| (r, (dim/2-1) as usize) ).collect();
-        let br_col : Vec<_> = tr_col.iter().map(|(r, c)| ( (r + dim/2) as usize, (dim/2-1) as usize) ).collect();
+        let br_col : Vec<_> = tr_col.iter().map(|(r, _c)| ( (r + dim/2) as usize, (dim/2-1) as usize) ).collect();
+        
         let mut digits = Vec::new();
         if self.top_row {
             digits.extend(top_row.iter());
@@ -300,6 +301,9 @@ impl Digit {
             digits.extend(tr_col.iter());
         }
         if self.br_col {
+            digits.extend(br_col.iter());
+        }
+        if self.bl_col {
             digits.extend(br_col.iter());
         }
         digits
@@ -323,7 +327,7 @@ pub fn draw_digit(
     }
 }
 
-pub fn draw_digit_native(slice : &mut [u8], ncols : usize, tl_pos : (usize, usize), val : usize, sz : usize, col : u8) {
+pub fn draw_digit_native(slice : &mut [u8], ncols : usize, tl_pos : (usize, usize), val : usize, sz : usize, _col : u8) {
     let mut digits : Vec<usize> = Vec::new();
     let mut curr_val = val;
     while curr_val > 10 {

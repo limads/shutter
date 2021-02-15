@@ -1,16 +1,10 @@
 // extern crate gtk;
 // extern crate gio;
 // extern crate gdk;
-
 use nalgebra::*;
 use nalgebra::storage::*;
-use std::iter::Iterator;
-use std::fmt::Display;
-use std::convert::TryFrom;
-use std::ops::Range;
+// use std::iter::Iterator;
 use super::*;
-use std::ffi;
-use std::mem;
 
 // To get images over [-1, 1], transform to -256, 1/280
 // To get images over [0, 1], transform to -128, 1/128

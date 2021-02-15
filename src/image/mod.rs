@@ -1,6 +1,6 @@
 use nalgebra::*;
-use nalgebra::storage::*;
-use volta::signal::sampling::{self, *};
+// use nalgebra::storage::*;
+use volta::signal::sampling::{self};
 use std::ops::{Index, IndexMut, Mul, Add, AddAssign, MulAssign, SubAssign};
 use simba::scalar::SubsetOf;
 use std::fmt;
@@ -119,7 +119,7 @@ where
     }
     
     pub fn copy_from(&mut self, other : &Image<N>) {
-        unsafe{ self.buf.copy_from_slice(other.buf.as_slice()) };
+        self.buf.copy_from_slice(other.buf.as_slice());
     }
     
     pub fn as_slice(&self) -> &[N] {
@@ -611,7 +611,7 @@ where
         Self::from_slice(src, (src.len() as f64).sqrt() as usize)
     }
     
-    pub fn component_scale(&mut self, other : &Window<N>) {
+    pub fn component_scale(&mut self, _other : &Window<N>) {
         // self.win.component_mul_mut(&other.win);
         unimplemented!()
     }
@@ -625,7 +625,7 @@ where
 
     type Output = N;
 
-    fn index(&self, index: (usize, usize)) -> &Self::Output {
+    fn index(&self, _index: (usize, usize)) -> &Self::Output {
         // &self.win[index]
         unimplemented!()
     }
@@ -636,7 +636,7 @@ where
     N : Scalar + Copy
 {
     
-    fn index_mut(&mut self, index: (usize, usize)) -> &mut Self::Output {
+    fn index_mut(&mut self, _index: (usize, usize)) -> &mut Self::Output {
         //&mut self.win[index]
         unimplemented!()
     }

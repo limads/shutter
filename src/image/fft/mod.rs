@@ -163,7 +163,7 @@ where
     }
     
     pub fn component_scale(&mut self, other : &ImageSpectrum<N>) {
-        self.buf.component_mul_mut(&other.buf);
+        self.buf.component_mul_assign(&other.buf);
     }
     
     //pub fn bands(&self) -> impl Iterator<Item=ImageBand> {
