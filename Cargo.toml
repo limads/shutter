@@ -1,0 +1,20 @@
+[package]
+name = "shutter"
+version = "0.1.0"
+authors = ["Diego Lima <lima.ds@outlook.com>"]
+edition = "2018"
+
+[dependencies]
+nalgebra = { version = "0.24.1", features = ["serde-serialize", "sparse"] }
+simba="0.3.1"
+num-traits = "0.2.14"
+serde = { version="1.0.111", features=["derive"] }
+opencv = { version = "0.49.1", features = ["contrib", "opencv-4"]}
+volta =  { path = "../volta", features = ["ipp", "mkl", "gsl"] }
+
+[features]
+mkl=[]
+gsl=[]
+ipp=[]
+opencvlib=[]
+
