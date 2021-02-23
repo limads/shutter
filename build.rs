@@ -1,4 +1,4 @@
-// use std::env;
+use std::env;
 // use std::fs;
 // use std::path::Path;
 
@@ -33,7 +33,14 @@ fn try_link_gsl() {
     }
 }*/
 
+fn try_link_vlfeat() {
+    if let Ok(_) = env::var("CARGO_FEATURE_VLFEATLIB") {
+        println!("cargo:rustc-link-lib=vl");
+    }
+}
+
 fn main() {
+    try_link_vlfeat();
     // try_link_gsl();
     // try_link_mkl();
     // try_link_ipp();

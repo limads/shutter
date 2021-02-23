@@ -1,5 +1,4 @@
 use nalgebra::*;
-// use nalgebra::storage::*;
 use volta::signal::sampling::{self};
 use std::ops::{Index, IndexMut, Mul, Add, AddAssign, MulAssign, SubAssign};
 use simba::scalar::SubsetOf;
@@ -32,7 +31,7 @@ pub mod pgm;
 pub mod ipp;
 
 #[cfg(feature="opencvlib")]
-pub(crate) mod cvutils;
+pub mod cvutils;
 
 pub mod index;
 
@@ -91,6 +90,36 @@ where
         WindowMut { win : &mut self.buf[..], orig_sz : shape, offset, win_sz }
     }
     
+    pub fn downsample(&mut self, src : &Window<N>) {
+        assert!(src.is_full());
+        let src_ncols = src.orig_sz.1;
+        let dst_ncols = self.ncols;
+        
+        #[cfg(feature="opencvlib")]
+        unsafe {
+            cvutils::resize(
+                src.win,
+                &mut self.buf[..], 
+                src_ncols, 
+                None,
+                dst_ncols,
+                None
+            );
+            return;
+        }
+        
+        #[cfg(feature="ipp")]
+        unsafe {
+            let dst_nrows = self.buf.len() / self.ncols;
+            ipp::resize(src.win, &mut self.buf, src.orig_sz, (dst_nrows, dst_ncols));
+        }
+        
+        panic!("Image::downsample requires that crate is compiled with opencv or ipp feature");
+    }
+    
+    // TODO call this downsample_convert, and leave alias as a second enum argument:
+    // AntiAliasing::On OR AntiAliasing::Off. Disabling antialiasing calls this implementation
+    // that just iterates over the second buffer; enabling it calls for more costly operations.
     pub fn downsample_aliased<M>(&mut self, src : &Window<M>) 
     where
         M : Scalar + Copy,
@@ -141,7 +170,9 @@ where
         self.full_window().windows(sz)
     }
     
-    pub fn convert_from_window<M>(&mut self, other : &Window<M>) 
+    // TODO make this generic like impl AsRef<Window<M>>, and make self carry a field Window corresponding
+    // to the full window to work as the AsRef implementation, so the user can pass images here as well.
+    pub fn convert<M>(&mut self, other : &Window<M>) 
     where
         M : Scalar
     {
@@ -159,7 +190,15 @@ where
             );
             return;
         }
-        unimplemented!()
+        
+        #[cfg(feature="ipp")]
+        {
+            assert!(other.is_full());
+            unsafe { ipp::convert(other.win, &mut self.buf[..], ncols); }
+            return;
+        }
+        
+        panic!("Either opencvlib or ipp feature should be enabled for image conversion");
     }
     
     pub fn iter(&self) -> impl Iterator<Item=&N> {
@@ -287,6 +326,15 @@ where
     // transposed : bool
 }
 
+impl<'a, N> Window<'a, N>
+where
+    N : Scalar
+{
+    pub fn is_full(&'a self) -> bool {
+        self.orig_sz == self.win_sz
+    }
+}
+    
 impl<'a, N> Window<'a, N> 
 where
     N : Scalar + Mul<Output=N> + MulAssign
@@ -334,17 +382,17 @@ where
     
     pub fn shape(&self) -> (usize, usize) {
         // self.win.shape()
-        unimplemented!()
+        self.win_sz
     }
     
     pub fn width(&self) -> usize {
         // self.win.ncols()
-        unimplemented!()
+        self.win_sz.1
     }
     
     pub fn height(&self) -> usize {
         // self.win.nrows()
-        unimplemented!()
+        self.win_sz.0
     }
     
     /// Iterate over windows of the given size. This iterator consumes the original window

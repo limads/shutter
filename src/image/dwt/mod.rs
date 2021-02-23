@@ -10,6 +10,7 @@ use volta::signal::dwt::gsl::*;
 pub mod ipp;
 
 pub mod iter;
+
 use iter::DWTIteratorBase;
 
 /// Two-dimensional wavelet decomposition

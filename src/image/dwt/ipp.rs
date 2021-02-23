@@ -2,6 +2,7 @@ use volta::foreign::ipp::ippi::*;
 use super::super::ipp::row_size_bytes;
 use volta::foreign::ipp::ippcore::{self, ippMalloc};
 use volta::signal::dwt;
+use crate::image::ipp::check_status;
 
 /*pub struct Wavelet2D<N> {
     levels : Vec<WaveletLevel<N>>
@@ -11,22 +12,6 @@ pub struct WaveletLevel<N> {
     src : Image<N>,
     dst : Image<N>
 }*/
-
-fn check_status(action : &str, status : i32) {
-    if status as u32 == ippcore::ippStsNoErr {
-        return;
-    } 
-    let err_msg : &'static str = match status {
-        ippcore::ippStsNullPtrErr => "Null pointer",
-        ippcore::ippStsNumChannelsErr => "Wrong number of channels",
-        ippcore::ippStsAnchorErr => "Anchor error",
-        ippcore::ippStsSizeErr => "Size error",
-        ippcore::ippStsStepErr => "Step error",
-        ippcore::ippStsContextMatchErr => "Context match error",
-        _ => "Unknown error"
-    };
-    panic!("IPPS Error\tAction: {}\tCode: {}\tMessage: {}", action, status, err_msg);
-}
 
 /// For a filter of size k, if anchor = 0, the full image should be padded with k-1 pixels
 /// to the left, right, top and bottom portions. The left and top borders will have the same

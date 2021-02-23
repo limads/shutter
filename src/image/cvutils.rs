@@ -23,7 +23,7 @@ where
             if T::is::<f32>() {
                 core::CV_32FC1
             } else {
-                if T::is::<f32>() {
+                if T::is::<f64>() {
                     core::CV_64FC1
                 } else {
                     panic!("Invalid matrix type");        
@@ -31,6 +31,20 @@ where
             }
         }
     }
+}
+
+pub unsafe fn dmatrix_to_mat<T>(d : &DMatrix<T>) -> core::Mat 
+where
+    T : Scalar
+{
+    slice_to_mat(d.as_slice(), d.ncols(), None)
+}
+
+pub unsafe fn dvector_to_mat<T>(d : &DVector<T>) -> core::Mat 
+where
+    T : Scalar
+{
+    slice_to_mat(d.as_slice(), 1, None)
 }
 
 /// Converts a Rust slice carrying nalgebra::Scalar elements into an OpenCV mat 
@@ -98,17 +112,16 @@ where
     src.convert_to(&mut dst, get_cv_type::<U>(), scale, offset).unwrap();
 }
 
-pub unsafe fn resize<T, U>(
+pub unsafe fn resize<T>(
     src : &[T], 
-    dst : &mut [U], 
+    dst : &mut [T], 
     src_stride : usize, 
     src_opt_subsample : Option<((usize, usize), (usize, usize))>,
     dst_stride : usize,
     dst_opt_subsample : Option<((usize, usize), (usize, usize))>
 ) 
 where
-    T : Scalar,
-    U : Scalar
+    T : Scalar
 {
     let src = slice_to_mat(src, src_stride, src_opt_subsample);
     let mut dst = slice_to_mat(&dst, dst_stride, dst_opt_subsample);

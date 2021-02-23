@@ -3,6 +3,7 @@ use opencv::prelude::Tracker;
 use opencv::tracking::TrackerMOSSE;
 use std::ffi;
 use crate::image::cvutils;
+use crate::path::Path;
 
 pub struct CVTracker {
 
@@ -57,6 +58,18 @@ impl CVTracker {
         }
     }
     
+    pub fn path(&self) -> &Path {
+        unimplemented!()
+    }
+    
 }
 
+/// Checks if two tracked regions are aligned and move in the same direction or not. The
+/// two tracked regions are assumed to track edges of the same object. If one of the regions
+/// moves leading or lagging the other, this most likely is due to a perspective change,
+/// and not translation about the camera plane. A threshold on the tracked Path might inform
+/// if  
+fn is_movement_parallel() {
+
+}
 

@@ -1,10 +1,11 @@
 #![doc(html_logo_url = "file:///home/diego/Software/shutter/assets/logo.png")]
-
 #![allow(unused)]
 
 // pub(crate) mod foreign;
 
 pub mod image;
+
+pub mod path;
 
 #[cfg(feature="opencvlib")]
 pub mod tracking;
@@ -21,4 +22,12 @@ pub mod flow;
 #[cfg(feature="opencvlib")]
 pub mod threshold;
 
+pub mod cluster;
 
+#[cfg(feature="vlfeat")]
+pub mod segmentation;
+
+pub mod foreign;
+
+#[cfg(feature="processor")]
+pub mod processor;
