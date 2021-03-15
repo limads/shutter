@@ -3,6 +3,7 @@ use volta::signal::sampling::{self};
 use std::ops::{Index, IndexMut, Mul, Add, AddAssign, MulAssign, SubAssign};
 use simba::scalar::SubsetOf;
 use std::fmt;
+use std::fmt::Debug;
 
 #[cfg(feature="opencvlib")]
 use opencv::core;
@@ -395,13 +396,26 @@ where
         self.win_sz.0
     }
     
+    pub fn len(&self) -> usize {
+        self.win_sz.0 * self.win_sz.1
+    }
+
+    /*pub fn linear_index(&self, ix : usize) -> &N {
+        let offset = self.orig_sz.1 * offset.0 + offset.1;
+        let row = ix / self.orig_sz.1;
+        unsafe{ self.win.get_unchecked(offset + ix) }
+    }*/
+
     /// Iterate over windows of the given size. This iterator consumes the original window
     /// so that we can implement windows(.) for Image by using move semantics, without
     /// requiring the user to call full_windows(.).
     pub fn windows(self, sz : (usize, usize)) -> impl Iterator<Item=Window<'a, N>> {
         let (step_v, step_h) = sz;
+        if sz.0 >= self.win_sz.0 || sz.1 >= self.win_sz.1 {
+            panic!("Child window size bigger than parent window size");
+        }
         if self.height() % sz.0 != 0 || self.width() % sz.1 != 0 {
-            panic!("Image size should be a multiple of window size");
+            panic!("Image size should be a multiple of window size (Required window {:?} over parent window {:?})", sz, self.win_sz);
         }
         let offset = self.offset;
         WindowIterator::<'a, N> {
@@ -413,6 +427,15 @@ where
         }
     }
     
+    pub fn rows(&self) -> impl Iterator<Item=&[N]> {
+        let stride = self.orig_sz.1;
+        let tl = self.offset.0 * stride + self.offset.1;
+        (0..self.win_sz.0).map(move |i| {
+            let start = tl + i*stride;
+            &self.win[start..(start+self.win_sz.1)]
+        })
+    }
+
     pub fn iter(&self) -> impl Iterator<Item=&N> {
         iterate_row_wise(self.win, self.offset, self.win_sz, self.orig_sz)
     }
@@ -428,7 +451,29 @@ where
     
 }
 
-impl<N> Index<(usize, usize)> for Window<'_, N> 
+#[test]
+fn window_iter() {
+    let img : Window<'_, u8> = Window::from_square_slice(&[
+        1, 1, 1, 1, 0, 0, 0, 0,
+        1, 1, 1, 1, 0, 0, 0, 0,
+        1, 1, 1, 1, 0, 0, 0, 0,
+        1, 1, 1, 1, 0, 0, 0, 0,
+        0, 0, 0, 0, 1, 1, 1, 1,
+        0, 0, 0, 0, 1, 1, 1, 1,
+        0, 0, 0, 0, 1, 1, 1, 1,
+        0, 0, 0, 0, 1, 1, 1, 1,
+    ]);
+
+    for win in img.windows((4,4)) {
+        println!("Outer: {:?}", win);
+        for win_inner in win.windows((2,2)) {
+            println!("\tInner : {:?}", win_inner);
+        }
+        println!("")
+    }
+}
+
+impl<N> Index<(usize, usize)> for Window<'_, N>
 where
     N : Scalar
 {
@@ -468,6 +513,7 @@ where
     // This child window size
     size : (usize, usize),
 
+    // Index the most ancestral window possible.
     curr_pos : (usize, usize),
 
     /// Vertical increment. Either U1 or Dynamic.
@@ -486,8 +532,9 @@ where
     type Item = Window<'a, N>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let within_bounds = self.curr_pos.0  + self.size.0 <= self.source.win_sz.0 && 
-            self.curr_pos.1 + self.size.1 <= self.source.win_sz.1;
+        let within_horiz = self.curr_pos.0  + self.size.0 <= (self.source.offset.0 + self.source.win_sz.0);
+        let within_vert = self.curr_pos.1 + self.size.1 <= (self.source.offset.1 + self.source.win_sz.1);
+        let within_bounds = within_horiz && within_vert;
         let win = if within_bounds {
             Some(Window { 
                 offset : self.curr_pos,
@@ -499,8 +546,8 @@ where
             None
         };
         self.curr_pos.1 += self.step_h;
-        if self.curr_pos.1 + self.size.1 > self.source.win_sz.1 {
-            self.curr_pos.1 = 0;
+        if self.curr_pos.1 + self.size.1 > (self.source.offset.1 + self.source.win_sz.1) {
+            self.curr_pos.1 = self.source.offset.1;
             self.curr_pos.0 += self.step_v;
         }
         win
@@ -533,7 +580,10 @@ pub enum Mark {
     Line((usize, usize), (usize, usize), u8),
     
     // Position, digit value, digit size and color
-    Digit((usize, usize), usize, usize, u8)
+    Digit((usize, usize), usize, usize, u8),
+
+    // Center, radius and color
+    Circle((usize, usize), usize, u8)
     
 }
 
@@ -553,6 +603,50 @@ where
     
     // Original image full slice.
     win : &'a mut [N],
+}
+
+impl<'a, N> WindowMut<'a, N>
+where
+    N : Scalar + Copy + Debug
+{
+
+    pub fn from_slice(src : &'a mut [N], ncols : usize) -> Self {
+        /*let nrows = src.len() / ncols;
+        Self {
+            win : DMatrixSliceMut::from_slice_generic(src, Dynamic::new(nrows),
+            Dynamic::new(ncols)),
+            offset : (0, 0),
+            orig_sz : (nrows, ncols)
+        }*/
+        let nrows = src.len() / ncols;
+        Self{
+            // win : DMatrixSlice::from_slice_generic(src, Dynamic::new(nrows),
+            // Dynamic::new(ncols)),
+            win : src,
+            offset : (0, 0),
+            orig_sz : (nrows, ncols),
+            win_sz : (nrows, ncols),
+        }
+    }
+
+    pub fn sub_window(&'a mut self, offset : (usize, usize), dims : (usize, usize)) -> WindowMut<'a, N> {
+        /*let offset = (self.offset.0 + offset.0, self.offset.1 + offset.1);
+        let orig_sz = self.orig_sz;
+        Self{ win : self.win.slice_mut(offset, dims), offset, orig_sz }*/
+        Self {
+            win : self.win,
+            offset : (self.offset.0 + offset.0, self.offset.1 + offset.1),
+            orig_sz : self.orig_sz,
+            // transposed : self.transposed,
+            win_sz : dims
+        }
+    }
+
+    /// Creates a window that cover the whole slice src, assuming it represents a square image.
+    pub fn from_square_slice(src : &'a mut [N]) -> Self {
+        Self::from_slice(src, (src.len() as f64).sqrt() as usize)
+    }
+
 }
 
 impl WindowMut<'_, u8> {
@@ -587,8 +681,8 @@ impl WindowMut<'_, u8> {
                 let src_pos = (self.offset.0 + src.0, self.offset.1 + src.1);
                 let dst_pos = (self.offset.0 + dst.0, self.offset.1 + dst.1);
                 
-                #[cfg(feature="cvutils")]
-                {
+                #[cfg(feature="opencvlib")]
+                unsafe {
                     cvutils::draw_line(self.win, self.orig_sz.1, src_pos, dst_pos, color);
                     return;
                 }
@@ -603,13 +697,25 @@ impl WindowMut<'_, u8> {
             },
             Mark::Digit(pos, val, sz, color) => {
                 let tl_pos = (self.offset.0 + pos.0, self.offset.1 + pos.1);
-                #[cfg(feature="cvutils")]
-                {
+
+                #[cfg(feature="opencvlib")]
+                unsafe {
                     cvutils::write_text(self.win, self.orig_sz.1, tl_pos, &val.to_string()[..], color);
                     return;
                 }
                 
                 draw::draw_digit_native(self.win, self.orig_sz.1, tl_pos, val, sz, color);
+            },
+            Mark::Circle(pos, radius, color) => {
+                let center_pos = (self.offset.0 + pos.0, self.offset.1 + pos.1);
+
+                #[cfg(feature="opencvlib")]
+                unsafe {
+                    cvutils::draw_circle(self.win, self.orig_sz.1, center_pos, radius, color);
+                    return;
+                }
+
+                panic!("Circle draw require 'opencvlib' feature");
             }
         }
     }
@@ -621,43 +727,6 @@ where
     N : Scalar + Copy + MulAssign + AddAssign + Add<Output=N> + Mul<Output=N> + SubAssign + Field + SimdPartialOrd,
     f64 : SubsetOf<N>
 {
-
-    pub fn from_slice(src : &'a mut [N], ncols : usize) -> Self {
-        /*let nrows = src.len() / ncols;
-        Self { 
-            win : DMatrixSliceMut::from_slice_generic(src, Dynamic::new(nrows), 
-            Dynamic::new(ncols)), 
-            offset : (0, 0),
-            orig_sz : (nrows, ncols)
-        }*/
-        let nrows = src.len() / ncols;
-        Self{ 
-            // win : DMatrixSlice::from_slice_generic(src, Dynamic::new(nrows),
-            // Dynamic::new(ncols)),
-            win : src,
-            offset : (0, 0),
-            orig_sz : (nrows, ncols),
-            win_sz : (nrows, ncols),
-        }
-    }
-    
-    pub fn sub_window(&'a mut self, offset : (usize, usize), dims : (usize, usize)) -> WindowMut<'a, N> {
-        /*let offset = (self.offset.0 + offset.0, self.offset.1 + offset.1);
-        let orig_sz = self.orig_sz;
-        Self{ win : self.win.slice_mut(offset, dims), offset, orig_sz }*/
-        Self { 
-            win : self.win, 
-            offset : (self.offset.0 + offset.0, self.offset.1 + offset.1), 
-            orig_sz : self.orig_sz, 
-            // transposed : self.transposed,
-            win_sz : dims
-        }
-    }
-    
-    /// Creates a window that cover the whole slice src, assuming it represents a square image.
-    pub fn from_square_slice(src : &'a mut [N]) -> Self {
-        Self::from_slice(src, (src.len() as f64).sqrt() as usize)
-    }
     
     pub fn component_scale(&mut self, _other : &Window<N>) {
         // self.win.component_mul_mut(&other.win);
@@ -803,8 +872,8 @@ fn checkerboard() {
     let src : [u8; 4] = [0, 1, 1, 0];
     let mut converted : Image<f32> = Image::new_constant(4, 4, 0.0);
     let win = Window::from_square_slice(&src);
-    converted.convert_from_window(&win);
-    println!("{}", converted);
+    //converted.convert_from_window(&win);
+    // println!("{}", converted);
 }
 
 /*impl<N> AsRef<Vec<N>> for Image<N> 

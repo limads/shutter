@@ -145,15 +145,47 @@ pub unsafe fn write_text(dst : &mut [u8], ncol : usize, tl_pos : (usize, usize),
 }
 
 pub unsafe fn draw_line(dst : &mut [u8], ncol : usize, from : (usize, usize), to : (usize, usize), color : u8) {
+    let nrow = dst.len() / ncol;
+    if from.0 > nrow || from.1 > ncol {
+        println!("Line origin outside bounds");
+        return;
+    }
+    if to.0 > nrow || to.1 > ncol {
+        println!("Line destination outside bounds");
+        return;
+    }
     let mut dst_mat = slice_to_mat(&dst, ncol, None);
+    let line_ty = imgproc::LINE_8;
     imgproc::line(
         &mut dst_mat, 
         core::Point{ x : from.1 as i32, y : from.0 as i32 }, 
         core::Point{ x : to.1 as i32, y : to.0 as i32 }, 
         core::Scalar::all(color.into()),
         1, 
-        imgproc::LINE_8, 
+        line_ty,
         0
     ).unwrap()
 }
+
+pub unsafe fn draw_circle(dst : &mut [u8], ncol : usize, center : (usize, usize), radius : usize, color : u8) {
+    let nrow = dst.len() / ncol;
+    if center.0 + radius > nrow || center.1 + radius > ncol {
+        println!("Circle outside bounds");
+        return;
+    }
+    let mut dst_mat = slice_to_mat(&dst, ncol, None);
+    let thickness = 1;
+    let line_ty = imgproc::LINE_8;
+    let shift = 0;
+    imgproc::circle(
+        &mut dst_mat,
+        core::Point2i{ x : center.1 as i32, y : center.0 as i32 },
+        radius as i32,
+        core::Scalar::all(color.into()),
+        thickness,
+        line_ty,
+        shift
+    ).unwrap();
+}
+
 

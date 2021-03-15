@@ -20,6 +20,12 @@ pub mod matching;
 pub mod flow;
 
 #[cfg(feature="opencvlib")]
+pub mod contour;
+
+#[cfg(feature="opencvlib")]
+pub mod shape;
+
+#[cfg(feature="opencvlib")]
 pub mod threshold;
 
 pub mod cluster;

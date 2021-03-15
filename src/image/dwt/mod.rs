@@ -87,6 +87,7 @@ where
     pub fn windows(&self, sz : (usize, usize)) -> impl Iterator<Item=Window<'a, N>> {
         self.win.clone().windows(sz)
     }
+
 }
 
 impl<'a, N> Index<(usize, usize)> for ImageLevel<'a, N> 
@@ -137,7 +138,16 @@ where
     }
 }
 
-/*impl<N> From<DMatrix<N>> for ImagePyramid<N> 
+impl<N> AsMut<Image<N>> for ImagePyramid<N>
+where
+    N : Scalar + Copy
+{
+    fn as_mut(&mut self) -> &mut Image<N> {
+        &mut self.pyr
+    }
+}
+
+/*impl<N> From<DMatrix<N>> for ImagePyramid<N>
 where
     N : Scalar
 {
@@ -182,11 +192,25 @@ impl Wavelet2D {
         dst
     }
     
+    pub fn forward_inplace(&self, mut buffer : Image<f64>) -> ImagePyramid<f64> {
+        if let Err(e) = self.plan.forward_inplace(buffer.as_mut()) {
+            panic!("{}", e);
+        }
+        ImagePyramid { pyr : buffer }
+    }
+
     pub fn backward_mut(&self, src : &ImagePyramid<f64>, dst : &mut Image<f64>) {
         self.plan.apply_backward(src.as_ref(), dst.as_mut())
             .map_err(|e| panic!("{}", e) );
     }
     
+    pub fn backward_inplace(&self, mut buffer : ImagePyramid<f64>) -> Image<f64> {
+        if let Err(e) = self.plan.backward_inplace(buffer.as_mut()) {
+            panic!("{}", e);
+        }
+        buffer.pyr
+    }
+
     pub fn backward(&self, src : &ImagePyramid<f64>) -> Image<f64> {
         let (nrows, ncols) = self.plan.shape();
         let mut dst = Image::new_constant(nrows, ncols, 0.0);
