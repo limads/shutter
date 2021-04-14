@@ -170,7 +170,7 @@ pub unsafe fn draw_line(dst : &mut [u8], ncol : usize, from : (usize, usize), to
 pub unsafe fn draw_circle(dst : &mut [u8], ncol : usize, center : (usize, usize), radius : usize, color : u8) {
     let nrow = dst.len() / ncol;
     if center.0 + radius > nrow || center.1 + radius > ncol {
-        println!("Circle outside bounds");
+        // println!("Circle outside bounds");
         return;
     }
     let mut dst_mat = slice_to_mat(&dst, ncol, None);

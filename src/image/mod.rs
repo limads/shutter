@@ -568,6 +568,19 @@ where
     }
 }
 
+#[cfg(feature="opencvlib")]
+impl<N> Into<core::Mat> for WindowMut<'_, N>
+where
+    N : Scalar + Copy
+{
+
+    fn into(self) -> core::Mat {
+        let sub_slice = Some((self.offset, self.win_sz));
+        let stride = self.orig_sz.1;
+        unsafe{ cvutils::slice_to_mat(self.win, stride, sub_slice) }
+    }
+}
+
 pub enum Mark {
 
     // Position, square lenght and color
@@ -581,6 +594,9 @@ pub enum Mark {
     
     // Position, digit value, digit size and color
     Digit((usize, usize), usize, usize, u8),
+
+    // Position, label, digit value, size and color
+    Label((usize, usize), &'static str, usize, u8),
 
     // Center, radius and color
     Circle((usize, usize), usize, u8)
@@ -705,6 +721,17 @@ impl WindowMut<'_, u8> {
                 }
                 
                 draw::draw_digit_native(self.win, self.orig_sz.1, tl_pos, val, sz, color);
+            },
+            Mark::Label(pos, msg, sz, color) => {
+                let tl_pos = (self.offset.0 + pos.0, self.offset.1 + pos.1);
+
+                #[cfg(feature="opencvlib")]
+                unsafe {
+                    cvutils::write_text(self.win, self.orig_sz.1, tl_pos, msg, color);
+                    return;
+                }
+
+                panic!("Label draw require 'opencvlib' feature");
             },
             Mark::Circle(pos, radius, color) => {
                 let center_pos = (self.offset.0 + pos.0, self.offset.1 + pos.1);

@@ -28,10 +28,22 @@ pub mod shape;
 #[cfg(feature="opencvlib")]
 pub mod threshold;
 
+#[cfg(feature="opencvlib")]
+pub mod morphology;
+
+#[cfg(feature="opencvlib")]
+pub mod filter;
+
 pub mod cluster;
 
 #[cfg(feature="vlfeat")]
 pub mod segmentation;
+
+#[cfg(feature="opencvlib")]
+pub mod geom;
+
+#[cfg(feature="opencvlib")]
+pub mod detection;
 
 pub mod foreign;
 

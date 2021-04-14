@@ -179,7 +179,7 @@ mod imp {
                     ("width", &gstreamer::IntRange::<i32>::new(0, 3000)),
                     ("height", &gstreamer::IntRange::<i32>::new(0, 3000)),
                     ("framerate", &gstreamer::FractionRange::new(
-                        gstreamer::Fraction::new(0, 1), gstreamer::Fraction::new(3000, 1),),
+                        gstreamer::Fraction::new(1, 1), gstreamer::Fraction::new(3000, 1),),
                     ),],);
 
                 vec![
@@ -213,7 +213,7 @@ mod imp {
         
         const MODE: gst_base::subclass::BaseTransformMode =
             gst_base::subclass::BaseTransformMode::AlwaysInPlace;
-            
+
         const PASSTHROUGH_ON_SAME_CAPS: bool = false;
         
         const TRANSFORM_IP_ON_PASSTHROUGH: bool = false;
@@ -238,6 +238,7 @@ mod imp {
             buf: &mut gst::BufferRef,
         ) -> Result<gst::FlowSuccess, gst::FlowError> {
             if let Ok(mut buf_8bit) = buf.map_writable() {
+                // Also see get_meta_mut/get_meta to retrieve metadata the user can use.
                 if let Some(processor) = *self.processor.borrow() {
                     match (processor)(buf_8bit.as_mut_slice()) {
                         true => Ok(FlowSuccess::Ok),

@@ -12,6 +12,9 @@ fn convert_points(pts : &[(usize, usize)]) -> core::Vector<core::Point2i> {
     pt_vec
 }
 
+// pub enum EllipseError {
+// }
+
 /// Returns position and radius of fitted circle. Also see fit_ellipse_ams; fit_ellipse_direct.
 pub fn fit_ellipse(pts : &[(usize, usize)]) -> Result<((usize, usize), usize), String> {
     let pt_vec = convert_points(pts);

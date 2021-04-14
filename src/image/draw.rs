@@ -1,12 +1,8 @@
 use nalgebra::*;
-
 use std::iter::Iterator;
-
 use std::convert::TryFrom;
 use std::ops::Range;
 use super::*;
-
-
 
 // Wait for stabilization of f64 const fn here
 // const fn half_pi() -> f64 { std::f64::consts::PI / 2.0 }

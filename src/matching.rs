@@ -1,3 +1,5 @@
+use opencv::features2d;
+
 /// A matching algorithm starts with two sets of size M and N. It assumes all observations
 /// at the smallest set have a matching observation at the test set. The match explores the space of 
 /// MN possible matches, extracting the ones that are most probably true. To resolve the match,
@@ -16,3 +18,4 @@ pub struct Match {
 }
 
 
+// features2d::FlannBasedMatcher::new(index_params, search_params);
