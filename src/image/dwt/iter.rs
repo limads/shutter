@@ -301,7 +301,7 @@ where
     if bounds.0 > nrows / 2 {
         return None;
     }
-    Some(ImageLevel::<'a, N>::from(img.window(off, bounds)))
+    Some(ImageLevel::<'a, N>::from(img.window(off, bounds).unwrap()))
 }
 
 #[test]

@@ -56,7 +56,7 @@ where
                 let calc_this = maxima.get(&(i,j)).is_none();
                 if calc_this {
                     let offset = (i*self.region_sz.0, j*self.region_sz.1);
-                    let max_ix = search_maximum(&self.map.window(offset, self.region_sz));
+                    let max_ix = search_maximum(&self.map.window(offset, self.region_sz).unwrap());
                     maxima.insert((i, j), max_ix);
                 }
             }

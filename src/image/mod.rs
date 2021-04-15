@@ -73,22 +73,49 @@ where
         (self.buf.len() / self.ncols, self.ncols)
     }
     
+    pub fn width(&self) -> usize {
+        self.ncols
+    }
+
+    pub fn height(&self) -> usize {
+        self.buf.len() / self.ncols
+    }
+
     pub fn full_window<'a>(&'a self) -> Window<'a, N> {
-        self.window((0, 0), self.shape())
+        self.window((0, 0), self.shape()).unwrap()
     }
     
     pub fn full_window_mut<'a>(&'a mut self) -> WindowMut<'a, N> {
         let shape = self.shape();
-        self.window_mut((0, 0), shape)
+        self.window_mut((0, 0), shape).unwrap()
     }
     
-    pub fn window<'a>(&'a self, offset : (usize, usize), sz : (usize, usize)) -> Window<'a, N> {
-        Window { win : self.buf.as_slice(), orig_sz : self.shape(), offset, win_sz : sz }
+    pub fn window<'a>(&'a self, offset : (usize, usize), sz : (usize, usize)) -> Option<Window<'a, N>> {
+        let orig_sz = self.shape();
+        if offset.0 + sz.0 <= orig_sz.0 && offset.1 + sz.1 <= orig_sz.1 {
+            Some(Window {
+                win : &self.buf[..],
+                offset,
+                orig_sz,
+                win_sz : sz
+            })
+        } else {
+            None
+        }
     }
     
-    pub fn window_mut<'a>(&'a mut self, offset : (usize, usize), win_sz : (usize, usize)) -> WindowMut<'a, N> {
-        let shape = self.shape();
-        WindowMut { win : &mut self.buf[..], orig_sz : shape, offset, win_sz }
+    pub fn window_mut<'a>(&'a mut self, offset : (usize, usize), sz : (usize, usize)) -> Option<WindowMut<'a, N>> {
+        let orig_sz = self.shape();
+        if offset.0 + sz.0 <= orig_sz.0 && offset.1 + sz.1 <= orig_sz.1 {
+            Some(WindowMut {
+                win : &mut self.buf[..],
+                offset,
+                orig_sz,
+                win_sz : sz
+            })
+        } else {
+            None
+        }
     }
     
     pub fn downsample(&mut self, src : &Window<N>) {
@@ -138,14 +165,6 @@ where
             step_rows,
             self.buf.chunks_mut(nrows)
         );
-    }
-    
-    pub fn width(&self) -> usize {
-        self.ncols
-    }
-    
-    pub fn height(&self) -> usize {
-        self.buf.len() / self.ncols
     }
     
     pub fn copy_from(&mut self, other : &Image<N>) {
@@ -334,9 +353,37 @@ where
     pub fn is_full(&'a self) -> bool {
         self.orig_sz == self.win_sz
     }
-}
     
-impl<'a, N> Window<'a, N> 
+    /*pub fn shape(&self) -> (usize, usize) {
+        self.win_sz
+    }
+
+    pub fn width(&self) -> usize {
+        self.shape().0
+    }
+
+    pub fn height(&self) -> usize {
+        self.shape().1
+    }*/
+
+    pub fn sub_window(&'a self, offset : (usize, usize), dims : (usize, usize)) -> Option<Window<'a, N>> {
+        let new_offset = (self.offset.0 + offset.0, self.offset.1 + offset.1);
+        if new_offset.0 + dims.0 <= self.orig_sz.0 && new_offset.1 + dims.1 <= self.orig_sz.1 {
+            Some(Self {
+                win : self.win,
+                offset : new_offset,
+                orig_sz : self.orig_sz,
+                // transposed : self.transposed,
+                win_sz : dims
+            })
+        } else {
+            None
+        }
+    }
+
+}
+
+impl<'a, N> Window<'a, N>
 where
     N : Scalar + Mul<Output=N> + MulAssign
 {
@@ -355,16 +402,6 @@ where
     ) {
     
     }*/
-    
-    pub fn sub_window(&'a self, offset : (usize, usize), dims : (usize, usize)) -> Window<'a, N> {
-        Self { 
-            win : self.win, 
-            offset : (self.offset.0 + offset.0, self.offset.1 + offset.1), 
-            orig_sz : self.orig_sz, 
-            // transposed : self.transposed,
-            win_sz : dims
-        }
-    }
     
     /// Creates a window that cover the whole slice src. The slice is assumed to be in
     /// row-major order, but matrices are assumed to be 
@@ -645,16 +682,18 @@ where
         }
     }
 
-    pub fn sub_window(&'a mut self, offset : (usize, usize), dims : (usize, usize)) -> WindowMut<'a, N> {
-        /*let offset = (self.offset.0 + offset.0, self.offset.1 + offset.1);
-        let orig_sz = self.orig_sz;
-        Self{ win : self.win.slice_mut(offset, dims), offset, orig_sz }*/
-        Self {
-            win : self.win,
-            offset : (self.offset.0 + offset.0, self.offset.1 + offset.1),
-            orig_sz : self.orig_sz,
-            // transposed : self.transposed,
-            win_sz : dims
+    pub fn sub_window_mut(&'a mut self, offset : (usize, usize), dims : (usize, usize)) -> Option<WindowMut<'a, N>> {
+        let new_offset = (self.offset.0 + offset.0, self.offset.1 + offset.1);
+        if new_offset.0 + dims.0 <= self.orig_sz.0 && new_offset.1 + dims.1 <= self.orig_sz.1 {
+            Some(Self {
+                win : self.win,
+                offset : (self.offset.0 + offset.0, self.offset.1 + offset.1),
+                orig_sz : self.orig_sz,
+                // transposed : self.transposed,
+                win_sz : dims
+            })
+        } else {
+            None
         }
     }
 
@@ -750,6 +789,25 @@ impl WindowMut<'_, u8> {
 }
 
 impl<'a, N> WindowMut<'a, N> 
+where
+    N : Scalar + Copy
+{
+
+    pub fn shape(&self) -> (usize, usize) {
+        self.win_sz
+    }
+
+    pub fn width(&self) -> usize {
+        self.shape().0
+    }
+
+    pub fn height(&self) -> usize {
+        self.shape().1
+    }
+
+}
+
+impl<'a, N> WindowMut<'a, N>
 where
     N : Scalar + Copy + MulAssign + AddAssign + Add<Output=N> + Mul<Output=N> + SubAssign + Field + SimdPartialOrd,
     f64 : SubsetOf<N>
