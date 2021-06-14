@@ -32,19 +32,35 @@ pub fn fit_ellipse(pts : &[(usize, usize)]) -> Result<((usize, usize), usize), S
     Ok((center, radius))
 }
 
-pub fn enclosing_circle(pts : &[(usize, usize)]) -> Result<((usize, usize), usize), String> {
-    let pt_vec = convert_points(pts);
-    let mut center = core::Point2f{ x : 0.0, y : 0.0 };
-    let mut radius = 0.0;
-    let ans = imgproc::min_enclosing_circle(
-        &pt_vec,
-        &mut center,
-        &mut radius
-    );
-    match ans {
-        Ok(_) => Ok(((center.y as usize, center.x as usize), radius as usize)),
-        Err(e) => Err(format!("{}", e))
+pub struct EnclosingCircle {
+    pt_vec : core::Vector<core::Point2i>
+}
+
+impl EnclosingCircle {
+
+    pub fn new() -> Self {
+        let pt_vec = core::Vector::with_capacity(256);
+        Self { pt_vec }
+    }
+
+    pub fn calculate(&mut self, pts : &[(usize, usize)]) -> Result<((usize, usize), usize), String> {
+        self.pt_vec.clear();
+        for pt in pts.iter() {
+            self.pt_vec.push(core::Point2i::new(pt.1 as i32, pt.0 as i32));
+        }
+        let mut center = core::Point2f{ x : 0.0, y : 0.0 };
+        let mut radius = 0.0;
+        let ans = imgproc::min_enclosing_circle(
+            &self.pt_vec,
+            &mut center,
+            &mut radius
+        );
+        match ans {
+            Ok(_) => Ok(((center.y as usize, center.x as usize), radius as usize)),
+            Err(e) => Err(format!("{}", e))
+        }
     }
 }
+
 
 

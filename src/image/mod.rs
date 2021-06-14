@@ -59,8 +59,16 @@ where
 
     pub fn new_from_slice(source : &[N], ncols : usize) -> Self {
         let mut buf = Vec::with_capacity(source.len());
+        unsafe { buf.set_len(source.len()); }
         buf.copy_from_slice(&source);
         Self{ buf, ncols }
+    }
+
+    pub fn from_vec(buf : Vec<N>, ncols : usize) -> Self {
+        if buf.len() as f64 % ncols as f64 != 0.0 {
+            panic!("Invalid image lenght");
+        }
+        Self { buf, ncols }
     }
 
     pub fn new_constant(nrows : usize, ncols : usize, value : N) -> Self {
@@ -143,6 +151,8 @@ where
         }
         
         panic!("Image::downsample requires that crate is compiled with opencv or ipp feature");
+
+        // TODO use resize::resize for native Rust solution
     }
     
     // TODO call this downsample_convert, and leave alias as a second enum argument:
@@ -464,7 +474,17 @@ where
         }
     }
     
-    pub fn rows(&self) -> impl Iterator<Item=&[N]> {
+    pub fn row(&self, ix : usize) -> Option<&[N]> {
+        if ix > self.win_sz.0 {
+            return None;
+        }
+        let stride = self.orig_sz.1;
+        let tl = self.offset.0 * stride + self.offset.1;
+        let start = tl + ix*stride;
+        Some(&self.win[start..(start+self.win_sz.1)])
+    }
+
+    pub fn rows(&self) -> impl Iterator<Item=&[N]> + Clone {
         let stride = self.orig_sz.1;
         let tl = self.offset.0 * stride + self.offset.1;
         (0..self.win_sz.0).map(move |i| {
@@ -477,6 +497,15 @@ where
         iterate_row_wise(self.win, self.offset, self.win_sz, self.orig_sz)
     }
     
+    pub fn clone_owned(&self) -> Image<N>
+    where
+        N : Copy
+    {
+        let mut buf = Vec::new();
+        self.rows().for_each(|row| buf.extend(row.iter().cloned()) );
+        Image::from_vec(buf, self.win_sz.1)
+    }
+
     /*pub fn row_slices(&'a self) -> Vec<&'a [N]> {
         let mut rows = Vec::new();
         for r in (self.offset.0)..(self.offset.0+self.win_sz.0) {

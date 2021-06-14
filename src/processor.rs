@@ -8,7 +8,7 @@ use gstreamer::{FlowError, FlowSuccess};
 use gstreamer_base::BaseTransform;
 use glib::subclass::TypeData;
 use std::ptr::NonNull;
-use gstreamer_base::BaseTransformExt;
+use gstreamer_base::*;
 use glib;
 use glib::Cast;
 use std::mem;
@@ -75,15 +75,17 @@ mod imp {
     // This trait registers our type with the GObject object system and
     // provides the entry points for creating a new instance and setting
     // up the class data
+    #[glib::object_subclass]
     impl ObjectSubclass for Processor {
         const NAME: &'static str = "Processor";
         type Type = super::Processor;
         type ParentType = gst_base::BaseTransform;
-        type Interfaces = ();
-        type Instance = gst::subclass::ElementInstanceStruct<Self>;
-        type Class = subclass::simple::ClassStruct<Self>;
-
-        glib::object_subclass!();
+        
+        // type Interfaces = ();
+        
+        // type Instance = gst::subclass::ElementInstanceStruct<Self>;
+        // type Class = subclass::basic::ClassStruct<Self>;
+        // glib::object_subclass!();
 
         // Either implement new if no args are required; or with_class if args are required.
         fn new() -> Self {
@@ -102,7 +104,7 @@ mod imp {
         fn properties() -> &'static [glib::ParamSpec] {
             use once_cell::sync::Lazy;
             static PROPERTIES: Lazy<Vec<glib::ParamSpec>> = Lazy::new(|| {
-                vec![glib::ParamSpec::uint64(
+                vec![glib::ParamSpec::new_uint64(
                     "func",
                     "func",
                     "func",
@@ -117,30 +119,30 @@ mod imp {
         
         fn set_property(&self, obj: &Self::Type, id: usize, value: &glib::Value, pspec : &glib::ParamSpec) {
             // let prop = &PROPERTIES[id];
-            match pspec.get_name() {
+            match pspec.name() {
                 "func" => {
                     // println!("setting calcfunc now");
                     if let Ok(val) = value.get::<u64>() {
                         // println!("cast from u64 ok!");
-                        if let Some(val) = val {
-                            unsafe {
-                                // let fptr = mem::transmute::<u64, FloatMatrixFn>(val);
-                                // let bx_ptr = Box::new(fptr);
-                                // self.bind_func(bx_ptr);
-                                // Perhaps just clone it here for safety.
-                                if val == 0 {
-                                    panic!("Invalid function pointer");
-                                }
-                                
-                                let fn_ptr = mem::transmute::<u64, fn(&mut[u8])->bool>(val);
-                                //if fn_ptr.is_null() {
-                                //    panic!("Pointer to informed box is null");
-                                //}
-                                *(self.processor.borrow_mut()) = Some(fn_ptr);
+                        // if let Some(val) = val {
+                        unsafe {
+                            // let fptr = mem::transmute::<u64, FloatMatrixFn>(val);
+                            // let bx_ptr = Box::new(fptr);
+                            // self.bind_func(bx_ptr);
+                            // Perhaps just clone it here for safety.
+                            if val == 0 {
+                                panic!("Invalid function pointer");
                             }
-                        } else {
-                            println!("Could not get value");
+                            
+                            let fn_ptr = mem::transmute::<u64, fn(&mut[u8])->bool>(val);
+                            //if fn_ptr.is_null() {
+                            //    panic!("Pointer to informed box is null");
+                            //}
+                            *(self.processor.borrow_mut()) = Some(fn_ptr);
                         }
+                        // } else {
+                        //    println!("Could not get value");
+                        // }
                     } else {
                         println!("Invalid cast to u64");
                     }

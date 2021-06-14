@@ -72,7 +72,7 @@ pub fn image_filter<F, E>(
     Ok(())
 }*/
 
-pub fn build_pgm_string_from_slice<N>(m : &[N], ncol : usize) -> String 
+pub fn build_pgm_string_from_slice<N>(m : &[N], ncol : usize) -> String
 where
     f64 : From<N>,
     N : Scalar + Copy
@@ -86,22 +86,34 @@ where
     pgm
 }
 
-pub fn build_pgm_string<N, S>(m : &Matrix<N, Dynamic, Dynamic, S>) -> String
+// Receives PGM string as range in [-1.0, 1.0],
+pub fn build_pgm_string(bytes : &DMatrix<u8>) -> String {
+    let mut pgm = format!("P2\n");
+    pgm += &format!("{} {}\n", bytes.nrows(), bytes.ncols());
+    pgm += &format!("255\n");
+    for b in bytes.iter() {
+        pgm += &format!("{}\n", b);
+    }
+    pgm
+}
+
+/*pub fn pgm_byte_buffer(m : &Matrix<N, Dynamic, Dynamic, S>) -> DMatrix<u8>
 where
     f64 : From<N>,
     N : Scalar + Copy,
     S : Storage<N, Dynamic, Dynamic>
 {
-    let mut pgm = format!("P2\n");
-    pgm += &format!("{} {}\n", m.nrows(), m.ncols());
-    pgm += &format!("255\n");
-    for px in m.iter() {
-        pgm += &format!("{}\n", (1. + f64::from(*px) * 127.).max(0.0).min(255.0) as u8);
+    let mut bytes = DMatrix::zeros(m.nrows(), m.ncols());
+    for (px, b) in m.iter().zip(bytes.iter_mut()) {
+        // At each iteration, raise pixel from [-1,1] to [0,2] then multiply by 127.0 to get range [0.0-255.0].
+        // Then convert to u8
+        // pgm += &format!("{}\n", ((1. + f64::from(*px)) * 127.).max(0.0).min(255.0) as u8);
+        *b = ((1. + f64::from(*px)) * 127.).max(0.0).min(255.0).round() as u8;
     }
-    pgm
-}
+    bytes
+}*/
 
-/// Reference: https://en.wikipedia.org/wiki/Netpbm#File_formats
+/*/// Reference: https://en.wikipedia.org/wiki/Netpbm#File_formats
 pub fn print_pgm<N, S>(m : &Matrix<N, Dynamic, Dynamic, S>) 
 where
     f64 : From<N>,
@@ -109,4 +121,4 @@ where
     S : Storage<N, Dynamic, Dynamic>
 {
     println!("{}", pgm::build_pgm_string(&m));
-}
+}*/
