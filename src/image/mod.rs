@@ -1,5 +1,5 @@
 use nalgebra::*;
-use volta::signal::sampling::{self};
+use ripple::signal::sampling::{self};
 use std::ops::{Index, IndexMut, Mul, Add, AddAssign, MulAssign, SubAssign};
 use simba::scalar::SubsetOf;
 use std::fmt;
@@ -20,11 +20,11 @@ pub(crate) mod dwt;
 #[cfg(feature="gsl")]
 pub use dwt::*;*/
 
-#[cfg(feature="gsl")]
-mod interp;
+// #[cfg(feature="gsl")]
+// mod interp;
 
-#[cfg(feature="gsl")]
-pub use interp::Interpolation2D;
+// #[cfg(feature="gsl")]
+// pub use interp::Interpolation2D;
 
 pub mod pgm;
 

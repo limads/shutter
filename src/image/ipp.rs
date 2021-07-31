@@ -1,10 +1,10 @@
-use volta::foreign::ipp::ippi::*;
+use crate::foreign::ipp::{ippcore, ippi::*};
 use std::mem;
 use std::ptr;
 use std::ffi;
-use volta::foreign::ipp::ipps;
+use crate::foreign::ipp::ipps;
 use nalgebra::Scalar;
-use volta::foreign::ipp::ippcore::{self, ippMalloc};
+use crate::foreign::ipp::ippcore::{ippMalloc};
 
 pub fn check_status(action : &str, status : i32) {
     if status as u32 == ippcore::ippStsNoErr {
