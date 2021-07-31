@@ -8,17 +8,17 @@ use std::fmt::Debug;
 #[cfg(feature="opencvlib")]
 use opencv::core;
 
-#[cfg(feature="mkl")]
-mod fft;
+//#[cfg(feature="mkl")]
+// mod fft;
 
-#[cfg(feature="mkl")]
+/*#[cfg(feature="mkl")]
 pub use fft::*;
 
 #[cfg(feature="gsl")]
 pub(crate) mod dwt;
 
 #[cfg(feature="gsl")]
-pub use dwt::*;
+pub use dwt::*;*/
 
 #[cfg(feature="gsl")]
 mod interp;

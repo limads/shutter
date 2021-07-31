@@ -7,8 +7,8 @@ pub mod image;
 
 pub mod path;
 
-#[cfg(feature="opencvlib")]
-pub mod tracking;
+//#[cfg(feature="opencvlib")]
+//pub mod tracking;
 
 #[cfg(feature="opencvlib")]
 pub mod template;
@@ -42,8 +42,8 @@ pub mod segmentation;
 #[cfg(feature="opencvlib")]
 pub mod geom;
 
-#[cfg(feature="opencvlib")]
-pub mod detection;
+// #[cfg(feature="opencvlib")]
+// pub mod detection;
 
 pub mod foreign;
 

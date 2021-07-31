@@ -1,4 +1,5 @@
 use gstreamer as gst;
+use gstreamer::prelude::*;
 use gstreamer_base as gst_base;
 use anyhow::Error;
 use once_cell::sync::Lazy;
@@ -45,10 +46,12 @@ impl Processor {
     /// If you need to preserve some state T across calls, consider declaring a one-time initialization static cell:
     /// static MY_STATE : OnceCell<Mutex<T>> = OnceCell::new();
     /// Which is used inside your function.
-    pub fn create(f : fn(&mut[u8]) -> bool) -> Self {
-        let proc : Self = glib::Object::new(&[("name", &Some("Processor"))]).unwrap();
-        proc.set_property("func", &(f as u64)).unwrap();
-        proc
+    pub fn create(f : fn(&mut[u8]) -> bool) -> Result<Self, String> {
+        let proc : Self = glib::Object::new(&[("name", &Some("Processor"))])
+            .map_err(|e| format!("{}", e))?;
+        proc.set_property("func", &(f as u64))
+            .map_err(|e| format!("{}", e) )?;
+        Ok(proc)
     }
     
 }
@@ -65,11 +68,11 @@ pub static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
 mod imp {
 
     use super::*;
-    use glib::{subclass::{self, object}};
-    use gstreamer_base::subclass::prelude::BaseTransformImpl;
-    use gstreamer::subclass::prelude::ElementImpl;
+    // use glib::{self, subclass::object};
+    use gstreamer_base::subclass::prelude::*;
     use glib::subclass::prelude::ObjectSubclass;
     
+     #[derive(Default)]
     pub struct Processor{ processor : RefCell<Option<fn(&mut[u8])->bool>> }
     
     // This trait registers our type with the GObject object system and
@@ -99,7 +102,7 @@ mod imp {
     }
 
     // Implementation of glib::Object virtual methods
-    impl object::ObjectImpl for Processor {
+    impl ObjectImpl for Processor {
     
         fn properties() -> &'static [glib::ParamSpec] {
             use once_cell::sync::Lazy;
