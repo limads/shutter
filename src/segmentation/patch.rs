@@ -1,6 +1,11 @@
 // use nalgebra::*;
 // use super::image::*;
 
+// A patch is always represented by a polygon  defined by points stored in a Vec<(usize, usize)>. We
+// can define a patch quality by the distance of a random sample of pixels within this closed set to the average
+// pixel value of this random sample. We can always maximize the patch quality by reducing the size
+// of the patch; But at the same time we want to keep the number of patches that describe an image small.
+
 /// An image frame can be economically represented by
 /// a Vec<Patch> where patch is a monochromatic color
 /// blob represented by its (row, col) center and average color.

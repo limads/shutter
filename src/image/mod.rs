@@ -8,6 +8,9 @@ use std::fmt::Debug;
 #[cfg(feature="opencvlib")]
 use opencv::core;
 
+#[cfg(feature="opencvlib")]
+use opencv::imgproc;
+
 //#[cfg(feature="mkl")]
 // mod fft;
 
@@ -56,6 +59,13 @@ impl<N> Image<N>
 where
     N : Scalar + Copy
 {
+
+    #[cfg(feature="opencvlib")]
+    pub fn equalize_mut(&mut self) {
+        let src : core::Mat = self.full_window_mut().into();
+        let mut dst : core::Mat = self.full_window_mut().into();
+        imgproc::equalize_hist(&src, &mut dst);
+    }
 
     pub fn new_from_slice(source : &[N], ncols : usize) -> Self {
         let mut buf = Vec::with_capacity(source.len());
@@ -387,6 +397,7 @@ where
                 win_sz : dims
             })
         } else {
+            println!("Requested offset : {:?}; Requested dims : {:?}; Original image size : {:?}", offset, dims, self.orig_sz);
             None
         }
     }
@@ -621,6 +632,7 @@ where
 
 }
 
+/// TODO mark as unsafe impl
 #[cfg(feature="opencvlib")]
 impl<N> Into<core::Mat> for Window<'_, N> 
 where
@@ -634,6 +646,7 @@ where
     }
 }
 
+/// TODO mark as unsafe impl
 #[cfg(feature="opencvlib")]
 impl<N> Into<core::Mat> for WindowMut<'_, N>
 where

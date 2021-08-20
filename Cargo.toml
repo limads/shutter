@@ -28,6 +28,7 @@ once_cell = "1.5.2"
 lazy_static = "1.0"
 structopt = "0.3"
 ripple = "0.2.1"
+away = { path = "../away" }
 
 [features]
 mkl=[]

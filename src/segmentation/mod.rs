@@ -7,4 +7,3 @@ pub mod patch;
 // TODO use kmeans_colors crate
 
 
-
