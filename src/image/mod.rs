@@ -4,6 +4,8 @@ use std::ops::{Index, IndexMut, Mul, Add, AddAssign, MulAssign, SubAssign};
 use simba::scalar::SubsetOf;
 use std::fmt;
 use std::fmt::Debug;
+use simba::simd::{AutoSimd};
+use std::convert::TryFrom;
 
 #[cfg(feature="opencvlib")]
 use opencv::core;
@@ -57,7 +59,7 @@ where
 
 impl<N> Image<N>
 where
-    N : Scalar + Copy
+    N : Scalar + Copy + Default
 {
 
     #[cfg(feature="opencvlib")]
@@ -214,7 +216,7 @@ where
     // to the full window to work as the AsRef implementation, so the user can pass images here as well.
     pub fn convert<M>(&mut self, other : &Window<M>) 
     where
-        M : Scalar
+        M : Scalar + Default
     {
         let ncols = self.ncols;
         
@@ -510,7 +512,7 @@ where
     
     pub fn clone_owned(&self) -> Image<N>
     where
-        N : Copy
+        N : Copy + Default
     {
         let mut buf = Vec::new();
         self.rows().for_each(|row| buf.extend(row.iter().cloned()) );
@@ -526,6 +528,59 @@ where
         rows
     }*/
     
+}
+
+/*pub struct PackedIterator<'a, T>
+where
+    T : Scalar + Debug + Copy
+{
+    win : Window<'a, T>,
+    ix : usize,
+    packed_per_row : usize,
+    n_packed : usize
+}
+
+impl<'a> Iterator for PackedIterator<'a, u8> {
+
+    type Item = AutoSimd<[u8; 32]>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.ix == self.n_packed  {
+            None
+        } else {
+            let row = self.win.row(self.ix / self.n_packed).unwrap();
+            let packed = &row[self.ix % self.n_packed];
+            self.ix += 1;
+            Some(AutoSimd::try_from(packed).unwrap())
+        }
+    }
+}*/
+
+impl<'a> Window<'a, u8> {
+
+    /// If higher, returns binary image with all pixels > thresh set to 255 and others set to 0;
+    /// If !higher, returns binary image with pixels < thresh set to 255 and others set to 0.
+    #[cfg(feature="opencvlib")]
+    pub fn threshold_mut(&self, dst : &mut Image<u8>, thresh : u8, higher : bool) {
+        assert!(self.shape() == dst.shape());
+        crate::threshold::threshold_window(self, dst, thresh as f64, 255.0, higher);
+    }
+
+    /*/// Packed iterator over contigous byte regions of the image within
+    /// rows. Image horizontal dimension should be divisible by the
+    pub fn iter_packed(&self) -> impl Iterator<Item=AutoSimd<[u8; 32]>> + 'a {
+
+        // Substitute 32 for the size of packed SIMD value.
+        let packed_per_row = self.width() / 32;
+
+        let n_packed = packed_per_row * self.height();
+        PackedIterator {
+            win : self.clone(),
+            ix : 0,
+            packed_per_row,
+            n_packed
+        }
+    }*/
 }
 
 #[test]
@@ -636,7 +691,7 @@ where
 #[cfg(feature="opencvlib")]
 impl<N> Into<core::Mat> for Window<'_, N> 
 where
-    N : Scalar + Copy
+    N : Scalar + Copy + Default
 {
 
     fn into(self) -> core::Mat {
@@ -650,7 +705,7 @@ where
 #[cfg(feature="opencvlib")]
 impl<N> Into<core::Mat> for WindowMut<'_, N>
 where
-    N : Scalar + Copy
+    N : Scalar + Copy + Default
 {
 
     fn into(self) -> core::Mat {
@@ -832,8 +887,27 @@ impl WindowMut<'_, u8> {
 
 impl<'a, N> WindowMut<'a, N> 
 where
-    N : Scalar + Copy
+    N : Scalar + Copy + Mul<Output=N> + MulAssign
 {
+
+    pub fn iter_mut(&'a mut self) -> impl Iterator<Item=&'a mut N> {
+        self.rows_mut().map(|r| r.iter_mut() ).flatten()
+    }
+
+    pub fn rows_mut(&'a mut self) -> impl Iterator<Item=&'a mut [N]> {
+        let stride = self.orig_sz.1;
+        let tl = self.offset.0 * stride + self.offset.1;
+        (0..self.win_sz.0).map(move |i| {
+            let start = tl + i*stride;
+            let slice = &self.win[start..(start+self.win_sz.1)];
+            unsafe { std::slice::from_raw_parts_mut(slice.as_ptr() as *mut _, slice.len()) }
+        })
+    }
+
+    pub fn copy_from(&'a mut self, other : &Window<N>) {
+        assert!(self.shape() == other.shape(), "Mutable windows differ in shape");
+        self.rows_mut().zip(other.rows()).for_each(|(this, other)| this.copy_from_slice(other) );
+    }
 
     pub fn shape(&self) -> (usize, usize) {
         self.win_sz

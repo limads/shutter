@@ -5,6 +5,7 @@ use std::ffi;
 use crate::foreign::ipp::ipps;
 use nalgebra::Scalar;
 use crate::foreign::ipp::ippcore::{ippMalloc};
+use std::any::Any;
 
 pub fn check_status(action : &str, status : i32) {
     if status as u32 == ippcore::ippStsNoErr {
@@ -34,7 +35,7 @@ pub fn row_size_bytes<T>(ncol : usize) -> i32 {
 
 pub unsafe fn convert<S,T>(src : &[S], dst : &mut [T], ncol : usize) 
 where  
-    S : Scalar,
+    S : Scalar + Any,
     T : Scalar
 {
     // Foi ROI/Step info, check page 27 of IPPI manual.
@@ -46,7 +47,7 @@ where
     let size = IppiSize{ width : ncol as i32, height : (src.len() / ncol) as i32 };
     let mut status : Option<i32> = None;
     
-    if S::is::<u8>() && T::is::<f32>() {
+    if (&src[0] as &dyn Any).is::<u8>() && (&dst[0] as &dyn Any).is::<f32>() {
          let status_code = ippiConvert_8u32f_C1R(
             (src.as_ptr() as *const ffi::c_void) as *const u8,
             row_size_bytes::<u8>(ncol),
@@ -66,7 +67,7 @@ where
 
 unsafe fn init_resize_state<T>(src_size : IppiSize, dst_size : IppiSize) -> (*mut IppiResizeSpec_32f, *mut ffi::c_void) 
 where
-    T : Scalar
+    T : Scalar + Default
 {
     let mut status_get_size : Option<i32> = None;
     let mut status_init : Option<i32> = None;
@@ -77,7 +78,10 @@ where
     let mut init_buf_size : i32 = 0;
     let antialiasing = 0;
     
-    if T::is::<u8>() {
+    let t : T = Default::default();
+    let is_u8 = (&t as &dyn Any).is::<u8>();
+    
+    if is_u8 {
         let status_code = ippiResizeGetSize_8u(
             src_size, 
             dst_size,
@@ -94,7 +98,7 @@ where
     // IppiResizeSpec_<T> has only types for T = 32f or T = 64f
     let spec : *mut IppiResizeSpec_32f = ptr::null_mut();
     
-    if T::is::<u8>() {
+    if is_u8 {
         let status_code = ippiResizeNearestInit_8u(src_size, dst_size, spec);
         check_status("Resize init", status_code);
         status_init = Some(status_code);
@@ -105,7 +109,7 @@ where
     let mut buf_sz = 0;
     
     let mut buf_ptr : *mut ffi::c_void = ptr::null_mut();
-    if T::is::<u8>() {
+    if is_u8 {
         let status_code = ippiResizeGetBufferSize_8u(spec, dst_size, n_channels, &mut buf_sz as *mut _);
         check_status("Allocate resize buffer", status_code);
         buf_ptr = ipps::ippsMalloc_8u(buf_sz) as *mut ffi::c_void;
@@ -128,7 +132,7 @@ where
     let dst_size = IppiSize{ width : dst_dim.1 as i32, height : dst_dim.0 as i32 };
     
     let dst_offset = 0;
-    if T::is::<u8>() {
+    if (&src[0] as &dyn Any).is::<u8>() {
         let (spec, buf_ptr) = init_resize_state::<u8>(src_size, dst_size);
         let status_code = ippiResizeNearest_8u_C1R(
             (src.as_ptr() as *const ffi::c_void) as *const u8,

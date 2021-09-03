@@ -9,21 +9,25 @@ use opencv::prelude::MatTrait;
 use opencv::prelude::MatTraitManual;
 use std::ffi;
 use std::mem;
+use std::any::Any;
 
 pub fn get_cv_type<T>() -> i32 
 where
-    T : Scalar
+    T : Scalar + Default
 {
-    if T::is::<u8>() {
+    let t : T = Default::default();
+    let any_t = &t as &dyn Any;
+    
+    if any_t.is::<u8>() {
         core::CV_8UC1
     } else {
-        if T::is::<i16>() {
+        if any_t.is::<i16>() {
             core::CV_16SC1
         } else {
-            if T::is::<f32>() {
+            if any_t.is::<f32>() {
                 core::CV_32FC1
             } else {
-                if T::is::<f64>() {
+                if any_t.is::<f64>() {
                     core::CV_64FC1
                 } else {
                     panic!("Invalid matrix type");        
@@ -35,14 +39,14 @@ where
 
 pub unsafe fn dmatrix_to_mat<T>(d : &DMatrix<T>) -> core::Mat 
 where
-    T : Scalar
+    T : Scalar + Default
 {
     slice_to_mat(d.as_slice(), d.ncols(), None)
 }
 
 pub unsafe fn dvector_to_mat<T>(d : &DVector<T>) -> core::Mat 
 where
-    T : Scalar
+    T : Scalar + Default
 {
     slice_to_mat(d.as_slice(), 1, None)
 }
@@ -57,7 +61,7 @@ pub unsafe fn slice_to_mat<T>(
     opt_subslice : Option<((usize, usize), (usize, usize))>,
 ) -> core::Mat 
 where
-    T : Scalar
+    T : Scalar + Default
 {
     let (nrow, ncol) = if let Some((_, sz)) = opt_subslice {
         sz
@@ -102,8 +106,8 @@ pub unsafe fn convert<T, U>(
     dst_opt_subsample : Option<((usize, usize), (usize, usize))>
 ) 
 where
-    T : Scalar,
-    U : Scalar
+    T : Scalar + Default,
+    U : Scalar + Default
 {
     let src = slice_to_mat(src, src_stride, src_opt_subsample);
     let mut dst = slice_to_mat(&dst, dst_stride, dst_opt_subsample);
@@ -121,7 +125,7 @@ pub unsafe fn resize<T>(
     dst_opt_subsample : Option<((usize, usize), (usize, usize))>
 ) 
 where
-    T : Scalar
+    T : Scalar + Default
 {
     let src = slice_to_mat(src, src_stride, src_opt_subsample);
     let mut dst = slice_to_mat(&dst, dst_stride, dst_opt_subsample);

@@ -30,7 +30,7 @@ impl Contour {
         assert!(img.height() == self.bin.height() && img.width() == self.bin.width());
 
         // Binarize image
-        threshold::threshold_window(&img, &mut self.bin, self.thresh, self.max_val);
+        threshold::threshold_window(&img, &mut self.bin, self.thresh, self.max_val, true);
 
         // Extract contours
         let mut out_vec : core::Vector<core::Point2i> = core::Vector::new();

@@ -4,10 +4,11 @@ use std::collections::HashMap;
 use crate::image::*;
 use nalgebra::*;
 use std::fmt::Debug;
+use std::any::Any;
 
 pub struct TemplateSearch<T>
 where
-    T : Scalar + Debug + Copy
+    T : Scalar + Debug + Copy + Default
 {
     map : Image<f32>,
     template : Image<T>,
@@ -16,7 +17,7 @@ where
 
 impl<T> TemplateSearch<T>
 where
-    T : Scalar + Debug + Copy
+    T : Scalar + Debug + Copy + Default
 {
 
     /// Returns local maxima over regions with the given size.
@@ -68,9 +69,10 @@ where
 
 unsafe fn template_match<T>(src : &[T], result : &mut [f32], src_ncol : usize, template : &mut [T], template_ncol : usize)
 where
-    T : Scalar + Debug + Copy
+    T : Scalar + Debug + Copy + Default
 {
-    assert!(T::is::<u8>() || T::is::<f32>());
+    let any_t = (&src[0] as &dyn Any);
+    assert!(any_t.is::<u8>() || any_t.is::<f32>());
     assert!(src.len() == result.len());
     let mut src = slice_to_mat(src, src_ncol, None);
     let mut template = slice_to_mat(template, template_ncol, None);
@@ -88,14 +90,14 @@ where
 
 fn search_minimum<T>(win : &Window<T>) -> (usize, usize)
 where
-    T : Scalar + Debug + Copy
+    T : Scalar + Debug + Copy + Copy + Default
 {
     search_minimum_maximum(win).1
 }
 
 fn search_maximum<T>(win : &Window<T>) -> (usize, usize)
 where
-    T : Scalar + Debug + Copy
+    T : Scalar + Debug + Copy + Copy + Default
 {
     search_minimum_maximum(win).0
 }
@@ -103,7 +105,7 @@ where
 
 fn search_minimum_maximum<T>(win : &Window<T>) -> ((usize, usize), (usize, usize))
 where
-    T : Scalar + Debug + Copy
+    T : Scalar + Debug + Copy + Default
 {
     let mut min_loc = core::Point2i { x : 0, y : 0 };
     let mut max_loc = core::Point2i { x : 0, y : 0 };
