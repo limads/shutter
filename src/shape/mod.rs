@@ -46,6 +46,16 @@ impl Polygon {
         unimplemented!()
     }
 
+    pub fn vertices<'a>(&'a self) -> impl Iterator<Item=&'a (usize, usize)> + 'a {
+        self.0.iter()
+    }
+
+    pub fn vertex_pairs<'a>(&'a self) -> impl Iterator<Item=(&'a (usize, usize), &'a (usize, usize))> + 'a {
+        self.0.iter().take(self.0.len()-1).zip(self.0.iter().skip(1))
+    }
+
+    // pub fn vertices(&self) -> impl Iterator<Item=(usize, usize)
+
     pub fn outer_rect(&self) -> (usize, usize, usize, usize) {
         unimplemented!()
     }
@@ -53,11 +63,22 @@ impl Polygon {
     pub fn perimeter(&self) -> f64 {
         let n = self.0.len();
         let mut per = 0.0;
-        for (a, b) in self.0.iter().take(n-1).zip(self.0.iter().skip(1)) {
-            per += euclidian(&[a.0 as f64, a.1 as f64], &[b.0 as f64, b.1 as f64]);
+        for ((a1, a2), (b1, b2)) in self.vertex_pairs() {
+            per += euclidian(&[*a1 as f64, *a2 as f64], &[*b1 as f64, *b2 as f64]);
         }
         per
     }
+
+    /*/// Check if this polygon completely contains another.
+    pub fn contains(&self, other : &Polygon) {
+        for (a1, a2) in self.edges() {
+            for (b1, b2) in other.edges() {
+                if a.0 < b.0 {
+                    a.1 <
+                }
+            }
+        }
+    }*/
 
 }
 

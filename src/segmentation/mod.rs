@@ -18,12 +18,80 @@ use std::collections::HashMap;
 /// homonegeous within a pixel spacing given by the scale field.
 #[derive(Clone, Debug)]
 pub struct Patch {
+    // Instead of storing all pixels, we can store a rect and only
+    // the outer pixels. The rect is just characterized by a top-left
+    // corner and an extension. The rect extension is increased
+    // any time we have a set of inserted pixels that comptetely border
+    // either its bottom or right borders.
     pub pxs : Vec<(usize, usize)>,
+    pub outer_rect : (usize, usize, usize, usize),
     pub color : u8,
     pub scale : usize
 }
 
 impl Patch {
+
+    pub fn new(pt : (usize, usize), color : u8, scale : usize) -> Self {
+        Self {
+            pxs : vec![pt],
+            outer_rect : (pt.0, pt.1, 1, 1),
+            color,
+            scale
+        }
+    }
+
+    // Use short-circuit to only iterate over pixels for verification when absolutely required.
+    // Note: Outer rect right border should equal position of new pixel, since outer rect starts with
+    // size 1.
+    pub fn pixel_is_below(&self, (r, c) : (usize, usize)) -> bool {
+        // println!("rect={}; r = {}", self.outer_rect.0 + self.outer_rect.2, r);
+        let rect_r = self.outer_rect.0 + self.outer_rect.2;
+
+        // First is true when first pixel at row is being inserted; second afeter.
+        let is_below = (rect_r == r || rect_r == r+1);
+
+        r >= 1 &&
+            is_below &&
+            self.outer_rect.1 <= c &&
+            self.outer_rect.1 + self.outer_rect.3 >= c &&
+            self.pxs.iter().any(|px|  px.0 == r-1 && px.1 == c )
+    }
+
+    pub fn pixel_is_right(&self, (r, c) : (usize, usize)) -> bool {
+        // println!("rect={}; c= {}", self.outer_rect.0 + self.outer_rect.2, c);
+        let rect_c = self.outer_rect.1 + self.outer_rect.3;
+
+        // First is true when first pixel at col is being inserted; second after.
+        let is_right = (rect_c == c || rect_c == c+1);
+        c >= 1 &&
+            is_right &&
+            self.outer_rect.0 <= r &&
+            self.outer_rect.0 + self.outer_rect.2 >= r &&
+            self.pxs.iter().any(|px|  px.0 == r && px.1 == c-1 )
+    }
+
+    pub fn expand(&mut self, pts : &[(usize, usize)]) {
+        for pt in pts.iter() {
+            self.pxs.push(*pt);
+            if pt.0 < self.outer_rect.0 {
+                self.outer_rect.0 = pt.0;
+                self.outer_rect.2 = (pt.0 - self.outer_rect.0)+1;
+            }
+            if pt.1 < self.outer_rect.1 {
+                self.outer_rect.1 = pt.1;
+                self.outer_rect.3 = (pt.1 - self.outer_rect.1)+1;
+            }
+            let new_h = (pt.0 - self.outer_rect.0)+1;
+            let new_w = (pt.1 - self.outer_rect.1)+1;
+            if new_h > self.outer_rect.2 {
+                self.outer_rect.2 = new_h;
+            }
+            if new_w > self.outer_rect.3 {
+                self.outer_rect.3 = new_w;
+            }
+            //println!("")
+        }
+    }
 
     pub fn same_color(&self, other : &Self) -> bool {
         self.color == other.color
@@ -51,9 +119,12 @@ impl Patch {
     //    self.num_regions() * self.scale.pow(2)
     // }
 
-    pub fn polygon(&self) -> Polygon {
+    pub fn polygon(&self) -> Option<Polygon> {
         let mut row_pxs = self.group_rows();
         let mut sorted_keys = row_pxs.iter().map(|(k, _)| k ).collect::<Vec<_>>();
+        if sorted_keys.len() < 3 {
+            return None;
+        }
         sorted_keys.sort();
         let n = sorted_keys.len();
         let mut pts : Vec<(usize, usize)> = Vec::new();
@@ -79,7 +150,7 @@ impl Patch {
         for row in sorted_keys[1..n-1].iter().rev() {
             pts.push((**row, *row_pxs[row].first().unwrap()));
         }
-        Polygon::from(pts)
+        Some(Polygon::from(pts))
     }
 
 }
@@ -279,10 +350,16 @@ pub fn color_patches(win : &Window<'_, u8>, px_spacing : usize) -> Vec<Patch> {
         let color = win[(r*px_spacing, c*px_spacing)];
 
         // Get patch that contains the pixel above the current pixel
-        let top_patch_ix = patches.iter().position(|patch| patch.pxs.iter().any(|px| r >= 1 && px.0 == r-1 && px.1 == c ) );
+        // let top_patch_ix = patches.iter().position(|patch| patch.pxs.iter().any(|px| r >= 1 && px.0 == r-1 && px.1 == c ) );
+        let top_patch_ix = patches.iter().position(|patch| patch.pixel_is_below((r, c)) );
+        /*if let Some(top) = top_patch_ix {
+            let top_patch = &patches[top];
+            println!("patch row={}; patch dim = {}; r = {}", top_patch.outer_rect.0, top_patch.outer_rect.2, r);
+        }*/
 
         // Get patch that contains the pixel to the left of current pixel
-        let left_patch_ix = patches.iter().position(|patch| patch.pxs.iter().any(|px| c >= 1 && px.0 == r && px.1 == c-1 ) );
+        // let left_patch_ix = patches.iter().position(|patch| patch.pxs.iter().any(|px| c >= 1 && px.0 == r && px.1 == c-1 ) );
+        let left_patch_ix = patches.iter().position(|patch| patch.pixel_is_right((r, c)) );
 
         // Verifies if patches have the same color
         let merges_top = if let Some(top) = top_patch_ix.and_then(|ix| patches.get(ix)) {
@@ -303,11 +380,11 @@ pub fn color_patches(win : &Window<'_, u8>, px_spacing : usize) -> Vec<Patch> {
                 if top_differs_left {
                     // Merge two patches
                     let left_pxs = patches[left_patch_ix.unwrap()].pxs.iter().cloned().collect::<Vec<_>>();
-                    patches[top_patch_ix.unwrap()].pxs.extend(left_pxs);
+                    patches[top_patch_ix.unwrap()].expand(&left_pxs[..]);
                 }
 
                 // Push new pixel
-                patches[top_patch_ix.unwrap()].pxs.push((r, c));
+                patches[top_patch_ix.unwrap()].expand(&[(r, c)]);
 
                 if top_differs_left {
                     // Remove old left patch (now merged with top).
@@ -315,15 +392,18 @@ pub fn color_patches(win : &Window<'_, u8>, px_spacing : usize) -> Vec<Patch> {
                 }
             },
             (true, false) => {
-                patches[left_patch_ix.unwrap()].pxs.push((r, c));
+                patches[left_patch_ix.unwrap()].expand(&[(r, c)]);
             }
             (false, true) => {
-                patches[top_patch_ix.unwrap()].pxs.push((r, c));
+                patches[top_patch_ix.unwrap()].expand(&[(r, c)]);
             },
             (false, false) => {
-                patches.push(Patch { color, pxs : vec![(r, c)], scale : px_spacing });
+                patches.push(Patch::new((r, c), color, px_spacing));
             }
         }
+
+        // println!("{:?}", patches.last().unwrap());
+
     }
     patches
 }
