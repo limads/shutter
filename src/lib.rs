@@ -22,12 +22,13 @@ pub mod flow;
 #[cfg(feature="opencvlib")]
 pub mod contour;
 
-#[cfg(feature="opencvlib")]
+pub mod edge;
+
 pub mod shape;
 
-#[cfg(feature="opencvlib")]
 pub mod threshold;
 
+// Defines operations on binary images.
 #[cfg(feature="opencvlib")]
 pub mod morphology;
 
@@ -36,7 +37,6 @@ pub mod filter;
 
 pub mod cluster;
 
-#[cfg(feature="vlfeat")]
 pub mod segmentation;
 
 #[cfg(feature="opencvlib")]

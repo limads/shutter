@@ -1,11 +1,14 @@
 use nalgebra::*;
 use ripple::signal::sampling::{self};
-use std::ops::{Index, IndexMut, Mul, Add, AddAssign, MulAssign, SubAssign};
+use std::ops::{Index, IndexMut, Mul, Add, AddAssign, MulAssign, SubAssign, Range};
 use simba::scalar::SubsetOf;
 use std::fmt;
 use std::fmt::Debug;
 use simba::simd::{AutoSimd};
 use std::convert::TryFrom;
+use crate::segmentation::{self, Patch, BinaryPatch, Neighborhood};
+// use either::Either;
+use itertools::Itertools;
 
 #[cfg(feature="opencvlib")]
 use opencv::core;
@@ -42,6 +45,8 @@ pub mod cvutils;
 pub mod index;
 
 pub mod draw;
+
+pub(crate) mod iter;
 
 /// Digital image, represented row-wise. Fundamentally, an image differs from a matrix because
 /// it is oriented row-wise in memory, while a matrix is oriented column-wise. Also, images are
@@ -243,10 +248,10 @@ where
         panic!("Either opencvlib or ipp feature should be enabled for image conversion");
     }
     
-    pub fn iter(&self) -> impl Iterator<Item=&N> {
+    /*pub fn iter(&self) -> impl Iterator<Item=&N> {
         let shape = self.shape();
         iterate_row_wise(&self.buf[..], (0, 0), shape, shape)
-    }
+    }*/
     
     pub fn len(&self) -> usize {
         self.buf.len()
@@ -278,6 +283,20 @@ impl<N> Image<N>
 
 impl Image<u8> {
 
+    pub fn new_checkerboard(sz : usize, sq_sz : usize) -> Self {
+        assert!(sz % sq_sz == 0);
+        let mut img = Self::new_constant(sz, sz, 255);
+        let n_sq = sz / sq_sz;
+        for row in 0..n_sq {
+            for col in 0..n_sq {
+                if (row % 2 == 0 && col % 2 == 0) || (row % 2 != 0 && col % 2 != 0) {
+                    img.window_mut((row*sq_sz, col*sq_sz), (sq_sz, sq_sz)).unwrap().fill(0);
+                }
+            }
+        }
+        img
+    }
+
     pub fn draw(&mut self, mark : Mark) {
         self.full_window_mut().draw(mark);
     }
@@ -287,7 +306,7 @@ impl Image<f32> {
 
     pub fn max(&self) -> ((usize, usize), f32) {
         let (mut max_ix, mut max) = ((0, 0), f32::NEG_INFINITY);
-        for (lin_ix, px) in self.iter().enumerate() {
+        for (lin_ix, px) in self.full_window().pixels(1).enumerate() {
             if *px > max {
                 max_ix = index::coordinate_index(lin_ix, self.ncols);
                 max = *px
@@ -408,7 +427,7 @@ where
 
 impl<'a, N> Window<'a, N>
 where
-    N : Scalar + Mul<Output=N> + MulAssign
+    N : Scalar + Mul<Output=N> + MulAssign + Copy
 {
 
     /// Creates a window that cover the whole slice src, assuming it represents a square image.
@@ -497,6 +516,15 @@ where
         Some(&self.win[start..(start+self.win_sz.1)])
     }
 
+    /// Iterates over pairs of pixels within a row, carrying the column index of the left element at first position
+    pub fn horizontal_pixel_pairs(&'a self, row : usize, comp_dist : usize) -> Option<impl Iterator<Item=(usize, (&'a N, &'a N))>> {
+        Some(iter::horizontal_row_iterator(self.row(row)?, comp_dist))
+    }
+
+    pub fn vertical_pixel_pairs(&'a self, col : usize, comp_dist : usize) -> Option<impl Iterator<Item=(usize, (&'a N, &'a N))>> {
+        Some(iter::vertical_col_iterator(self.rows(), comp_dist, col))
+    }
+
     pub fn rows(&self) -> impl Iterator<Item=&[N]> + Clone {
         let stride = self.orig_sz.1;
         let tl = self.offset.0 * stride + self.offset.1;
@@ -506,10 +534,30 @@ where
         })
     }
 
-    pub fn iter(&self) -> impl Iterator<Item=&N> {
-        iterate_row_wise(self.win, self.offset, self.win_sz, self.orig_sz)
+    /// Iterate over all image pixels if spacing=1; or over pixels spaced
+    /// horizontally and verticallly by spacing.
+    pub fn pixels(&self, spacing : usize) -> impl Iterator<Item=&N> + Clone {
+        assert!(spacing > 0, "Spacing should be at least one");
+        assert!(self.width() % spacing == 0 && self.height() % spacing == 0, "Spacing should be integer divisor of width and height");
+        iterate_row_wise(self.win, self.offset, self.win_sz, self.orig_sz, spacing).step_by(spacing)
     }
-    
+
+    // Returns the most representative k-colors of the image using K-means
+    // pub fn colors(&self, px_spacing : usize, n_colors : usize) -> Vec<u8> {
+    // }
+
+    // Returns a thin vertical window over a given col. Prototype for impl Index<(Range<usize>, usize)>
+    pub fn sub_col(&self, rows : Range<usize>, col : usize) -> Option<Window<'_, N>> {
+        let height = rows.end - rows.start;
+        self.sub_window((rows.start, col), (height, 1))
+    }
+
+    // Returns a thin horizontal window over a given row. Prototype for impl Index<(usize, Range<usize>)>
+    pub fn sub_row(&self, row : usize, cols : Range<usize>) -> Option<Window<'_, N>> {
+        let width = cols.end - cols.start;
+        self.sub_window((row, cols.start), (1, width))
+    }
+
     pub fn clone_owned(&self) -> Image<N>
     where
         N : Copy + Default
@@ -557,6 +605,18 @@ impl<'a> Iterator for PackedIterator<'a, u8> {
 }*/
 
 impl<'a> Window<'a, u8> {
+
+    /// Extract contiguous image regions of homogeneous color.
+    pub fn patches(&self, px_spacing : usize) -> Vec<Patch> {
+        segmentation::color_patches(self, px_spacing)
+    }
+
+    pub fn binary_patches(&self, px_spacing : usize) -> Vec<BinaryPatch> {
+        // TODO if we have a binary or a bit image with just a few classes,
+        // there is no need for KMeans. Just use the allocations.
+        // let label_img = segmentation::segment_colors_to_image(self, px_spacing, n_colors);
+        segmentation::binary_patches(self, px_spacing)
+    }
 
     /// If higher, returns binary image with all pixels > thresh set to 255 and others set to 0;
     /// If !higher, returns binary image with pixels < thresh set to 255 and others set to 0.
@@ -623,14 +683,28 @@ where
     }
 }
 
+/*impl<N> Index<(Range<usize>, usize)> for Window<'_, N>
+where
+    N : Scalar
+{
+
+    type Output = Self;
+
+    fn index(&self, index: (Range<usize>, usize)) -> &Self::Output {
+
+    }
+
+}*/
+
 pub fn iterate_row_wise<N>(
     src : &[N], 
     offset : (usize, usize), 
     win_sz : (usize, usize), 
-    orig_sz : (usize, usize)
-) -> impl Iterator<Item=&N> {
+    orig_sz : (usize, usize),
+    row_spacing : usize
+) -> impl Iterator<Item=&N> + Clone {
     let start = orig_sz.1 * offset.0 + offset.1;
-    (0..win_sz.0).map(move |i| {
+    (0..win_sz.0).step_by(row_spacing).map(move |i| {
         let row_offset = start + i*orig_sz.1;
         &src[row_offset..(row_offset+win_sz.1)]
     }).flatten()
@@ -885,13 +959,68 @@ impl WindowMut<'_, u8> {
     
 }
 
-impl<'a, N> WindowMut<'a, N> 
+/*impl<N> WindowMut<'_, N>
+where
+    N : Scalar + Copy
+{
+
+    unsafe fn create_immutable_without_lifetime(&self, src : (usize, usize), dim : (usize, usize)) -> Window<'_, N> {
+        Window {
+            offset : (self.offset.0 + src.0, self.offset.1 + src.1),
+            orig_sz : self.orig_sz,
+            win_sz : dim,
+            win : std::slice::from_raw_parts(self.win.as_ptr(), self.win.len()),
+        }
+    }
+
+    /// Creates a new mutable window, forgetting the lifetime of the previous window.
+    unsafe fn create_mutable_without_lifetime(&mut self, src : (usize, usize), dim : (usize, usize)) -> WindowMut<'_, N> {
+        WindowMut {
+            offset : (self.offset.0 + src.0, self.offset.1 + src.1),
+            orig_sz : self.orig_sz,
+            win_sz : dim,
+            win : std::slice::from_raw_parts_mut(self.win.as_mut_ptr(), self.win.len()),
+        }
+    }
+}*/
+
+impl<'a, N> WindowMut<'a, N>
 where
     N : Scalar + Copy + Mul<Output=N> + MulAssign
 {
 
-    pub fn iter_mut(&'a mut self) -> impl Iterator<Item=&'a mut N> {
-        self.rows_mut().map(|r| r.iter_mut() ).flatten()
+    pub fn fill(&'a mut self, color : N) {
+        self.pixels_mut(1).for_each(|px| *px = color );
+    }
+
+    pub fn pixels_mut(&'a mut self, spacing : usize) -> impl Iterator<Item=&'a mut N> {
+        self.rows_mut().step_by(spacing).map(move |r| r.iter_mut().step_by(spacing) ).flatten()
+    }
+
+    /*/// Applies closure to sub_window. Useful when you need to apply an operation
+    /// iteratively to different regions of a window, and cannot do so because the mutable reference gets
+    /// invalidated when a new sub-window is returned within a loop.
+    pub fn apply_to_sub_window<'b, F>(&'b mut self, offset : (usize, usize), dim : (usize, usize), mut f : F)
+    where
+        F : FnMut(WindowMut<'b, N>)
+    {
+        let mut sub = unsafe { self.create_mutable_without_lifetime(offset, dim) };
+        f(sub);
+    }*/
+
+    /// Analogous to slice::copy_within, copy a the sub_window (src, dim) to the sub_window (dst, dim).
+    pub fn copy_within(&'a mut self, src : (usize, usize), dst : (usize, usize), dim : (usize, usize)) {
+        use crate::shape;
+        assert!(!shape::rect_overlap(&(src.0, src.1, dim.0, dim.1), &(dst.0, dst.1, dim.0, dim.1)), "copy_within: Windows overlap");
+        let src_win = unsafe {
+            Window {
+                offset : (self.offset.0 + src.0, self.offset.1 + src.1),
+                orig_sz : self.orig_sz,
+                win_sz : dim,
+                win : std::slice::from_raw_parts(self.win.as_ptr(), self.win.len()),
+            }
+        };
+        self.sub_window_mut(dst, dim).unwrap().copy_from(&src_win);
     }
 
     pub fn rows_mut(&'a mut self) -> impl Iterator<Item=&'a mut [N]> {

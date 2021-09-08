@@ -1,16 +1,72 @@
-use opencv::imgproc;
 use crate::image::*;
-use crate::threshold;
-use opencv::core;
-use opencv::prelude::RotatedRectTrait;
+use crate::edge::*;
 use away::Metric;
 
-// An edge is a Vec<(usize, usize)>. Two edges intersect if at least one
-// of the instances of the cartesian product of their sub-edges (neighboring pairs of points forming edges of size 2)
-// intersect. Edges for which their enclosing rectangle do not match have no change of matching and can be excluded.
-// An edge intersection can be found if their enclosing rectangles match. The point is defined by the solution of
-// the simple 2x2 linear system with the line equations for the edges. Intersecting edges define vertices.
-pub struct Edge(Vec<(usize, usize)>);
+pub fn rect_overlap(r1 : &(usize, usize, usize, usize), r2 : &(usize, usize, usize, usize)) -> bool {
+    let tl_vdist = (r1.0 as i32 - r2.0 as i32).abs();
+    let tl_hdist = (r1.1 as i32 - r2.1 as i32).abs();
+    let (h1, w1) = (r1.2 as i32, r1.3 as i32);
+    let (h2, w2) = (r2.2 as i32, r2.3 as i32);
+    (tl_vdist < h1 || tl_vdist < h2) && (tl_hdist < w1 || tl_hdist < w2)
+}
+
+/// A cricle has circularity of 1; Other polygons have circularity < 1.
+pub fn circularity(area : f64, perim : f64) -> f64 {
+    (4. * std::f64::consts::PI * area) / perim.powf(2.)
+}
+
+// Measures how close to a closed shape a blob is.
+// pub fn convexity() -> f64 {
+//    area_blob / area_convex_hull
+// }
+
+// Polygon is just an edge that is interpreted to be closed.
+#[derive(Debug, Clone)]
+pub struct Polygon(Vec<(usize, usize)>);
+
+impl From<Vec<(usize, usize)>> for Polygon {
+
+    fn from(pts : Vec<(usize, usize)>) -> Self {
+        assert!(pts.len() >= 3);
+        Self(pts)
+    }
+}
+
+impl From<Edge> for Polygon {
+
+    fn from(edge : Edge) -> Self {
+        assert!(edge.len() >= 3);
+        Self(edge.into())
+    }
+}
+
+impl Polygon {
+
+    pub fn inner_rect(&self) -> (usize, usize, usize, usize) {
+        unimplemented!()
+    }
+
+    pub fn outer_rect(&self) -> (usize, usize, usize, usize) {
+        unimplemented!()
+    }
+
+    pub fn perimeter(&self) -> f64 {
+        let n = self.0.len();
+        let mut per = 0.0;
+        for (a, b) in self.0.iter().take(n-1).zip(self.0.iter().skip(1)) {
+            per += euclidian(&[a.0 as f64, a.1 as f64], &[b.0 as f64, b.1 as f64]);
+        }
+        per
+    }
+
+}
+
+fn euclidian(a : &[f64], b : &[f64]) -> f64 {
+    a.iter().zip(b.iter()).map(|(ai, bi)| (ai - bi).powf(2.) ).sum::<f64>().sqrt()
+}
+
+// impl AsRef<[(usize, usize)]> for Edge { }
+// impl AsRef<[(usize, usize)]> for Polygon { }
 
 /// Assume pts is an ordered vector over columns. Join any two points as long as they are close enough.
 pub fn join_single_col_ordered(pts : &[(usize, usize)], max_dist : f64) -> Vec<[(usize, usize); 2]> {
@@ -49,17 +105,6 @@ pub fn join_col_ordered(pts : &[(usize, usize)], max_dist : f64) -> Vec<[(usize,
     join_pairs_col_ordered(&pairs[..], max_dist)
 }
 
-fn convert_points(pts : &[(usize, usize)]) -> core::Vector<core::Point2i> {
-    let mut pt_vec = core::Vector::new();
-    for pt in pts.iter() {
-        pt_vec.push(core::Point2i::new(pt.1 as i32, pt.0 as i32));
-    }
-    pt_vec
-}
-
-// pub enum EllipseError {
-// }
-
 pub struct Ellipse {
     pub center : (usize, usize),
     pub large_axis : f64,
@@ -80,86 +125,109 @@ impl Ellipse {
     }
 }
 
-pub fn fit_circle(pts : &[(usize, usize)]) -> Result<((usize, usize), usize), String> {
-    let ellipse = fit_ellipse(pts)?;
-    let radius = (ellipse.large_axis / 2.) as usize;
-    Ok((ellipse.center, radius))
-}
+#[cfg(feature="opencvlib")]
+pub mod cvellipse {
 
-// TODO make WindowMut
-pub fn draw_ellipse(window : Window<'_, u8>, el : &Ellipse) {
-    let thickness = 2;
-    let line_type = 8;
-    let shift = 0;
-    let mut m : core::Mat = window.into();
-    imgproc::ellipse(
-        &mut m,
-        core::Point{ x : el.center.1 as i32, y : el.center.0 as i32 },
-        core::Size{ width : (el.large_axis / 2.) as i32, height : (el.small_axis / 2.) as i32 },
-        el.angle,
-        0.0,
-        360.0,
-        core::Scalar::from((255f64, 0f64, 0f64)),
-        thickness,
-        line_type,
-        shift
-    );
-}
+    use super::*;
+    use opencv::core;
+    use opencv::imgproc;
+    use opencv::prelude::RotatedRectTrait;
 
-/// Returns position and radius of fitted circle. Also see fit_ellipse_ams; fit_ellipse_direct.
-pub fn fit_ellipse(pts : &[(usize, usize)]) -> Result<Ellipse, String> {
-    let pt_vec = convert_points(pts);
-    let rotated_rect = imgproc::fit_ellipse(&pt_vec)
-        .map_err(|e| format!("Ellipse fitting error ({})", e))?;
-    let center_pt = rotated_rect.center();
-    if center_pt.y < 0.0 || center_pt.x < 0.0 {
-        return Err(format!("Circle outside image boundaries"));
-    }
-    let center = (center_pt.y as usize, center_pt.x as usize);
-    let angle = rotated_rect.angle();
-    let size = rotated_rect.size();
-    let angle = rotated_rect.angle();
-    Ok(Ellipse {
-        center,
-        large_axis : rotated_rect.size().width as f64,
-        small_axis : rotated_rect.size().height as f64,
-        angle : angle as f64
-    })
-}
-
-pub struct EnclosingCircle {
-    pt_vec : core::Vector<core::Point2i>
-}
-
-impl EnclosingCircle {
-
-    pub fn new() -> Self {
-        let pt_vec = core::Vector::with_capacity(256);
-        Self { pt_vec }
-    }
-
-    pub fn calculate(&mut self, pts : &[(usize, usize)]) -> Result<((usize, usize), usize), String> {
-        self.pt_vec.clear();
+    pub fn convert_points(pts : &[(usize, usize)]) -> core::Vector<core::Point2i> {
+        let mut pt_vec = core::Vector::new();
         for pt in pts.iter() {
-            self.pt_vec.push(core::Point2i::new(pt.1 as i32, pt.0 as i32));
+            pt_vec.push(core::Point2i::new(pt.1 as i32, pt.0 as i32));
         }
-        let mut center = core::Point2f{ x : 0.0, y : 0.0 };
-        let mut radius = 0.0;
-        let ans = imgproc::min_enclosing_circle(
-            &self.pt_vec,
-            &mut center,
-            &mut radius
+        pt_vec
+    }
+
+    pub fn fit_circle(pts : &[(usize, usize)]) -> Result<((usize, usize), usize), String> {
+        let ellipse = fit_ellipse(pts)?;
+        let radius = (ellipse.large_axis / 2.) as usize;
+        Ok((ellipse.center, radius))
+    }
+
+    // TODO make WindowMut
+    pub fn draw_ellipse(window : Window<'_, u8>, el : &Ellipse) {
+        let thickness = 2;
+        let line_type = 8;
+        let shift = 0;
+        let mut m : core::Mat = window.into();
+        imgproc::ellipse(
+            &mut m,
+            core::Point{ x : el.center.1 as i32, y : el.center.0 as i32 },
+            core::Size{ width : (el.large_axis / 2.) as i32, height : (el.small_axis / 2.) as i32 },
+            el.angle,
+            0.0,
+            360.0,
+            core::Scalar::from((255f64, 0f64, 0f64)),
+            thickness,
+            line_type,
+            shift
         );
-        match ans {
-            Ok(_) => if center.x >= 0.0 && center.y >= 0.0 {
-                Ok(((center.y as usize, center.x as usize), radius as usize))
-            } else {
-                Err(format!("Center outside valid region"))
-            },
-            Err(e) => Err(format!("{}", e))
+    }
+
+    /// Returns position and radius of fitted circle. Also see fit_ellipse_ams; fit_ellipse_direct.
+    pub fn fit_ellipse(pts : &[(usize, usize)]) -> Result<Ellipse, String> {
+
+        let pt_vec = convert_points(pts);
+        let rotated_rect = imgproc::fit_ellipse(&pt_vec)
+            .map_err(|e| format!("Ellipse fitting error ({})", e))?;
+        let center_pt = rotated_rect.center();
+        if center_pt.y < 0.0 || center_pt.x < 0.0 {
+            return Err(format!("Circle outside image boundaries"));
+        }
+        let center = (center_pt.y as usize, center_pt.x as usize);
+        let angle = rotated_rect.angle();
+        let size = rotated_rect.size();
+        let angle = rotated_rect.angle();
+        Ok(Ellipse {
+            center,
+            large_axis : rotated_rect.size().width as f64,
+            small_axis : rotated_rect.size().height as f64,
+            angle : angle as f64
+        })
+    }
+
+    pub struct EnclosingCircle {
+
+        pt_vec : core::Vector<core::Point2i>
+    }
+
+    impl EnclosingCircle {
+
+        pub fn new() -> Self {
+            let pt_vec = core::Vector::with_capacity(256);
+            Self { pt_vec }
+        }
+
+        pub fn calculate(&mut self, pts : &[(usize, usize)]) -> Result<((usize, usize), usize), String> {
+            self.pt_vec.clear();
+            for pt in pts.iter() {
+                self.pt_vec.push(core::Point2i::new(pt.1 as i32, pt.0 as i32));
+            }
+            let mut center = core::Point2f{ x : 0.0, y : 0.0 };
+            let mut radius = 0.0;
+            let ans = imgproc::min_enclosing_circle(
+                &self.pt_vec,
+                &mut center,
+                &mut radius
+            );
+            match ans {
+                Ok(_) => if center.x >= 0.0 && center.y >= 0.0 {
+                    Ok(((center.y as usize, center.x as usize), radius as usize))
+                } else {
+                    Err(format!("Center outside valid region"))
+                },
+                Err(e) => Err(format!("{}", e))
+            }
         }
     }
+
 }
+
+// pub enum EllipseError {
+// }
 
 
 

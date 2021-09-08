@@ -29,6 +29,8 @@ lazy_static = "1.0"
 structopt = "0.3"
 ripple = { path = "../ripple" }
 away = { path = "../away" }
+bayes = { path = "../bayes" }
+itertools = "0.10.1"
 
 [features]
 mkl=[]
