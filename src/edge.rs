@@ -1,6 +1,7 @@
 use crate::threshold::Threshold;
 use crate::image::Window;
 use crate::image::iter;
+use crate::shape::Polygon;
 
 // An edge is a Vec<(usize, usize)>. Two edges intersect if at least one
 // of the instances of the cartesian product of their sub-edges (neighboring pairs of points forming edges of size 2)
@@ -9,12 +10,74 @@ use crate::image::iter;
 // the simple 2x2 linear system with the line equations for the edges. Intersecting edges define vertices.
 pub struct Edge(Vec<(usize, usize)>);
 
+#[derive(Clone, Copy, Debug)]
+pub struct Line([(usize, usize); 2]);
+
+impl Line {
+
+    pub fn points(&self) -> ((usize, usize), (usize, usize)) {
+        (self.0[0], self.0[1])
+    }
+
+    pub fn length(&self) -> f64 {
+        euclidian(&[self.0[0].0 as f64, self.0[0].1 as f64], &[self.0[1].0 as f64, self.0[1].1 as f64])
+    }
+
+    /// Returns the line which is perpendicular to self and runs from (pt, pt_in_self).
+    pub fn perpendicular(&self, pt : (usize, usize)) -> Line {
+        unimplemented!()
+    }
+
+    pub fn intercept(&self) -> f64 {
+        unimplemented!()
+    }
+
+    fn intersection(&self, other : &Self) -> f64 {
+        unimplemented!()
+    }
+
+    fn slope(&self) -> f64 {
+        (self.0[1].1 as f64 - self.0[0].1 as f64) / (self.0[1].0 as f64 - self.0[0].0 as f64)
+    }
+
+}
+
+impl From<[(usize, usize); 2]> for Line {
+
+    fn from(pts : [(usize, usize); 2]) -> Self {
+        Self(pts)
+    }
+}
+
+impl AsRef<[(usize, usize)]> for Line {
+    fn as_ref(&self) -> &[(usize, usize)] {
+        &self.0[..]
+    }
+}
+
 impl Edge {
 
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
+    pub fn join(&mut self, other : &Self) {
+        // Join of at least one of the 4 possible extremes combinations is smaller than distance.
+        // Use the smallest of the 4 possible extreme combinations if more than one is smaller than distance.
+    }
+
+    pub fn intersect(&self, other : &Self) {
+        // Verify if any of the cartesian product of self and other intersect.
+    }
+
+    pub fn close(&self) -> Option<Polygon> {
+        unimplemented!()
+    }
+
+}
+
+fn euclidian(a : &[f64], b : &[f64]) -> f64 {
+    a.iter().zip(b.iter()).map(|(ai, bi)| (ai - bi).powf(2.) ).sum::<f64>().sqrt()
 }
 
 impl From<Vec<(usize, usize)>> for Edge {

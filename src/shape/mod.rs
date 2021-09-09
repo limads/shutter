@@ -1,6 +1,7 @@
 use crate::image::*;
 use crate::edge::*;
 use away::Metric;
+use std::cmp::{PartialEq, Ordering};
 
 pub fn rect_overlap(r1 : &(usize, usize, usize, usize), r2 : &(usize, usize, usize, usize)) -> bool {
     let tl_vdist = (r1.0 as i32 - r2.0 as i32).abs();
@@ -40,9 +41,92 @@ impl From<Edge> for Polygon {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct Triangle([(usize, usize); 3]);
+
+impl Triangle {
+
+    pub fn lines(&self) -> [Line; 3] {
+        let l1 = Line::from([self.0[0], self.0[1]]);
+        let l2 = Line::from([self.0[0], self.0[2]]);
+        let l3 = Line::from([self.0[1], self.0[2]]);
+        [l1, l2, l3]
+    }
+
+    /// Splits this triangle into two right triangles
+    pub fn split_to_right(&self) -> (Triangle, Triangle) {
+        let base = self.base();
+        let perp = perp_line(&self, &base);
+        let (b1, b2) = base.points();
+        let (perp_pt, top) = perp.points();
+        (Triangle([b1, top, perp_pt]), Triangle([b2, top, perp_pt]))
+    }
+
+    // Gets the triangle "base" (largest line)
+    pub fn base(&self) -> Line {
+        let mut lines = self.lines();
+        lines.sort_by(|l1, l2| l1.length().partial_cmp(&l2.length()).unwrap_or(Ordering::Equal) );
+        lines[2]
+    }
+
+    pub fn outer_rect(&self) -> (usize, usize, usize, usize) {
+        let (r1, r2) = self.split_to_right();
+        unimplemented!()
+    }
+
+    pub fn area(&self) -> f64 {
+        let base = self.base();
+        let perp = perp_line(&self, &base);
+        base.length() * perp.length() / 2.
+    }
+
+    pub fn perimeter(&self) -> f64 {
+        self.lines().iter().fold(0.0, |p, l| p + l.length() )
+    }
+
+    pub fn contains(&self, pt : &(usize, usize)) -> bool {
+
+        // Verify if either left or right outer rect contains point. If neither contain it, returns false. Else:
+
+        // If left contains it, verify if point is closer to outer corner (outside) or inner cordre (inside)
+
+        // If right contains it, verify if point is closer to outer (outside) or inner corner (inside).
+
+        unimplemented!()
+    }
+
+}
+
+fn perp_line(tri : &Triangle, base : &Line) -> Line {
+    let (b1, b2) = base.points();
+    let top = tri.0.iter().find(|pt| **pt != b1 && **pt != b2 ).unwrap();
+    base.perpendicular(*top)
+}
+
 impl Polygon {
 
-    pub fn inner_rect(&self) -> (usize, usize, usize, usize) {
+    pub fn area(&self) -> f64 {
+        self.triangles().iter().fold(0.0, |area, tri| area + tri.area() )
+    }
+
+    pub fn triangles<'a>(&'a self) -> Vec<Triangle> {
+        let n = self.0.len();
+        let last = self.0.last().unwrap().clone();
+        let mut triangles = Vec::new();
+        for (a, b) in self.0.iter().take(n-1).zip(self.0.iter().skip(1)) {
+            triangles.push(Triangle([*a, *b, last]));
+        }
+        triangles
+    }
+
+    /// Check if point is inside polygon
+    pub fn contains(&self, pt : (usize, usize)) -> bool {
+        self.triangles().iter().any(|tri| tri.contains(&pt) )
+    }
+
+    // True when any of the triangles intersect. Triangles intersect when any of the points
+    // of one triangle are inside the other.
+    pub fn intersects(&self, other : &Self) -> bool {
         unimplemented!()
     }
 
@@ -60,6 +144,14 @@ impl Polygon {
         unimplemented!()
     }
 
+    pub fn inner_rect(&self) -> (usize, usize, usize, usize) {
+        unimplemented!()
+    }
+
+    pub fn join(&mut self, other : &Self) {
+        // Works when shapes intersect
+    }
+
     pub fn perimeter(&self) -> f64 {
         let n = self.0.len();
         let mut per = 0.0;
@@ -69,16 +161,10 @@ impl Polygon {
         per
     }
 
-    /*/// Check if this polygon completely contains another.
-    pub fn contains(&self, other : &Polygon) {
-        for (a1, a2) in self.edges() {
-            for (b1, b2) in other.edges() {
-                if a.0 < b.0 {
-                    a.1 <
-                }
-            }
-        }
-    }*/
+    /// Check if this polygon completely contains another.
+    pub fn encloses(&self, other : &Polygon) -> bool {
+        other.0.iter().all(|pt| self.contains(*pt) )
+    }
 
 }
 

@@ -48,6 +48,21 @@ pub mod draw;
 
 pub(crate) mod iter;
 
+/*pub trait Raster {
+
+    fn width(&self) -> usize;
+
+    fn height(&self) -> usize;
+
+    /// Returns (height x width)
+    fn dimensions(&self) -> (usize, usize) {
+        (self.height(), self.width())
+    }
+
+    fn pixels(&self) -> impl Iterator<item=&u8>;
+
+}*/
+
 /// Digital image, represented row-wise. Fundamentally, an image differs from a matrix because
 /// it is oriented row-wise in memory, while a matrix is oriented column-wise. Also, images are
 /// bounded at a low and high end, because they are the product of a saturated digital quantization
@@ -369,7 +384,7 @@ where
     // Window offset, with respect to the top-left point (row, col).
     offset : (usize, usize),
     
-    // Original image dimensions (height, width).
+    // Original image dimensions (height, width). orig_sz.0 MUST be win.len() / orig_sz.1
     orig_sz : (usize, usize),
     
     // This window size.
@@ -608,7 +623,9 @@ impl<'a> Window<'a, u8> {
 
     /// Extract contiguous image regions of homogeneous color.
     pub fn patches(&self, px_spacing : usize) -> Vec<Patch> {
-        segmentation::color_patches(self, px_spacing)
+        let mut patches = Vec::new();
+        segmentation::color_patches(&mut patches, self, px_spacing);
+        patches
     }
 
     pub fn binary_patches(&self, px_spacing : usize) -> Vec<BinaryPatch> {
@@ -807,7 +824,10 @@ pub enum Mark {
     Label((usize, usize), &'static str, usize, u8),
 
     // Center, radius and color
-    Circle((usize, usize), usize, u8)
+    Circle((usize, usize), usize, u8),
+
+    /// TL pos, size and color
+    Rect((usize, usize), (usize, usize), u8)
     
 }
 
@@ -877,6 +897,20 @@ where
 
 impl WindowMut<'_, u8> {
 
+    pub fn patches(&self, px_spacing : usize) -> Vec<Patch> {
+        let src_win = unsafe {
+            Window {
+                offset : (self.offset.0, self.offset.1),
+                orig_sz : self.orig_sz,
+                win_sz : self.win_sz,
+                win : std::slice::from_raw_parts(self.win.as_ptr(), self.win.len()),
+            }
+        };
+        let mut patches = Vec::new();
+        segmentation::color_patches(&mut patches, &src_win, px_spacing);
+        patches
+    }
+
     pub fn draw(&mut self, mark : Mark) {
         /*let slice_ptr = self.win.data.as_mut_slice().as_mut_ptr();
         let ptr_offset = slice_ptr as u64 - (self.orig_sz.0*(self.offset.1 - 1)) as u64 - self.offset.0 as u64;
@@ -921,6 +955,15 @@ impl WindowMut<'_, u8> {
                     color
                 );
             },
+            Mark::Rect(tl, sz, color) => {
+                let tr = (tl.0, tl.1 + sz.1);
+                let br = (tl.0 + sz.0, tl.1 + sz.1);
+                let bl = (tl.0 + sz.0, tl.1);
+                self.draw(Mark::Line(tl, tr, color));
+                self.draw(Mark::Line(tr, br, color));
+                self.draw(Mark::Line(br, bl, color));
+                self.draw(Mark::Line(bl, tl, color));
+            },
             Mark::Digit(pos, val, sz, color) => {
                 let tl_pos = (self.offset.0 + pos.0, self.offset.1 + pos.1);
 
@@ -959,6 +1002,17 @@ impl WindowMut<'_, u8> {
     
 }
 
+pub(crate) unsafe fn create_immutable<'a>(win : &'a WindowMut<'a, u8>) -> Window<'a, u8> {
+    unsafe {
+        Window {
+            offset : (win.offset.0, win.offset.1),
+            orig_sz : win.orig_sz,
+            win_sz : win.win_sz,
+            win : std::slice::from_raw_parts(win.win.as_ptr(), win.win.len()),
+        }
+    }
+}
+
 /*impl<N> WindowMut<'_, N>
 where
     N : Scalar + Copy
@@ -984,10 +1038,35 @@ where
     }
 }*/
 
+//fn step_row<'a, N>(r : &'a mut [N], spacing : usize) -> std::iter::Flatten<std::iter::StepBy<std::slice::IterMut<'a, N>>>
+//where
+//    N : 'a,
+//    Flatten<std::iter::StepBy<std::slice::IterMut<'a, N>>> : IntoIterator<N>
+//{
+//    r.iter_mut().step_by(spacing).flatten()
+    //r.iter_mut()
+//}
+
+// fn step<'a, N>(s : &'a [N], step : usize) -> std::iter::Flatten<std::iter::StepBy<std::slice::Iter<'a, N>>> {
+//    s.iter().step_by(step)
+// }
+
 impl<'a, N> WindowMut<'a, N>
 where
     N : Scalar + Copy + Mul<Output=N> + MulAssign
 {
+
+    pub fn orig_sz(&self) -> (usize, usize) {
+        self.orig_sz
+    }
+
+    pub fn full_slice(&'a self) -> &'a [N] {
+        &self.win[..]
+    }
+
+    pub fn offset(&self) -> (usize, usize) {
+        self.offset
+    }
 
     pub fn fill(&'a mut self, color : N) {
         self.pixels_mut(1).for_each(|px| *px = color );

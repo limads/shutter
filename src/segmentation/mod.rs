@@ -6,6 +6,8 @@ use bayes::fit::{cluster::KMeans, cluster::KMeansSettings, Estimator};
 use crate::shape::*;
 use std::fmt;
 use std::collections::HashMap;
+use std::mem;
+use std::default::Default;
 
 // #[cfg(feature="opencvlib")]
 // pub mod fgmm;
@@ -16,7 +18,7 @@ use std::collections::HashMap;
 /// The most general patch is a set of pixel positions with a homogeneous color
 /// and a scale that was used for extraction. The patch is assumed to be
 /// homonegeous within a pixel spacing given by the scale field.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Patch {
     // Instead of storing all pixels, we can store a rect and only
     // the outer pixels. The rect is just characterized by a top-left
@@ -24,6 +26,8 @@ pub struct Patch {
     // any time we have a set of inserted pixels that comptetely border
     // either its bottom or right borders.
     pub pxs : Vec<(usize, usize)>,
+
+    // Outer rect, at patch scale
     pub outer_rect : (usize, usize, usize, usize),
     pub color : u8,
     pub scale : usize
@@ -31,13 +35,33 @@ pub struct Patch {
 
 impl Patch {
 
-    pub fn new(pt : (usize, usize), color : u8, scale : usize) -> Self {
+    /// Starts a new patch, optionally with a pixel buffer to be recycled.
+    pub fn new(pt : (usize, usize), color : u8, scale : usize, pxs : Option<Vec<(usize, usize)>>) -> Self {
+        let pxs = if let Some(mut pxs) = pxs {
+            pxs.clear();
+            pxs.push(pt);
+            pxs
+        } else {
+            let mut pxs = Vec::with_capacity(16);
+            pxs.push(pt);
+            pxs
+        };
         Self {
-            pxs : vec![pt],
+            pxs,
             outer_rect : (pt.0, pt.1, 1, 1),
             color,
             scale
         }
+    }
+
+    /// Outer rect, at image scale
+    pub fn outer_rect(&self) -> (usize, usize, usize, usize) {
+        (
+            self.outer_rect.0 * self.scale,
+            self.outer_rect.1 * self.scale,
+            self.outer_rect.2 * self.scale,
+            self.outer_rect.3 * self.scale
+        )
     }
 
     // Use short-circuit to only iterate over pixels for verification when absolutely required.
@@ -47,14 +71,16 @@ impl Patch {
         // println!("rect={}; r = {}", self.outer_rect.0 + self.outer_rect.2, r);
         let rect_r = self.outer_rect.0 + self.outer_rect.2;
 
-        // First is true when first pixel at row is being inserted; second afeter.
+        // First is true when first pixel at row is being inserted; second after.
         let is_below = (rect_r == r || rect_r == r+1);
+
+        // assert!(self.pxs.is_sorted_by(|a, b| a.0.partial_cmp(&b.0 )));
 
         r >= 1 &&
             is_below &&
             self.outer_rect.1 <= c &&
             self.outer_rect.1 + self.outer_rect.3 >= c &&
-            self.pxs.iter().any(|px|  px.0 == r-1 && px.1 == c )
+            self.pxs.iter().rev().take_while(|px| px.0 >= r-1 ).any(|px| px.0 == r-1 && px.1 == c )
     }
 
     pub fn pixel_is_right(&self, (r, c) : (usize, usize)) -> bool {
@@ -67,7 +93,7 @@ impl Patch {
             is_right &&
             self.outer_rect.0 <= r &&
             self.outer_rect.0 + self.outer_rect.2 >= r &&
-            self.pxs.iter().any(|px|  px.0 == r && px.1 == c-1 )
+            self.pxs.iter().rev().any(|px|  px.0 == r && px.1 == c-1 )
     }
 
     pub fn expand(&mut self, pts : &[(usize, usize)]) {
@@ -89,6 +115,17 @@ impl Patch {
             if new_w > self.outer_rect.3 {
                 self.outer_rect.3 = new_w;
             }
+
+            // When adding more than one point, we are merging two
+            // patches. In this case, we must guarantee that row order
+            // is preserved. When adding a single point, we are in
+            // raster order insertion. Even if we are merging left patch
+            // to right and left has one element, then left is guranteed
+            // to be in row order to top, since they will be different.
+            if pts.len() > 1 {
+                self.pxs.sort_unstable_by(|a, b| a.0.cmp(&b.0) );
+            }
+
             //println!("")
         }
     }
@@ -132,24 +169,25 @@ impl Patch {
         // Points with "top" part of the patch
         let fst_row = sorted_keys[0];
         for col in row_pxs[fst_row].iter() {
-            pts.push((*fst_row, *col));
+            pts.push((*fst_row * self.scale, *col * self.scale));
         }
 
         // Points with "right" part of the patch
         for row in sorted_keys[1..n-1].iter() {
-            pts.push((**row, *row_pxs[row].last().unwrap()));
+            pts.push((**row * self.scale, *row_pxs[row].last().unwrap() * self.scale));
         }
 
         // Points with "bottom" part of the patch
         let last_row = sorted_keys.last().unwrap();
         for col in row_pxs[last_row].iter().rev() {
-            pts.push((**last_row, *col));
+            pts.push((**last_row * self.scale, *col * self.scale));
         }
 
         // Points with "left" part of the patch
         for row in sorted_keys[1..n-1].iter().rev() {
-            pts.push((**row, *row_pxs[row].first().unwrap()));
+            pts.push((**row * self.scale, *row_pxs[row].first().unwrap() * self.scale));
         }
+
         Some(Polygon::from(pts))
     }
 
@@ -342,16 +380,55 @@ impl Neighborhood {
 
 }
 
-pub fn color_patches(win : &Window<'_, u8>, px_spacing : usize) -> Vec<Patch> {
-    let mut patches : Vec<Patch> = Vec::new();
+pub struct PatchSegmentation {
+    px_spacing : usize,
+    patches : Vec<Patch>
+}
+
+impl PatchSegmentation {
+
+    pub fn new(px_spacing : usize) -> Self {
+        Self { patches : Vec::new(), px_spacing }
+    }
+
+    pub fn segment<'a>(&'a mut self, win : &WindowMut<'_, u8>) -> &'a [Patch] {
+        /*let src_win = unsafe {
+            Window {
+                offset : win.offset(),
+                orig_sz : win.orig_sz(),
+                win_sz : win.shape(),
+                win : std::slice::from_raw_parts(win.full_slice().as_ptr(), win.full_slice().len()),
+            }
+        };*/
+        let src_win = unsafe { crate::image::create_immutable(&win) };
+        color_patches(&mut self.patches, &src_win, self.px_spacing);
+        &self.patches[..]
+    }
+
+}
+
+/// During pixel insertion in a patch, row raster order is preserved, but column raster order is not.
+pub fn color_patches(patches : &mut Vec<Patch>, win : &Window<'_, u8>, px_spacing : usize) {
+
+    // Recycle previous pixel vectors to avoid reallocations
+    let mut prev_pxs : Vec<Vec<(usize, usize)>> = patches
+        .iter_mut()
+        .map(|mut patch| mem::take(&mut patch.pxs ) )
+        .collect();
+    patches.clear();
+
     let (ncol, nrow) = (win.width() / px_spacing, win.height() / px_spacing);
+
     for (ix, px) in win.pixels(px_spacing).enumerate() {
         let (r, c) = (ix / ncol, ix % ncol);
         let color = win[(r*px_spacing, c*px_spacing)];
 
         // Get patch that contains the pixel above the current pixel
         // let top_patch_ix = patches.iter().position(|patch| patch.pxs.iter().any(|px| r >= 1 && px.0 == r-1 && px.1 == c ) );
-        let top_patch_ix = patches.iter().position(|patch| patch.pixel_is_below((r, c)) );
+        let top_patch_ix = patches.iter().rev()
+            .position(|patch| patch.pixel_is_below((r, c)) )
+            .map(|inv_pos| patches.len() - 1 - inv_pos);
+
         /*if let Some(top) = top_patch_ix {
             let top_patch = &patches[top];
             println!("patch row={}; patch dim = {}; r = {}", top_patch.outer_rect.0, top_patch.outer_rect.2, r);
@@ -359,15 +436,17 @@ pub fn color_patches(win : &Window<'_, u8>, px_spacing : usize) -> Vec<Patch> {
 
         // Get patch that contains the pixel to the left of current pixel
         // let left_patch_ix = patches.iter().position(|patch| patch.pxs.iter().any(|px| c >= 1 && px.0 == r && px.1 == c-1 ) );
-        let left_patch_ix = patches.iter().position(|patch| patch.pixel_is_right((r, c)) );
+        let left_patch_ix = patches.iter().rev()
+            .position(|patch| patch.pixel_is_right((r, c)) )
+            .map(|inv_pos| patches.len() - 1 - inv_pos);
 
         // Verifies if patches have the same color
-        let merges_top = if let Some(top) = top_patch_ix.and_then(|ix| patches.get(ix)) {
+        let merges_top = if let Some(top) = top_patch_ix.and_then(|ix| patches.get(ix) ) {
             top.color == color
         } else {
             false
         };
-        let merges_left = if let Some(left) = left_patch_ix.and_then(|ix| patches.get(ix)) {
+        let merges_left = if let Some(left) = left_patch_ix.and_then(|ix| patches.get(ix) ) {
             left.color == color
         } else {
             false
@@ -379,8 +458,9 @@ pub fn color_patches(win : &Window<'_, u8>, px_spacing : usize) -> Vec<Patch> {
                 let top_differs_left = top_patch_ix != left_patch_ix;
                 if top_differs_left {
                     // Merge two patches
-                    let left_pxs = patches[left_patch_ix.unwrap()].pxs.iter().cloned().collect::<Vec<_>>();
-                    patches[top_patch_ix.unwrap()].expand(&left_pxs[..]);
+                    let left_patch = mem::take(&mut patches[left_patch_ix.unwrap()]);
+                    // let left_pxs = .pxs.iter().cloned().collect::<Vec<_>>();
+                    patches[top_patch_ix.unwrap()].expand(&left_patch.pxs);
                 }
 
                 // Push new pixel
@@ -388,7 +468,7 @@ pub fn color_patches(win : &Window<'_, u8>, px_spacing : usize) -> Vec<Patch> {
 
                 if top_differs_left {
                     // Remove old left patch (now merged with top).
-                    patches.remove(left_patch_ix.unwrap());
+                    patches.swap_remove(left_patch_ix.unwrap());
                 }
             },
             (true, false) => {
@@ -398,14 +478,18 @@ pub fn color_patches(win : &Window<'_, u8>, px_spacing : usize) -> Vec<Patch> {
                 patches[top_patch_ix.unwrap()].expand(&[(r, c)]);
             },
             (false, false) => {
-                patches.push(Patch::new((r, c), color, px_spacing));
+                let opt_pxs = match prev_pxs.len() {
+                    0 => None,
+                    1 => Some(prev_pxs.remove(0)),
+                    _ => Some(prev_pxs.swap_remove(0))
+                };
+                patches.push(Patch::new((r, c), color, px_spacing, opt_pxs));
             }
         }
 
         // println!("{:?}", patches.last().unwrap());
-
     }
-    patches
+
 }
 
 #[test]
