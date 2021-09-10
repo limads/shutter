@@ -419,43 +419,70 @@ pub fn color_patches(patches : &mut Vec<Patch>, win : &Window<'_, u8>, px_spacin
 
     let (ncol, nrow) = (win.width() / px_spacing, win.height() / px_spacing);
 
+    // Maps each column to a patch index
+    // let mut prev_row_patch_ixs : HashMap<usize, usize> = HashMap::with_capacity(ncol);
+    let mut prev_row_patch_ixs : Vec<usize> = Vec::with_capacity(ncol);
+    let mut left_patch_ix : Option<usize> = None;
+
+    for c in (0..ncol) {
+        //prev_row_patch_ixs.insert(c, 0);
+        prev_row_patch_ixs.push(0);
+    }
+
     for (ix, px) in win.pixels(px_spacing).enumerate() {
         let (r, c) = (ix / ncol, ix % ncol);
         let color = win[(r*px_spacing, c*px_spacing)];
 
-        // Get patch that contains the pixel above the current pixel
+        let might_merge_top = if r >= 1 {
+            color == win[((r-1)*px_spacing, c*px_spacing)]
+        } else {
+            false
+        };
+        let might_merge_left = if c >= 1 {
+            color == win[(r*px_spacing, (c-1)*px_spacing)]
+        } else {
+            false
+        };
+
+        if c == 0 {
+            left_patch_ix = None;
+        }
+
+        // println!("{},{}", r, c);
+        // println!("{:?}", patches);
+
+        /*// Get patch that contains the pixel above the current pixel
         // let top_patch_ix = patches.iter().position(|patch| patch.pxs.iter().any(|px| r >= 1 && px.0 == r-1 && px.1 == c ) );
         let top_patch_ix = patches.iter().rev()
             .position(|patch| patch.pixel_is_below((r, c)) )
-            .map(|inv_pos| patches.len() - 1 - inv_pos);
-
-        /*if let Some(top) = top_patch_ix {
-            let top_patch = &patches[top];
-            println!("patch row={}; patch dim = {}; r = {}", top_patch.outer_rect.0, top_patch.outer_rect.2, r);
-        }*/
-
+            .map(|inv_pos| patches.len() - 1 - inv_pos);*/
+        let top_patch_ix = if r >= 1 { Some(prev_row_patch_ixs[c]) } else { None };
+        println!("{},{}", r, c);
         // Get patch that contains the pixel to the left of current pixel
         // let left_patch_ix = patches.iter().position(|patch| patch.pxs.iter().any(|px| c >= 1 && px.0 == r && px.1 == c-1 ) );
-        let left_patch_ix = patches.iter().rev()
+        /*let left_patch_ix = patches.iter().rev()
             .position(|patch| patch.pixel_is_right((r, c)) )
-            .map(|inv_pos| patches.len() - 1 - inv_pos);
+            .map(|inv_pos| patches.len() - 1 - inv_pos);*/
+        // let left_patch_ix =
 
         // Verifies if patches have the same color
-        let merges_top = if let Some(top) = top_patch_ix.and_then(|ix| patches.get(ix) ) {
+        /*let merges_top = might_merge_top && if let Some(top) = top_patch_ix.and_then(|ix| patches.get(ix) ) {
             top.color == color
         } else {
             false
         };
-        let merges_left = if let Some(left) = left_patch_ix.and_then(|ix| patches.get(ix) ) {
+        let merges_left = might_merge_left && if let Some(left) = left_patch_ix.and_then(|ix| patches.get(ix) ) {
             left.color == color
         } else {
             false
-        };
+        };*/
+        let merges_top = might_merge_top && top_patch_ix.is_some();
+        let merges_left = might_merge_left && left_patch_ix.is_some();
 
         match (merges_left, merges_top) {
             (true, true) => {
 
-                let top_differs_left = top_patch_ix != left_patch_ix;
+                let top_differs_left = top_patch_ix.unwrap() != left_patch_ix.unwrap();
                 if top_differs_left {
                     // Merge two patches
                     let left_patch = mem::take(&mut patches[left_patch_ix.unwrap()]);
@@ -465,17 +492,33 @@ pub fn color_patches(patches : &mut Vec<Patch>, win : &Window<'_, u8>, px_spacin
 
                 // Push new pixel
                 patches[top_patch_ix.unwrap()].expand(&[(r, c)]);
+                //*(prev_row_patch_ixs.get_mut(&c).unwrap()) = top_patch_ix.unwrap();
+                prev_row_patch_ixs[c] = top_patch_ix.unwrap();
+                left_patch_ix = Some(top_patch_ix.unwrap());
 
                 if top_differs_left {
                     // Remove old left patch (now merged with top).
                     patches.swap_remove(left_patch_ix.unwrap());
+                    for mut ix in prev_row_patch_ixs.iter_mut() {
+                        if *ix == left_patch_ix.unwrap() {
+                            *ix = top_patch_ix.unwrap();
+                        }
+                    }
                 }
             },
             (true, false) => {
                 patches[left_patch_ix.unwrap()].expand(&[(r, c)]);
+                //*(prev_row_patch_ixs.get_mut(&c).unwrap()) = left_patch_ix.unwrap();
+                prev_row_patch_ixs[c] = left_patch_ix.unwrap();
+                // Left patch is left unchanged
             }
             (false, true) => {
+            
+                // TODO panicking here
                 patches[top_patch_ix.unwrap()].expand(&[(r, c)]);
+                //*(prev_row_patch_ixs.get_mut(&c).unwrap()) = top_patch_ix.unwrap();
+                prev_row_patch_ixs[c] = top_patch_ix.unwrap();
+                left_patch_ix = Some(top_patch_ix.unwrap());
             },
             (false, false) => {
                 let opt_pxs = match prev_pxs.len() {
@@ -483,7 +526,11 @@ pub fn color_patches(patches : &mut Vec<Patch>, win : &Window<'_, u8>, px_spacin
                     1 => Some(prev_pxs.remove(0)),
                     _ => Some(prev_pxs.swap_remove(0))
                 };
+                // println!("Inserted new patch starting from {},{}", r, c);
                 patches.push(Patch::new((r, c), color, px_spacing, opt_pxs));
+                //*(prev_row_patch_ixs.get_mut(&c).unwrap()) = patches.len() - 1;
+                prev_row_patch_ixs[c] = patches.len() - 1;
+                left_patch_ix = Some(patches.len() - 1);
             }
         }
 
