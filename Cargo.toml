@@ -31,6 +31,7 @@ ripple = { path = "../ripple" }
 away = { path = "../away" }
 bayes = { path = "../bayes" }
 itertools = "0.10.1"
+parry2d="0.7.1"
 
 [features]
 mkl=[]

@@ -8,6 +8,9 @@ use std::fmt;
 use std::collections::HashMap;
 use std::mem;
 use std::default::Default;
+use parry2d::shape::ConvexPolygon;
+use nalgebra::geometry::Point2;
+use std::cmp::Ordering;
 
 // #[cfg(feature="opencvlib")]
 // pub mod fgmm;
@@ -17,7 +20,7 @@ use std::default::Default;
 
 /// The most general patch is a set of pixel positions with a homogeneous color
 /// and a scale that was used for extraction. The patch is assumed to be
-/// homonegeous within a pixel spacing given by the scale field.
+/// homonegeneous within a pixel spacing given by the scale field.
 #[derive(Clone, Debug, Default)]
 pub struct Patch {
     // Instead of storing all pixels, we can store a rect and only
@@ -30,27 +33,82 @@ pub struct Patch {
     // Outer rect, at patch scale
     pub outer_rect : (usize, usize, usize, usize),
     pub color : u8,
-    pub scale : usize
+    pub scale : usize,
+    pub img_height : usize
+}
+
+fn patch_from_grouped_rows(
+    sorted_rows : &[usize],
+    gr : HashMap<usize, Vec<usize>>,
+    color : u8,
+    scale : usize,
+    img_height : usize
+) -> Patch {
+    let mut pxs = Vec::new();
+    for r in sorted_rows.iter() {
+        for c in gr[&r].iter() {
+            pxs.push((*r, *c));
+        }
+    }
+    let mut patch = Patch::new(pxs[0], color, scale, img_height);
+    for px in pxs.iter().skip(1) {
+        patch.expand(&[*px]);
+    }
+    patch
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Split {
+    split_pos : usize,
+    split_len : usize,
+    fst_blob_width : usize,
+    snd_blob_width : usize,
+    fst_blob_height : usize,
+    snd_blob_height : usize
+}
+
+// TODO take a took at spade=1.8.2 or acacia for RTrees.
+
+#[test]
+fn split_vertically() {
+    let mut patch = Patch::new((0, 0), 255, 1, 16);
+
+    for r in (0..8) {
+        for c in (0..16) {
+            if (r, c) != (0, 0) {
+                patch.expand(&[(r, c)]);
+            }
+        }
+    }
+
+    for r in (8..16) {
+        for c in (4..8) {
+            patch.expand(&[(r, c)]);
+        }
+    }
+
+    println!("{:?}", patch.try_split_vertically(4, (4, 4)));
 }
 
 impl Patch {
 
     /// Starts a new patch, optionally with a pixel buffer to be recycled.
-    pub fn new(pt : (usize, usize), color : u8, scale : usize, pxs : Option<Vec<(usize, usize)>>) -> Self {
-        let pxs = if let Some(mut pxs) = pxs {
+    pub fn new(pt : (usize, usize), color : u8, scale : usize, img_height : usize ) -> Self {
+        /*let pxs = if let Some(mut pxs) = pxs {
             pxs.clear();
             pxs.push(pt);
             pxs
-        } else {
-            let mut pxs = Vec::with_capacity(16);
-            pxs.push(pt);
-            pxs
-        };
+        } else {*/
+        let mut pxs = Vec::with_capacity(16);
+        pxs.push(pt);
+        // pxs
+        // };
         Self {
             pxs,
             outer_rect : (pt.0, pt.1, 1, 1),
             color,
-            scale
+            scale,
+            img_height
         }
     }
 
@@ -62,6 +120,149 @@ impl Patch {
             self.outer_rect.2 * self.scale,
             self.outer_rect.3 * self.scale
         )
+    }
+
+    /// Take the row with smallest width (within the set of rows of length smaller than split_max_width)
+    /// and returns the patches above and below this row (excluding the row) as long as the
+    /// resulting patches have width and height of at least output_min_rect.
+    pub fn try_split_vertically(
+        &self,
+        split_max_width : usize,
+        output_min_rect : (usize, usize)
+    ) -> Option<(Patch, Patch)> {
+
+        // Assume rows are ordered
+        let mut gr = self.group_rows();
+        let mut gc = self.group_cols();
+
+        let mut best_split_row : Option<Split> = None;
+
+        let mut sorted_rows : Vec<_> = gr.iter().map(|(k, _)| *k ).collect();
+        let mut sorted_cols : Vec<_> = gc.iter().map(|(k, _)| *k ).collect();
+        sorted_rows.sort();
+        sorted_cols.sort();
+
+        let indexed_row_iter = sorted_rows.iter()
+            .enumerate()
+            .skip(output_min_rect.0.saturating_sub(1))
+            .take_while(|(ix, r)| sorted_rows.len() - ix >= output_min_rect.0 );
+
+        for (split_row_ix, split_row) in indexed_row_iter {
+
+            // It this row is sufficiently narrow, consider it for a split.
+            if gr[split_row].len() <= split_max_width {
+
+                // println!("Can split at {} with {} columns", split_row, gr[split_row].len());
+
+                let prev_rows = &sorted_rows[0..split_row_ix];
+                let post_rows = &sorted_rows[split_row_ix+1..];
+
+                let largest_prev_row = prev_rows.iter()
+                    .max_by(|row1, row2| gr[row1].len().cmp(&gr[row2].len()) )
+                    .unwrap();
+                let largest_post_row = post_rows.iter()
+                    .max_by(|row1, row2| gr[row1].len().cmp(&gr[row2].len()) )
+                    .unwrap();
+                let prev_tall_enough = gr[&largest_prev_row].len() >= output_min_rect.0;
+                let post_tall_enough = gr[&largest_post_row].len() >= output_min_rect.0;
+
+                // This check is not strictly necessary because we already limit the indexed_row_iter
+                // iterator to heights greater than required by the user. But we leave it here to
+                // generalize the procedure to search by a column iterator later.
+
+                // println!("prev_tall_enough = {}; post_tall_enough = {}", prev_tall_enough, post_tall_enough);
+                if prev_tall_enough && post_tall_enough {
+
+                    // Take all columns that compose the largest row in the patch
+                    let min_prev_col_ix = sorted_cols.binary_search(gr[&largest_prev_row].first().unwrap()).unwrap();
+                    let max_prev_col_ix = sorted_cols.binary_search(gr[&largest_prev_row].last().unwrap()).unwrap();
+                    let min_post_col_ix = sorted_cols.binary_search(gr[&largest_post_row].first().unwrap()).unwrap();
+                    let max_post_col_ix = sorted_cols.binary_search(gr[&largest_post_row].last().unwrap()).unwrap();
+                    let prev_cols = &sorted_cols[min_prev_col_ix..max_prev_col_ix];
+                    let post_cols = &sorted_cols[min_post_col_ix..max_post_col_ix];
+                    // println!("prev cols = {:?}, post cols = {:?}", prev_cols, post_cols);
+
+                    let largest_prev_col = prev_cols.iter()
+                        .map(|col| (col, gc[col].iter().filter(|row| *row < split_row ).count()) )
+                        .max_by(|(_, nrows1), (_, nrows2)| nrows1.cmp(&nrows2) ).unwrap();
+                    let largest_post_col = post_cols.iter()
+                        .map(|col| (col, gc[col].iter().filter(|row| *row > split_row ).count()) )
+                        .max_by(|(_, nrows1), (_, nrows2)| nrows1.cmp(&nrows2) ).unwrap();
+                    let prev_large_enough = largest_prev_col.1 >= output_min_rect.1;
+                    let post_large_enough = largest_post_col.1 >= output_min_rect.1;
+
+                    // println!("largest_prev_col = {:?}, largest_post_col = {:?}, prev_large_enough = {}; post_large_enough = {}", largest_prev_col, largest_post_col, prev_large_enough, post_large_enough);
+
+                    if prev_large_enough && post_large_enough {
+
+                        if let Some(split) = best_split_row {
+
+                            // The shortness of the split row is an interesting criterion for hourglass-like blobs.
+                            let shorter_split = gr[split_row].len() < split.split_len;
+
+                            // For a vertical split, fst_blob_height + snd_blob_height = const. We leave it
+                            // here to generalize later.
+                            let taller_fst_blob = largest_prev_col.1 > split.fst_blob_height;
+                            let taller_snd_blob = largest_prev_col.1 > split.snd_blob_height;
+                            let larger_fst_blob = gr[&largest_prev_row].len() > split.fst_blob_width;
+                            let larger_snd_blob = gr[&largest_post_row].len() > split.snd_blob_width;
+                            let more_central = (largest_post_col.1 as i32 - largest_post_col.1 as i32).abs() <
+                                (split.fst_blob_height as i32 - split.snd_blob_height as i32).abs();
+
+                            // This split favors asymetry at width dimension. Other conditions are possible.
+                            // In case of a tie regarding blob width, take the most central one.
+                            let width_cmp = (gr[&largest_post_row].len() as i32 - gr[&largest_prev_row].len() as i32).abs().cmp(
+                                &(split.snd_blob_width as i32 - split.fst_blob_width as i32).abs()
+                            );
+                            let req_update = match width_cmp {
+                                Ordering::Less => false,
+                                Ordering::Equal => more_central,
+                                Ordering::Greater => true
+                            };
+                            if req_update {
+                                best_split_row = Some(Split {
+                                    split_pos : split_row_ix,
+                                    split_len : gr[split_row].len(),
+                                    fst_blob_height : largest_prev_col.1,
+                                    snd_blob_height : largest_post_col.1,
+                                    fst_blob_width : gr[&largest_prev_row].len(),
+                                    snd_blob_width : gr[&largest_post_row].len()
+                                });
+                            }
+                        } else {
+                            best_split_row = Some(Split {
+                                split_pos : split_row_ix,
+                                split_len : gr[split_row].len(),
+                                fst_blob_height : largest_prev_col.1,
+                                snd_blob_height : largest_post_col.1,
+                                fst_blob_width : gr[&largest_prev_row].len(),
+                                snd_blob_width : gr[&largest_post_row].len()
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(Split { split_pos, .. }) = best_split_row {
+            let prev_patch = patch_from_grouped_rows(
+                &sorted_rows[0..split_pos],
+                gr.clone(),
+                self.color,
+                self.scale,
+                self.img_height
+            );
+            let post_patch = patch_from_grouped_rows(
+                &sorted_rows[split_pos+1..],
+                gr,
+                self.color,
+                self.scale,
+                self.img_height
+            );
+            Some((prev_patch, post_patch))
+        } else {
+            None
+        }
     }
 
     // Use short-circuit to only iterate over pixels for verification when absolutely required.
@@ -134,13 +335,28 @@ impl Patch {
         self.color == other.color
     }
 
-    /// Maps rows to a set of columns
+    /// Maps rows to a (sorted) set of columns
     pub fn group_rows(&self) -> HashMap<usize, Vec<usize>> {
         let mut row_pxs = HashMap::new();
-        for (row, pxs) in self.pxs.iter().group_by(|px| px.0 ).into_iter() {
-            row_pxs.insert(row, pxs.map(|px| px.1 ).collect::<Vec<_>>());
+        for (row, g_pxs) in self.pxs.iter().group_by(|px| px.0 ).into_iter() {
+            let mut pxs_vec = g_pxs.map(|px| px.1 ).collect::<Vec<_>>();
+            pxs_vec.sort_unstable();
+            row_pxs.insert(row, pxs_vec);
         }
         row_pxs
+    }
+
+    /// Maps columns to a (sorted) set of rows
+    pub fn group_cols(&self) -> HashMap<usize, Vec<usize>> {
+        let mut col_sorted_pxs = self.pxs.clone();
+        col_sorted_pxs.sort_unstable_by(|px_a, px_b| px_a.1.cmp(&px_b.1) );
+        let mut col_pxs = HashMap::new();
+        for (col, g_pxs) in col_sorted_pxs.iter().group_by(|px| px.1 ).into_iter() {
+            let mut pxs_vec = g_pxs.map(|px| px.0 ).collect::<Vec<_>>();
+            pxs_vec.sort_unstable();
+            col_pxs.insert(col, pxs_vec);
+        }
+        col_pxs
     }
 
     pub fn num_regions(&self) -> usize {
@@ -156,7 +372,7 @@ impl Patch {
     //    self.num_regions() * self.scale.pow(2)
     // }
 
-    pub fn polygon(&self) -> Option<Polygon> {
+    pub fn polygon(&self) -> Option<ConvexPolygon> {
         let mut row_pxs = self.group_rows();
         let mut sorted_keys = row_pxs.iter().map(|(k, _)| k ).collect::<Vec<_>>();
         if sorted_keys.len() < 3 {
@@ -188,7 +404,26 @@ impl Patch {
             pts.push((**row * self.scale, *row_pxs[row].first().unwrap() * self.scale));
         }
 
-        Some(Polygon::from(pts))
+        // Some(Polygon::from(pts))
+
+        let inv_pts : Vec<_> = pts.iter()
+            .map(|pt| Point2::new(pt.1 as f32, /*(self.img_height - pt.0)*/ pt.0 as f32 ) )
+            .collect();
+        ConvexPolygon::from_convex_hull(&inv_pts[..])
+    }
+
+    /// Order all pixels in this patch, first by row, then by column within rows.
+    pub fn sort_by_raster(&mut self) {
+        self.pxs.sort_unstable_by(|a, b| a.0.cmp(&b.0) );
+        let min_row = self.pxs[0].0;
+        let max_row = self.pxs[self.pxs.len()-1].0;
+        let mut first_ix = 0;
+        let mut last_ix = 0;
+        for r in (min_row..max_row+1) {
+            let last_ix = self.pxs[first_ix..].iter().position(|px| px.0 != r ).unwrap_or(self.pxs.len());
+            self.pxs[first_ix..last_ix].sort_unstable_by(|a, b| a.1.cmp(&b.1) );
+            first_ix = last_ix;
+        }
     }
 
 }
@@ -382,13 +617,14 @@ impl Neighborhood {
 
 pub struct PatchSegmentation {
     px_spacing : usize,
-    patches : Vec<Patch>
+    patches : Vec<Patch>,
+    n_patches : usize
 }
 
 impl PatchSegmentation {
 
     pub fn new(px_spacing : usize) -> Self {
-        Self { patches : Vec::new(), px_spacing }
+        Self { patches : Vec::with_capacity(16), px_spacing, n_patches : 0 }
     }
 
     pub fn segment<'a>(&'a mut self, win : &WindowMut<'_, u8>) -> &'a [Patch] {
@@ -401,26 +637,33 @@ impl PatchSegmentation {
             }
         };*/
         let src_win = unsafe { crate::image::create_immutable(&win) };
-        color_patches(&mut self.patches, &src_win, self.px_spacing);
-        &self.patches[..]
+        let n_patches = color_patches(&mut self.patches, &src_win, self.px_spacing);
+        self.n_patches = n_patches;
+        &self.patches[0..self.n_patches]
     }
 
 }
 
 /// During pixel insertion in a patch, row raster order is preserved, but column raster order is not.
-pub fn color_patches(patches : &mut Vec<Patch>, win : &Window<'_, u8>, px_spacing : usize) {
+/// Returns up to which index of patches the new data is valid. We keep patches of a previous iteration
+/// so the pixel vectors within patches do not get reallocated. In the public API, we use this quantity
+/// to limit the index of the patch slice only to the points generated by the current iteration.
+pub fn color_patches(patches : &mut Vec<Patch>, win : &Window<'_, u8>, px_spacing : usize) -> usize {
 
-    // Recycle previous pixel vectors to avoid reallocations
+    /*// Recycle previous pixel vectors to avoid reallocations
     let mut prev_pxs : Vec<Vec<(usize, usize)>> = patches
         .iter_mut()
         .map(|mut patch| mem::take(&mut patch.pxs ) )
         .collect();
-    patches.clear();
+    patches.clear();*/
+    let mut n_patches = 0;
 
     let (ncol, nrow) = (win.width() / px_spacing, win.height() / px_spacing);
 
     // Maps each column to a patch index
     // let mut prev_row_patch_ixs : HashMap<usize, usize> = HashMap::with_capacity(ncol);
+
+    // TODO also take this by &mut
     let mut prev_row_patch_ixs : Vec<usize> = Vec::with_capacity(ncol);
     let mut left_patch_ix : Option<usize> = None;
 
@@ -456,7 +699,7 @@ pub fn color_patches(patches : &mut Vec<Patch>, win : &Window<'_, u8>, px_spacin
         let top_patch_ix = patches.iter().rev()
             .position(|patch| patch.pixel_is_below((r, c)) )
             .map(|inv_pos| patches.len() - 1 - inv_pos);*/
-        let top_patch_ix = if r >= 1 { Some(prev_row_patch_ixs[c]) } else { None };
+        let mut top_patch_ix = if r >= 1 { Some(prev_row_patch_ixs[c]) } else { None };
         println!("{},{}", r, c);
         // Get patch that contains the pixel to the left of current pixel
         // let left_patch_ix = patches.iter().position(|patch| patch.pxs.iter().any(|px| c >= 1 && px.0 == r && px.1 == c-1 ) );
@@ -488,23 +731,47 @@ pub fn color_patches(patches : &mut Vec<Patch>, win : &Window<'_, u8>, px_spacin
                     let left_patch = mem::take(&mut patches[left_patch_ix.unwrap()]);
                     // let left_pxs = .pxs.iter().cloned().collect::<Vec<_>>();
                     patches[top_patch_ix.unwrap()].expand(&left_patch.pxs);
-                }
 
-                // Push new pixel
-                patches[top_patch_ix.unwrap()].expand(&[(r, c)]);
-                //*(prev_row_patch_ixs.get_mut(&c).unwrap()) = top_patch_ix.unwrap();
-                prev_row_patch_ixs[c] = top_patch_ix.unwrap();
-                left_patch_ix = Some(top_patch_ix.unwrap());
-
-                if top_differs_left {
                     // Remove old left patch (now merged with top).
                     patches.swap_remove(left_patch_ix.unwrap());
+                    // patches.remove(left_patch_ix.unwrap());
+                    
+                    //if top_patch_ix.unwrap() > left_patch_ix.unwrap() {
+                    //    top_patch_ix = Some(top_patch_ix.unwrap() - 1);
+                    //}
+
                     for mut ix in prev_row_patch_ixs.iter_mut() {
+
+                        // Assign, within the previous rows patches, to the top patch everything
+                        // pointing to the new old left patch
                         if *ix == left_patch_ix.unwrap() {
                             *ix = top_patch_ix.unwrap();
                         }
+
+                        // Everything pointing to last patch index now points to
+                        // the old left patch, since we did a swap remove.
+                        // n_patches here still refer to the previous iteration
+                        if *ix == (n_patches - 1) {
+                            *ix = left_patch_ix.unwrap();
+                        }
+
+                        // Use this for a remove instead of swap remove
+                        //if *ix > left_patch_ix.unwrap() {
+                        //    *ix -= 1;
+                        //}
                     }
+                    if top_patch_ix.unwrap() == (n_patches - 1) {
+                        top_patch_ix = Some(left_patch_ix.unwrap());
+                    }
+                    n_patches -= 1
                 }
+
+                // Push new pixel to top patch
+                patches[top_patch_ix.unwrap()].expand(&[(r, c)]);
+
+                //*(prev_row_patch_ixs.get_mut(&c).unwrap()) = top_patch_ix.unwrap();
+                prev_row_patch_ixs[c] = top_patch_ix.unwrap();
+                left_patch_ix = Some(top_patch_ix.unwrap());
             },
             (true, false) => {
                 patches[left_patch_ix.unwrap()].expand(&[(r, c)]);
@@ -516,27 +783,42 @@ pub fn color_patches(patches : &mut Vec<Patch>, win : &Window<'_, u8>, px_spacin
             
                 // TODO panicking here
                 patches[top_patch_ix.unwrap()].expand(&[(r, c)]);
-                //*(prev_row_patch_ixs.get_mut(&c).unwrap()) = top_patch_ix.unwrap();
+                // *(prev_row_patch_ixs.get_mut(&c).unwrap()) = top_patch_ix.unwrap();
                 prev_row_patch_ixs[c] = top_patch_ix.unwrap();
                 left_patch_ix = Some(top_patch_ix.unwrap());
             },
             (false, false) => {
-                let opt_pxs = match prev_pxs.len() {
+                /*let opt_pxs = match prev_pxs.len() {
                     0 => None,
                     1 => Some(prev_pxs.remove(0)),
                     _ => Some(prev_pxs.swap_remove(0))
-                };
+                };*/
                 // println!("Inserted new patch starting from {},{}", r, c);
-                patches.push(Patch::new((r, c), color, px_spacing, opt_pxs));
+                //
+
+                // n_patches here still refer to the previous iteration, which is why we
+                // index with n_patches instead of n_patches-1
+                if n_patches < patches.len() {
+                    patches[n_patches].pxs.clear();
+                    patches[n_patches].pxs.push((r, c));
+                    patches[n_patches].outer_rect = (r, c, 1, 1);
+                    patches[n_patches].color = color;
+                    patches[n_patches].scale = px_spacing;
+                } else {
+                    patches.push(Patch::new((r, c), color, px_spacing, win.height()));
+                }
+                n_patches += 1;
+
                 //*(prev_row_patch_ixs.get_mut(&c).unwrap()) = patches.len() - 1;
-                prev_row_patch_ixs[c] = patches.len() - 1;
-                left_patch_ix = Some(patches.len() - 1);
+                prev_row_patch_ixs[c] = n_patches - 1;
+                left_patch_ix = Some(n_patches - 1);
             }
         }
 
+        // patches.trim(n_patches);
         // println!("{:?}", patches.last().unwrap());
     }
-
+    n_patches
 }
 
 #[test]
