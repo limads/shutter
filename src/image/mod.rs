@@ -522,7 +522,7 @@ where
     }
     
     pub fn row(&self, ix : usize) -> Option<&[N]> {
-        if ix > self.win_sz.0 {
+        if ix >= self.win_sz.0 {
             return None;
         }
         let stride = self.orig_sz.1;
@@ -537,6 +537,9 @@ where
     }
 
     pub fn vertical_pixel_pairs(&'a self, col : usize, comp_dist : usize) -> Option<impl Iterator<Item=(usize, (&'a N, &'a N))>> {
+        if col >= self.win_sz.1 {
+            return None;
+        }
         Some(iter::vertical_col_iterator(self.rows(), comp_dist, col))
     }
 
