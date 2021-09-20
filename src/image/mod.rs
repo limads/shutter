@@ -7,7 +7,6 @@ use std::fmt::Debug;
 use simba::simd::{AutoSimd};
 use std::convert::TryFrom;
 use crate::segmentation::{self, Patch, BinaryPatch, Neighborhood};
-// use either::Either;
 use itertools::Itertools;
 
 #[cfg(feature="opencvlib")]
@@ -433,7 +432,7 @@ where
                 win_sz : dims
             })
         } else {
-            println!("Requested offset : {:?}; Requested dims : {:?}; Original image size : {:?}", offset, dims, self.orig_sz);
+            // println!("Requested offset : {:?}; Requested dims : {:?}; Original image size : {:?}", offset, dims, self.orig_sz);
             None
         }
     }

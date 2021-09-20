@@ -627,21 +627,80 @@ impl PatchSegmentation {
         Self { patches : Vec::with_capacity(16), px_spacing, n_patches : 0 }
     }
 
-    pub fn segment<'a>(&'a mut self, win : &WindowMut<'_, u8>) -> &'a [Patch] {
-        /*let src_win = unsafe {
-            Window {
-                offset : win.offset(),
-                orig_sz : win.orig_sz(),
-                win_sz : win.shape(),
-                win : std::slice::from_raw_parts(win.full_slice().as_ptr(), win.full_slice().len()),
-            }
-        };*/
+    pub fn segment_all<'a>(&'a mut self, win : &WindowMut<'_, u8>) -> &'a [Patch] {
         let src_win = unsafe { crate::image::create_immutable(&win) };
         let n_patches = color_patches(&mut self.patches, &src_win, self.px_spacing);
         self.n_patches = n_patches;
         &self.patches[0..self.n_patches]
     }
 
+    /// Returns only segments matching the given color.
+    pub fn segment_color<'a>(&'a mut self, win : &WindowMut<'_, u8>, color : u8) -> &'a [Patch] {
+        let src_win = unsafe { crate::image::create_immutable(&win) };
+        let n_patches = single_color_patches(&mut self.patches, &src_win, self.px_spacing, color);
+        self.n_patches = n_patches;
+        &self.patches[0..self.n_patches]
+    }
+
+}
+
+/// Keeps state of a patch search
+struct PatchSearch {
+    prev_row_patch_ixs : Vec<usize>,
+    left_patch_ix : Option<usize>,
+    top_patch_ix : Option<usize>,
+    nrow : usize,
+    ncol : usize
+}
+
+impl PatchSearch {
+
+    fn new(win : &Window<'_, u8>, px_spacing : usize) -> Self {
+        let (ncol, nrow) = (win.width() / px_spacing, win.height() / px_spacing);
+        let mut prev_row_patch_ixs : Vec<usize> = Vec::with_capacity(ncol);
+        for c in (0..ncol) {
+            prev_row_patch_ixs.push(0);
+        }
+        let (left_patch_ix, top_patch_ix) : (Option<usize>, Option<usize>) = (None, None);
+        Self { prev_row_patch_ixs, left_patch_ix, top_patch_ix, nrow, ncol }
+    }
+}
+
+/// Search the image for disjoint color patches of a single user-specified color
+pub fn single_color_patches(
+    patches : &mut Vec<Patch>,
+    win : &Window<'_, u8>,
+    px_spacing : usize,
+    color : u8
+) -> usize {
+    let mut n_patches = 0;
+    let mut search = PatchSearch::new(win, px_spacing);
+    let mut prev_row_mask : Vec<bool> = Vec::with_capacity(search.ncol);
+    for c in (0..search.ncol) {
+        prev_row_mask.push(false);
+    }
+    for (ix, px) in win.pixels(px_spacing).enumerate() {
+        let (r, c) = (ix / search.ncol, ix % search.ncol);
+        let px_color = win[(r*px_spacing, c*px_spacing)];
+        search.top_patch_ix = if r >= 1 && prev_row_mask[c] {
+            Some(search.prev_row_patch_ixs[c])
+        } else {
+            None
+        };
+        if c == 0 {
+            search.left_patch_ix = None;
+        }
+        let merges_left = search.left_patch_ix.is_some();
+        let merges_top = prev_row_mask[c];
+        if px_color == color {
+            append_or_update_patch(patches, &mut search, &mut n_patches, win, merges_left, merges_top, r, c, color, px_spacing);
+            prev_row_mask[c] = true;
+        } else {
+            prev_row_mask[c] = false;
+            search.left_patch_ix = None;
+        }
+    }
+    n_patches
 }
 
 /// During pixel insertion in a patch, row raster order is preserved, but column raster order is not.
@@ -658,22 +717,21 @@ pub fn color_patches(patches : &mut Vec<Patch>, win : &Window<'_, u8>, px_spacin
     patches.clear();*/
     let mut n_patches = 0;
 
-    let (ncol, nrow) = (win.width() / px_spacing, win.height() / px_spacing);
+    // let (ncol, nrow) = (win.width() / px_spacing, win.height() / px_spacing);
 
     // Maps each column to a patch index
     // let mut prev_row_patch_ixs : HashMap<usize, usize> = HashMap::with_capacity(ncol);
 
     // TODO also take this by &mut
-    let mut prev_row_patch_ixs : Vec<usize> = Vec::with_capacity(ncol);
-    let mut left_patch_ix : Option<usize> = None;
-
-    for c in (0..ncol) {
+    // let mut prev_row_patch_ixs : Vec<usize> = Vec::with_capacity(ncol);
+    // for c in (0..ncol) {
         //prev_row_patch_ixs.insert(c, 0);
-        prev_row_patch_ixs.push(0);
-    }
+    //    prev_row_patch_ixs.push(0);
+    // }
+    let mut search = PatchSearch::new(win, px_spacing);
 
     for (ix, px) in win.pixels(px_spacing).enumerate() {
-        let (r, c) = (ix / ncol, ix % ncol);
+        let (r, c) = (ix / search.ncol, ix % search.ncol);
         let color = win[(r*px_spacing, c*px_spacing)];
 
         let might_merge_top = if r >= 1 {
@@ -688,7 +746,7 @@ pub fn color_patches(patches : &mut Vec<Patch>, win : &Window<'_, u8>, px_spacin
         };
 
         if c == 0 {
-            left_patch_ix = None;
+            search.left_patch_ix = None;
         }
 
         // println!("{},{}", r, c);
@@ -699,8 +757,8 @@ pub fn color_patches(patches : &mut Vec<Patch>, win : &Window<'_, u8>, px_spacin
         let top_patch_ix = patches.iter().rev()
             .position(|patch| patch.pixel_is_below((r, c)) )
             .map(|inv_pos| patches.len() - 1 - inv_pos);*/
-        let mut top_patch_ix = if r >= 1 { Some(prev_row_patch_ixs[c]) } else { None };
-        println!("{},{}", r, c);
+        search.top_patch_ix = if r >= 1 { Some(search.prev_row_patch_ixs[c]) } else { None };
+        // println!("{},{}", r, c);
         // Get patch that contains the pixel to the left of current pixel
         // let left_patch_ix = patches.iter().position(|patch| patch.pxs.iter().any(|px| c >= 1 && px.0 == r && px.1 == c-1 ) );
         /*let left_patch_ix = patches.iter().rev()
@@ -719,106 +777,112 @@ pub fn color_patches(patches : &mut Vec<Patch>, win : &Window<'_, u8>, px_spacin
         } else {
             false
         };*/
-        let merges_top = might_merge_top && top_patch_ix.is_some();
-        let merges_left = might_merge_left && left_patch_ix.is_some();
-
-        match (merges_left, merges_top) {
-            (true, true) => {
-
-                let top_differs_left = top_patch_ix.unwrap() != left_patch_ix.unwrap();
-                if top_differs_left {
-                    // Merge two patches
-                    let left_patch = mem::take(&mut patches[left_patch_ix.unwrap()]);
-                    // let left_pxs = .pxs.iter().cloned().collect::<Vec<_>>();
-                    patches[top_patch_ix.unwrap()].expand(&left_patch.pxs);
-
-                    // Remove old left patch (now merged with top).
-                    patches.swap_remove(left_patch_ix.unwrap());
-                    // patches.remove(left_patch_ix.unwrap());
-                    
-                    //if top_patch_ix.unwrap() > left_patch_ix.unwrap() {
-                    //    top_patch_ix = Some(top_patch_ix.unwrap() - 1);
-                    //}
-
-                    for mut ix in prev_row_patch_ixs.iter_mut() {
-
-                        // Assign, within the previous rows patches, to the top patch everything
-                        // pointing to the new old left patch
-                        if *ix == left_patch_ix.unwrap() {
-                            *ix = top_patch_ix.unwrap();
-                        }
-
-                        // Everything pointing to last patch index now points to
-                        // the old left patch, since we did a swap remove.
-                        // n_patches here still refer to the previous iteration
-                        if *ix == (n_patches - 1) {
-                            *ix = left_patch_ix.unwrap();
-                        }
-
-                        // Use this for a remove instead of swap remove
-                        //if *ix > left_patch_ix.unwrap() {
-                        //    *ix -= 1;
-                        //}
-                    }
-                    if top_patch_ix.unwrap() == (n_patches - 1) {
-                        top_patch_ix = Some(left_patch_ix.unwrap());
-                    }
-                    n_patches -= 1
-                }
-
-                // Push new pixel to top patch
-                patches[top_patch_ix.unwrap()].expand(&[(r, c)]);
-
-                //*(prev_row_patch_ixs.get_mut(&c).unwrap()) = top_patch_ix.unwrap();
-                prev_row_patch_ixs[c] = top_patch_ix.unwrap();
-                left_patch_ix = Some(top_patch_ix.unwrap());
-            },
-            (true, false) => {
-                patches[left_patch_ix.unwrap()].expand(&[(r, c)]);
-                //*(prev_row_patch_ixs.get_mut(&c).unwrap()) = left_patch_ix.unwrap();
-                prev_row_patch_ixs[c] = left_patch_ix.unwrap();
-                // Left patch is left unchanged
-            }
-            (false, true) => {
-            
-                // TODO panicking here
-                patches[top_patch_ix.unwrap()].expand(&[(r, c)]);
-                // *(prev_row_patch_ixs.get_mut(&c).unwrap()) = top_patch_ix.unwrap();
-                prev_row_patch_ixs[c] = top_patch_ix.unwrap();
-                left_patch_ix = Some(top_patch_ix.unwrap());
-            },
-            (false, false) => {
-                /*let opt_pxs = match prev_pxs.len() {
-                    0 => None,
-                    1 => Some(prev_pxs.remove(0)),
-                    _ => Some(prev_pxs.swap_remove(0))
-                };*/
-                // println!("Inserted new patch starting from {},{}", r, c);
-                //
-
-                // n_patches here still refer to the previous iteration, which is why we
-                // index with n_patches instead of n_patches-1
-                if n_patches < patches.len() {
-                    patches[n_patches].pxs.clear();
-                    patches[n_patches].pxs.push((r, c));
-                    patches[n_patches].outer_rect = (r, c, 1, 1);
-                    patches[n_patches].color = color;
-                    patches[n_patches].scale = px_spacing;
-                } else {
-                    patches.push(Patch::new((r, c), color, px_spacing, win.height()));
-                }
-                n_patches += 1;
-
-                //*(prev_row_patch_ixs.get_mut(&c).unwrap()) = patches.len() - 1;
-                prev_row_patch_ixs[c] = n_patches - 1;
-                left_patch_ix = Some(n_patches - 1);
-            }
-        }
+        let merges_left = might_merge_left && search.left_patch_ix.is_some();
+        let merges_top = might_merge_top && search.top_patch_ix.is_some();
+        append_or_update_patch(patches, &mut search, &mut n_patches, win, merges_left, merges_top, r, c, color, px_spacing);
 
         // patches.trim(n_patches);
         // println!("{:?}", patches.last().unwrap());
     }
     n_patches
+}
+
+fn append_or_update_patch(
+    patches : &mut Vec<Patch>,
+    search : &mut PatchSearch,
+    n_patches : &mut usize,
+    win : &Window<'_, u8>,
+    merges_left : bool,
+    merges_top : bool,
+    r : usize,
+    c : usize,
+    color : u8,
+    px_spacing : usize
+) {
+    match (merges_left, merges_top) {
+        (true, true) => {
+
+            let top_differs_left = search.top_patch_ix.unwrap() != search.left_patch_ix.unwrap();
+            if top_differs_left {
+                merge_left_to_top_patch(patches, search, n_patches);
+            }
+
+            // Push new pixel to top patch
+            patches[search.top_patch_ix.unwrap()].expand(&[(r, c)]);
+
+            search.prev_row_patch_ixs[c] = search.top_patch_ix.unwrap();
+            search.left_patch_ix = Some(search.top_patch_ix.unwrap());
+        },
+        (true, false) => {
+            patches[search.left_patch_ix.unwrap()].expand(&[(r, c)]);
+            //*(prev_row_patch_ixs.get_mut(&c).unwrap()) = left_patch_ix.unwrap();
+            search.prev_row_patch_ixs[c] = search.left_patch_ix.unwrap();
+            // Left patch is left unchanged
+        }
+        (false, true) => {
+
+            // TODO panicking here
+            patches[search.top_patch_ix.unwrap()].expand(&[(r, c)]);
+            // *(prev_row_patch_ixs.get_mut(&c).unwrap()) = top_patch_ix.unwrap();
+            search.prev_row_patch_ixs[c] = search.top_patch_ix.unwrap();
+            search.left_patch_ix = Some(search.top_patch_ix.unwrap());
+        },
+        (false, false) => {
+            /*let opt_pxs = match prev_pxs.len() {
+                0 => None,
+                1 => Some(prev_pxs.remove(0)),
+                _ => Some(prev_pxs.swap_remove(0))
+            };*/
+            // println!("Inserted new patch starting from {},{}", r, c);
+            //
+
+            // n_patches here still refer to the previous iteration, which is why we
+            // index with n_patches instead of n_patches-1
+            if *n_patches < patches.len() {
+                patches[*n_patches].pxs.clear();
+                patches[*n_patches].pxs.push((r, c));
+                patches[*n_patches].outer_rect = (r, c, 1, 1);
+                patches[*n_patches].color = color;
+                patches[*n_patches].scale = px_spacing;
+            } else {
+                patches.push(Patch::new((r, c), color, px_spacing, win.height()));
+            }
+            *n_patches += 1;
+
+            //*(prev_row_patch_ixs.get_mut(&c).unwrap()) = patches.len() - 1;
+            search.prev_row_patch_ixs[c] = *n_patches - 1;
+            search.left_patch_ix = Some(*n_patches - 1);
+        }
+    }
+}
+
+fn merge_left_to_top_patch(patches : &mut Vec<Patch>, search : &mut PatchSearch, n_patches : &mut usize) {
+    let left_patch = mem::take(&mut patches[search.left_patch_ix.unwrap()]);
+    patches[search.top_patch_ix.unwrap()].expand(&left_patch.pxs);
+
+    // Remove old left patch (now merged with top).
+    patches.swap_remove(search.left_patch_ix.unwrap());
+
+    for mut ix in search.prev_row_patch_ixs.iter_mut() {
+
+        // Assign, within the previous rows patches, to the top patch everything
+        // pointing to the new old left patch
+        if *ix == search.left_patch_ix.unwrap() {
+            *ix = search.top_patch_ix.unwrap();
+        }
+
+        // Everything pointing to last patch index now points to
+        // the old left patch, since we did a swap remove.
+        // n_patches here still refer to the previous iteration
+        if *ix == (*n_patches - 1) {
+            *ix = search.left_patch_ix.unwrap();
+        }
+    }
+
+    if search.top_patch_ix.unwrap() == (*n_patches - 1) {
+        search.top_patch_ix = Some(search.left_patch_ix.unwrap());
+    }
+    *n_patches -= 1
 }
 
 #[test]

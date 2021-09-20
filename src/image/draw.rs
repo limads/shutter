@@ -82,7 +82,13 @@ pub fn mark_image(
             *p = val;
             //println!("Curr: {}", p);
         } else {
-            println!("Out of bounds marking");
+            println!(
+                "Warning: Out of bounds marking. Requested coordinate: ({}, {}); But image is {} x {}",
+                y,
+                x,
+                buf.len() / col_stride,
+                col_stride
+            );
         }
     }
 }
