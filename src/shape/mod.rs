@@ -2,6 +2,7 @@ use crate::image::*;
 use crate::edge::*;
 use away::Metric;
 use std::cmp::{PartialEq, Ordering};
+use nalgebra::*;
 
 pub fn rect_overlap(r1 : &(usize, usize, usize, usize), r2 : &(usize, usize, usize, usize)) -> bool {
     let tl_vdist = (r1.0 as i32 - r2.0 as i32).abs();
@@ -205,6 +206,148 @@ pub fn join_pairs_col_ordered(pairs : &[[(usize, usize); 2]], max_dist : f64) ->
         }
     }
     clusters
+}
+
+/// Returns the angle at the vertex p1 in the triangle [p1, p2, p3] using the law of cosines.
+/// Reference https://stackoverflow.com/questions/1211212/how-to-calculate-an-angle-from-three-points
+fn vertex_angle(pt1 : (usize, usize), pt2 : (usize, usize), pt3 : (usize, usize)) -> f64 {
+    let dist_12 = euclidian(&[pt1.0 as f64, pt1.1 as f64], &[pt2.0 as f64, pt2.1 as f64]);
+    let dist_13 = euclidian(&[pt1.0 as f64, pt1.1 as f64], &[pt3.0 as f64, pt3.1 as f64]);
+    let dist_23 = euclidian(&[pt2.0 as f64, pt2.1 as f64], &[pt3.0 as f64, pt3.1 as f64]);
+    ((dist_12.powf(2.) + dist_13.powf(2.) - dist_23.powf(2.)) / 2.*dist_12*dist_13).acos()
+}
+
+#[test]
+fn line_intersect() {
+    println!("{:?}", line_intersection(((0, 0), (5, 5)), ((5, 0), (0, 5))) );
+}
+
+#[test]
+fn vertex_opening() {
+    println!("{:?}", vertex_angle((0, 0), (0, 5), (5, 0)));
+}
+
+/// Calculate line intersection
+/// Reference https://mathworld.wolfram.com/Line-LineIntersection.html
+/// m1 = [x1 y1; x2 y2]
+/// m2 = [x3 y3; x4 y4]
+/// m3 = [x1 - x2, y1 - y2; x3 - x4, y3 - y4]
+fn line_intersection(
+    (line1_pt1, line1_pt2) : ((usize, usize), (usize, usize)),
+    (line2_pt1, line2_pt2) : ((usize, usize), (usize, usize))
+) -> Option<(usize, usize)> {
+    let m1 = Matrix2::from_rows(&[
+        RowVector2::new(line1_pt1.1 as f64, line1_pt1.0 as f64 * -1.),
+        RowVector2::new(line1_pt2.1 as f64, line1_pt2.0 as f64 * -1.)
+    ]);
+
+    let m2 = Matrix2::from_rows(&[
+        RowVector2::new(line2_pt1.1 as f64, line2_pt1.0 as f64 * -1.),
+        RowVector2::new(line2_pt2.1 as f64, line2_pt2.0 as f64 * -1.)
+    ]);
+
+    let diff_x_l1 = line1_pt1.1 as f64 - line1_pt2.1 as f64;
+    let diff_x_l2 = line2_pt1.1 as f64 - line2_pt2.1 as f64;
+    let diff_y_l1 = (line1_pt1.0 as f64 * -1.) - (line1_pt2.0 as f64 * -1.);
+    let diff_y_l2 = (line2_pt1.0 as f64 * -1.) - (line2_pt2.0 as f64 * -1.);
+
+    let m3 = Matrix2::from_rows(&[
+        RowVector2::new(diff_x_l1, diff_y_l1),
+        RowVector2::new(diff_x_l2, diff_y_l2)
+    ]);
+
+    let m1_det = m1.determinant();
+    let m2_det = m2.determinant();
+    let m3_det = m3.determinant();
+
+    let x = Matrix2::from_rows(&[
+        RowVector2::new(m1_det, diff_x_l1),
+        RowVector2::new(m2_det, diff_x_l2)
+    ]).determinant() / m3_det;
+
+    let mut y = Matrix2::from_rows(&[
+        RowVector2::new(m1_det, diff_y_l1),
+        RowVector2::new(m2_det, diff_y_l2)
+    ]).determinant() / m3_det;
+
+    if y <= 0. && !x.is_nan() && !y.is_nan() {
+        Some(((y*-1.) as usize, x as usize))
+    } else {
+        None
+    }
+}
+
+/// Slope is just height / width (for the line bounding box). Invert row (y) axis
+/// to the geometric plane.
+fn slope(pt1 : (usize, usize), pt2 : (usize, usize)) -> f64 {
+    (pt1.0 as f64 * -1. - pt2.0 as f64 * -1.) / (pt1.1 as f64 - pt2.1 as f64)
+}
+
+/// Assumes set of points is convex. Calculate the best enclosing ellipse.
+pub fn outer_ellipse(pts : &[(usize, usize)]) -> Option<Ellipse> {
+
+    /// Ellect the major ellipsis to be the farthest pair of points in the set.
+    let mut largest_major_distance : ((usize, usize), (usize, usize), f64) = ((0, 0), (0, 0), 0.0);
+    for pt1 in pts.iter() {
+        for pt2 in pts.iter() {
+            let dist = euclidian(&[pt1.0 as f64, pt1.1 as f64], &[pt2.0 as f64, pt2.1 as f64]);
+            if dist > largest_major_distance.2 {
+                largest_major_distance = (*pt1, *pt2, dist);
+            }
+        }
+    }
+    let (major_pt1, major_pt2) = (largest_major_distance.0, largest_major_distance.1);
+    let major_slope = slope(major_pt1, major_pt2);
+
+    let mut perp_minor_line : ((usize, usize), (usize, usize), f64) = ((0, 0), (0, 0), std::f64::INFINITY);
+    let mut found_minor = false;
+    for pt1 in pts.iter() {
+        for pt2 in pts.iter() {
+
+            let test_slope = slope(*pt1, *pt2);
+
+            // Known up to the sign, which can either be positive or negative
+            let angle_tan = (major_slope - test_slope) / (1. + major_slope*test_slope);
+
+            let dist = euclidian(&[pt1.0 as f64, pt1.1 as f64], &[pt2.0 as f64, pt2.1 as f64]);
+
+            // Test to see if tan(angle) is close to pi/2, in which case this pair of
+            // points is nearly perpendicular to the major ellipsis. If pair is closer
+            // to being perpendicular than last pair, (suggesting we
+            // are closer to the center of the ellipsis), this is the best guess for the minor axis of the
+            // ellipse.
+            let angle_from_perp = (angle_tan.atan().abs() - std::f64::consts::PI).abs();
+            if angle_from_perp < std::f64::consts::PI / 8. && angle_from_perp <  perp_minor_line.2 {
+                perp_minor_line = (*pt1, *pt2, dist);
+                found_minor = true;
+            }
+
+            // Alternatively, we check the normal from the midpoint of the major axis, and extend
+            // it to one of the external convex points.
+        }
+    }
+    if !found_minor {
+        return None;
+    }
+
+    let (minor_pt1, minor_pt2) = (perp_minor_line.0, perp_minor_line.1);
+
+    // Set minor axis to be the normal projecting from the major axis at the
+    // point the line of perp_minor_line intersects with the major axis.
+
+    let center = line_intersection((major_pt1, major_pt2), (minor_pt1, minor_pt2))?;
+    let large_axis = euclidian(&[major_pt1.0 as f64, major_pt1.1 as f64], &[major_pt2.0 as f64, major_pt2.1 as f64]);
+    let small_axis = euclidian(&[minor_pt1.0 as f64, minor_pt1.1 as f64], &[minor_pt2.0 as f64, minor_pt2.1 as f64]);
+
+    // Calculate angle of center with respect to x axis.
+    let angle = vertex_angle(center, major_pt2, (center.0, center.1 + small_axis as usize));
+
+    Some(Ellipse {
+        center,
+        large_axis,
+        small_axis,
+        angle
+    })
 }
 
 pub fn join_col_ordered(pts : &[(usize, usize)], max_dist : f64) -> Vec<[(usize, usize); 4]> {
