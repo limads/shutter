@@ -102,7 +102,6 @@ where
     search_minimum_maximum(win).0
 }
 
-
 fn search_minimum_maximum<T>(win : &Window<T>) -> ((usize, usize), (usize, usize))
 where
     T : Scalar + Debug + Copy + Default

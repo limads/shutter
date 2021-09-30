@@ -3,12 +3,21 @@
 
 // pub(crate) mod foreign;
 
+// Scalar image operations
+pub mod scalar;
+
+// Binary image operations
+pub mod binary;
+
+// Low-level image features
+pub mod feature;
+
 pub mod image;
 
 pub mod path;
 
-//#[cfg(feature="opencvlib")]
-//pub mod tracking;
+// #[cfg(feature="opencvlib")]
+// pub mod tracking;
 
 #[cfg(feature="opencvlib")]
 pub mod template;
@@ -22,11 +31,15 @@ pub mod flow;
 #[cfg(feature="opencvlib")]
 pub mod contour;
 
-pub mod edge;
+// pub mod edge;
 
-pub mod shape;
+// pub mod shape;
 
 pub mod threshold;
+
+// pub mod feature;
+
+// pub mod filter;
 
 // Defines operations on binary images.
 #[cfg(feature="opencvlib")]

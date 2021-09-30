@@ -49,4 +49,5 @@ pub fn threshold_window(src : &Window<u8>, dst : &mut Image<u8>, thresh : f64, m
     ).unwrap();
 }
 
-
+// IppStatus ippiThreshold_<mod> ( const Ipp<datatype>* pSrc , int srcStep , Ipp<datatype>*
+// pDst , int dstStep , IppiSize roiSize , Ipp<datatype> threshold , IppCmpOp ippCmpOp );

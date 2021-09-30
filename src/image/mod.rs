@@ -208,6 +208,12 @@ where
         );
     }
     
+
+    /*
+    // TODO
+    IppStatus ippiCopy_<mod> ( const Ipp<datatype>* pSrc , int srcStep , Ipp<datatype>* pDst ,
+    int dstStep , IppiSize roiSize );
+    */
     pub fn copy_from(&mut self, other : &Image<N>) {
         self.buf.copy_from_slice(other.buf.as_slice());
     }
@@ -443,6 +449,25 @@ impl<'a, N> Window<'a, N>
 where
     N : Scalar + Mul<Output=N> + MulAssign + Copy
 {
+
+    pub fn sub_from_slice(
+        src : &'a [N],
+        full_ncols : usize,
+        offset : (usize, usize),
+        dims : (usize, usize)
+    ) -> Option<Self> {
+        let nrows = src.len() / full_ncols;
+        if offset.0 + dims.0 <= nrows && offset.1 + dims.1 <= full_ncols {
+            Some(Self {
+                win : src,
+                offset,
+                orig_sz : (nrows, full_ncols),
+                win_sz : dims
+            })
+        } else {
+            None
+        }
+    }
 
     /// Creates a window that cover the whole slice src, assuming it represents a square image.
     pub fn from_square_slice(src : &'a [N]) -> Self {
@@ -829,7 +854,10 @@ pub enum Mark {
     Circle((usize, usize), usize, u8),
 
     /// TL pos, size and color
-    Rect((usize, usize), (usize, usize), u8)
+    Rect((usize, usize), (usize, usize), u8),
+
+    /// Arbitrary shape
+    Shape(Vec<(usize, usize)>, u8)
     
 }
 
@@ -875,6 +903,27 @@ where
         }
     }
 
+    pub fn sub_from_slice(
+        src : &'a mut [N],
+        full_ncols : usize,
+        offset : (usize, usize),
+        dims : (usize, usize)
+    ) -> Option<Self> {
+        let nrows = src.len() / full_ncols;
+        if offset.0 + dims.0 <= nrows && offset.1 + dims.1 <= full_ncols {
+            Some(Self {
+                win : src,
+                offset,
+                orig_sz : (nrows, full_ncols),
+                win_sz : dims
+            })
+        } else {
+            None
+        }
+    }
+
+    /// We might just as well make this take self by value, since the mutable reference to self will be
+    /// invalidated by the borrow checker when we have the child.
     pub fn sub_window_mut(&'a mut self, offset : (usize, usize), dims : (usize, usize)) -> Option<WindowMut<'a, N>> {
         let new_offset = (self.offset.0 + offset.0, self.offset.1 + offset.1);
         if new_offset.0 + dims.0 <= self.orig_sz.0 && new_offset.1 + dims.1 <= self.orig_sz.1 {
@@ -882,7 +931,6 @@ where
                 win : self.win,
                 offset : (self.offset.0 + offset.0, self.offset.1 + offset.1),
                 orig_sz : self.orig_sz,
-                // transposed : self.transposed,
                 win_sz : dims
             })
         } else {
@@ -898,6 +946,14 @@ where
 }
 
 impl WindowMut<'_, u8> {
+
+    pub fn fill_with_byte<'a>(&'a mut self, byte : u8) {
+        // self.rows_mut().for_each(|row| std::ptr::write_bytes(&mut row[0] as *mut _, byte, row.len()) );
+        /*for ix in 0..self.win_sz.0 {
+            let row = self.row_mut(ix);
+            std::ptr::write_bytes(&mut row[0] as *mut _, byte, row.len());
+        }*/
+    }
 
     pub fn patches(&self, px_spacing : usize) -> Vec<Patch> {
         let src_win = unsafe {
@@ -998,6 +1054,15 @@ impl WindowMut<'_, u8> {
                 }
 
                 panic!("Circle draw require 'opencvlib' feature");
+            },
+            Mark::Shape(pts, col) => {
+                let n = pts.len();
+                if n < 2 {
+                    return;
+                }
+                for (p1, p2) in pts.iter().take(n-1).zip(pts.iter().skip(1)) {
+                    self.draw(Mark::Line(*p1, *p2, col));
+                }
             }
         }
     }
@@ -1091,7 +1156,7 @@ where
 
     /// Analogous to slice::copy_within, copy a the sub_window (src, dim) to the sub_window (dst, dim).
     pub fn copy_within(&'a mut self, src : (usize, usize), dst : (usize, usize), dim : (usize, usize)) {
-        use crate::shape;
+        use crate::feature::shape;
         assert!(!shape::rect_overlap(&(src.0, src.1, dim.0, dim.1), &(dst.0, dst.1, dim.0, dim.1)), "copy_within: Windows overlap");
         let src_win = unsafe {
             Window {
@@ -1112,6 +1177,14 @@ where
             let slice = &self.win[start..(start+self.win_sz.1)];
             unsafe { std::slice::from_raw_parts_mut(slice.as_ptr() as *mut _, slice.len()) }
         })
+    }
+
+    pub fn row_mut(&'a mut self, i : usize) -> &'a mut [N] {
+        let stride = self.orig_sz.1;
+        let tl = self.offset.0 * stride + self.offset.1;
+        let start = tl + i*stride;
+        let slice = &self.win[start..(start+self.win_sz.1)];
+        unsafe { std::slice::from_raw_parts_mut(slice.as_ptr() as *mut _, slice.len()) }
     }
 
     pub fn copy_from(&'a mut self, other : &Window<N>) {

@@ -1,5 +1,5 @@
 use crate::image::*;
-use crate::edge::*;
+use crate::feature::edge::*;
 use away::Metric;
 use std::cmp::{PartialEq, Ordering};
 use nalgebra::*;
@@ -270,7 +270,11 @@ fn line_intersection(
         RowVector2::new(m2_det, diff_y_l2)
     ]).determinant() / m3_det;
 
-    if y <= 0. && !x.is_nan() && !y.is_nan() {
+    if y <= 0. {
+        y *= -1.;
+    }
+
+    if !x.is_nan() && !y.is_nan() {
         Some(((y*-1.) as usize, x as usize))
     } else {
         None
@@ -283,9 +287,32 @@ fn slope(pt1 : (usize, usize), pt2 : (usize, usize)) -> f64 {
     (pt1.0 as f64 * -1. - pt2.0 as f64 * -1.) / (pt1.1 as f64 - pt2.1 as f64)
 }
 
-/// Assumes set of points is convex. Calculate the best enclosing ellipse.
-pub fn outer_ellipse(pts : &[(usize, usize)]) -> Option<Ellipse> {
+pub fn ellipse_extremes(
+    pts : &[(usize, usize)]
+) -> Option<(((usize, usize), (usize, usize)), ((usize, usize), (usize, usize)))> {
+    let mut largest_horiz_distance : ((usize, usize), (usize, usize), f64) = ((0, 0), (0, 0), 0.0);
+    let mut largest_vert_distance : ((usize, usize), (usize, usize), f64) = ((0, 0), (0, 0), 0.0);
+    for pt1 in pts.iter() {
+        for pt2 in pts.iter() {
+            let v_dist = (pt1.0 as f64 - pt2.0 as f64).abs();
+            let h_dist = (pt1.1 as f64 - pt2.1 as f64).abs();
+            if v_dist > largest_vert_distance.2 {
+                largest_vert_distance = (*pt1, *pt2, v_dist);
+            }
+            if h_dist > largest_horiz_distance.2 {
+                largest_horiz_distance = (*pt1, *pt2, h_dist);
+            }
+        }
+    }
+    Some((
+        (largest_horiz_distance.0, largest_horiz_distance.1),
+        (largest_vert_distance.0, largest_vert_distance.1)
+    ))
+}
 
+pub fn ellipse_axis_pair(
+    pts : &[(usize, usize)]
+) -> Option<(((usize, usize), (usize, usize)), ((usize, usize), (usize, usize)))> {
     /// Ellect the major ellipsis to be the farthest pair of points in the set.
     let mut largest_major_distance : ((usize, usize), (usize, usize), f64) = ((0, 0), (0, 0), 0.0);
     for pt1 in pts.iter() {
@@ -298,39 +325,84 @@ pub fn outer_ellipse(pts : &[(usize, usize)]) -> Option<Ellipse> {
     }
     let (major_pt1, major_pt2) = (largest_major_distance.0, largest_major_distance.1);
     let major_slope = slope(major_pt1, major_pt2);
+    let large_axis_dist = euclidian(&[major_pt1.0 as f64, major_pt1.1 as f64], &[major_pt2.0 as f64, major_pt2.1 as f64]);
 
     let mut perp_minor_line : ((usize, usize), (usize, usize), f64) = ((0, 0), (0, 0), std::f64::INFINITY);
     let mut found_minor = false;
+
+    let major_midpoint = ((major_pt1.0 + major_pt2.0) / 2, (major_pt1.1 + major_pt2.1) / 2);
     for pt1 in pts.iter() {
         for pt2 in pts.iter() {
 
-            let test_slope = slope(*pt1, *pt2);
+            let not_same = (pt1.0 != major_pt1.0 && pt2.0 != major_pt2.0 && pt1.1 != major_pt1.1 && pt2.1 != major_pt2.1) &&
+                (pt2.0 != major_pt1.0 && pt1.0 != major_pt2.0 && pt2.1 != major_pt1.1 && pt1.1 != major_pt2.1);
 
-            // Known up to the sign, which can either be positive or negative
-            let angle_tan = (major_slope - test_slope) / (1. + major_slope*test_slope);
+            if not_same {
+                let test_slope = slope(*pt1, *pt2);
 
-            let dist = euclidian(&[pt1.0 as f64, pt1.1 as f64], &[pt2.0 as f64, pt2.1 as f64]);
+                if let Some(intersection) = line_intersection((major_pt1, major_pt2), (*pt1, *pt2)) {
 
-            // Test to see if tan(angle) is close to pi/2, in which case this pair of
-            // points is nearly perpendicular to the major ellipsis. If pair is closer
-            // to being perpendicular than last pair, (suggesting we
-            // are closer to the center of the ellipsis), this is the best guess for the minor axis of the
-            // ellipse.
-            let angle_from_perp = (angle_tan.atan().abs() - std::f64::consts::PI).abs();
-            if angle_from_perp < std::f64::consts::PI / 8. && angle_from_perp <  perp_minor_line.2 {
-                perp_minor_line = (*pt1, *pt2, dist);
-                found_minor = true;
-            }
+                    // let dist_to_mid = euclidian(
+                    //    &[intersection.0 as f64, intersection.1 as f64],
+                    //    &[major_midpoint.0 as f64, major_midpoint.1 as f64]
+                    // );
+                    // println!("Dist to mid = {:?}", dist_to_mid);
 
-            // Alternatively, we check the normal from the midpoint of the major axis, and extend
-            // it to one of the external convex points.
+                    // if dist_to_mid <= 32.0 {
+                        // let pt1_ref_center = (pt1.0 as i32 - intersection.0 as i32, pt1.1 as i32 - intersection.1 as i32);
+                        // let pt2_ref_center = (pt2.0 as i32 - intersection.0 as i32, pt2.1 as i32 - intersection.1 as i32);
+
+                        // If they are at the same quadrant both vertically and horizontally, the points
+                        // offset by the center will have same same sign.
+                        // let reflected_vertically = (pt1_ref_center.0.signum() * pt2_ref_center.0.signum()) <= 0;
+                        // let reflected_horizontally = (pt1_ref_center.1.signum() * pt2_ref_center.1.signum()) <= 0;
+
+                        // if reflected_vertically || reflected_horizontally {
+
+                        // Known up to the sign, which can either be positive or negative
+                        let angle_tan = (major_slope - test_slope) / (1. + major_slope*test_slope);
+
+                        let dist = euclidian(&[pt1.0 as f64, pt1.1 as f64], &[pt2.0 as f64, pt2.1 as f64]);
+
+                        // This is taken from the maximum expected asymetry (minor_axis / major_axis).
+                        if dist >= large_axis_dist * 0.75 {
+                            // Test to see if tan(angle) is close to pi/2, in which case this pair of
+                            // points is nearly perpendicular to the major ellipsis. If pair is closer
+                            // to being perpendicular than last pair, (suggesting we
+                            // are closer to the center of the ellipsis), this is the best guess for the minor axis of the
+                            // ellipse.
+                            let angle_from_perp = (angle_tan.atan().abs() - std::f64::consts::PI).abs();
+
+                            // Get closest to perpendicular
+                            if angle_from_perp < perp_minor_line.2 {
+                                perp_minor_line = (*pt1, *pt2, angle_from_perp);
+                                found_minor = true;
+                            }
+                        }
+
+                        // Get closest to midpoint
+                        // Alternatively, we check the normal from the midpoint of the major axis, and extend
+                        // it to one of the external convex points.
+                    }
+                }
+                // }
+            // }
         }
     }
     if !found_minor {
         return None;
+        println!("Did not found minor");
     }
 
     let (minor_pt1, minor_pt2) = (perp_minor_line.0, perp_minor_line.1);
+
+    Some(((major_pt1, major_pt2), (minor_pt1, minor_pt2)))
+}
+
+/// Assumes set of points is convex. Calculate the best enclosing ellipse.
+pub fn outer_ellipse(pts : &[(usize, usize)]) -> Option<Ellipse> {
+
+    let ((major_pt1, major_pt2), (minor_pt1, minor_pt2)) = ellipse_axis_pair(pts)?;
 
     // Set minor axis to be the normal projecting from the major axis at the
     // point the line of perp_minor_line intersects with the major axis.

@@ -3,7 +3,7 @@ use std::cmp::{Eq, PartialEq};
 use itertools::Itertools;
 use crate::image::{Image, Window, WindowMut};
 use bayes::fit::{cluster::KMeans, cluster::KMeansSettings, Estimator};
-use crate::shape::*;
+use crate::feature::shape::*;
 use std::fmt;
 use std::collections::HashMap;
 use std::mem;
@@ -11,6 +11,7 @@ use std::default::Default;
 use parry2d::shape::ConvexPolygon;
 use nalgebra::geometry::Point2;
 use std::cmp::Ordering;
+use parry2d::query::PointQuery;
 
 // #[cfg(feature="opencvlib")]
 // pub mod fgmm;
@@ -372,11 +373,11 @@ impl Patch {
     //    self.num_regions() * self.scale.pow(2)
     // }
 
-    pub fn polygon(&self) -> Option<ConvexPolygon> {
+    pub fn outer_points(&self) -> Vec<(usize, usize)> {
         let mut row_pxs = self.group_rows();
         let mut sorted_keys = row_pxs.iter().map(|(k, _)| k ).collect::<Vec<_>>();
         if sorted_keys.len() < 3 {
-            return None;
+            return Vec::new();
         }
         sorted_keys.sort();
         let n = sorted_keys.len();
@@ -403,13 +404,24 @@ impl Patch {
         for row in sorted_keys[1..n-1].iter().rev() {
             pts.push((**row * self.scale, *row_pxs[row].first().unwrap() * self.scale));
         }
+        pts
+    }
+
+    pub fn polygon(&self) -> Option<ConvexPolygon> {
+        let pts = self.outer_points();
 
         // Some(Polygon::from(pts))
 
-        let inv_pts : Vec<_> = pts.iter()
-            .map(|pt| Point2::new(pt.1 as f32, /*(self.img_height - pt.0)*/ pt.0 as f32 ) )
+        let float_pts : Vec<_> = pts.iter()
+            .map(|pt| Point2::new(pt.1 as f32, pt.0 as f32 ) )
             .collect();
-        ConvexPolygon::from_convex_hull(&inv_pts[..])
+        ConvexPolygon::from_convex_hull(&float_pts[..])
+    }
+
+    pub fn contains(&self, other : &Self) -> Option<bool> {
+        let this_poly = self.polygon()?;
+        let other_poly = other.polygon()?;
+        Some(other_poly.points().iter().all(|pt| this_poly.contains_local_point(pt)))
     }
 
     /// Order all pixels in this patch, first by row, then by column within rows.
@@ -426,6 +438,36 @@ impl Patch {
         }
     }
 
+}
+
+pub enum NestedPatch {
+    Final(Patch),
+
+    /// First patch encloses all others.
+    Encloses(Patch, Vec<NestedPatch>)
+}
+
+// Must call recursively to build hierarchical organization.
+pub fn build_nested(mut v : Vec<Patch>) -> Vec<NestedPatch> {
+    let mut final_nested = Vec::new();
+    while v.len() > 0 {
+        let mut nested : Vec<Patch> = Vec::new();
+        for n_ix in 1..v.len() {
+            if v[0].contains(&v[n_ix]).unwrap() {
+                nested.push(v.swap_remove(n_ix));
+            }
+        }
+        let curr = v.swap_remove(0);
+        if nested.len() == 0 {
+            final_nested.push(NestedPatch::Final(curr));
+        } else {
+            // Now, we must call the function recursively over
+            // the nested vector to examine if any elements at
+            // nested contains any other.
+            final_nested.push(NestedPatch::Encloses(curr, build_nested(nested)));
+        }
+    }
+    final_nested
 }
 
 /// Unlike a Polygon, which has a precise mathematical description as a set of delimiting points,
@@ -1007,6 +1049,32 @@ pub fn segment_colors_to_image(win : &Window<'_, u8>, px_spacing : usize, n_colo
         km.allocations().iter().map(|alloc| colors[*alloc] ).collect(),
         ncol
     )
+}
+
+/// Calculates the central point of all pixels within a given color interval.
+/// This quantity is meaningful when color represents a delimited region of space.
+pub fn color_centroid(
+    win : &Window<'_, u8>,
+    min_color : u8,
+    max_color : u8,
+    subsampling : usize
+) -> Option<(usize, usize)> {
+    let (mut accum_y, mut accum_x) = (0, 0);
+    let (mut n_y, mut n_x) = (0, 0);
+    for (ix, px) in win.pixels(subsampling).enumerate() {
+        if *px >= min_color && *px <= max_color {
+            let (y, x) = (ix / win.height(), ix % win.height());
+            accum_y += y;
+            accum_x += x;
+            n_y += 1;
+            n_x += 1;
+        }
+    }
+    if n_x > 0 && n_y > 0 {
+        Some((accum_y / n_y, accum_x / n_x))
+    } else {
+        None
+    }
 }
 
 /// colors : Sequence of representative colors returned by segment_colors ->extract_colors. Overwrites

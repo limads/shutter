@@ -47,11 +47,13 @@ where
     let size = IppiSize{ width : ncol as i32, height : (src.len() / ncol) as i32 };
     let mut status : Option<i32> = None;
     
+    let src_ptr = src.as_ptr() as *const ffi::c_void;
+    let dst_ptr = dst.as_mut_ptr() as *mut ffi::c_void;
     if (&src[0] as &dyn Any).is::<u8>() && (&dst[0] as &dyn Any).is::<f32>() {
          let status_code = ippiConvert_8u32f_C1R(
-            (src.as_ptr() as *const ffi::c_void) as *const u8,
+            src_ptr as *const u8,
             row_size_bytes::<u8>(ncol),
-            (dst.as_mut_ptr() as *mut ffi::c_void) as *mut f32,
+            dst_ptr as *mut f32,
             row_size_bytes::<f32>(ncol), 
             size
         );
@@ -154,3 +156,49 @@ where
     }
 }
 
+/*IppStatus ippiAdd_<mod> ( const Ipp<datatype>* pSrc1 , int src1Step , const Ipp<datatype>*
+pSrc2 , int src2Step , Ipp<datatype>* pDst , int dstStep , IppiSize roiSize , int
+scaleFactor );
+
+Alternatively, match on the type and take the function pointer to the corresponding C function.
+
+// Brighten
+IppStatus ippiAddC_<mod> ( const Ipp<datatype>* pSrc , int srcStep , Ipp<datatype> value ,
+Ipp<datatype>* pDst , int dstStep , IppiSize roiSize , int scaleFactor );
+
+IppStatus ippiMul_<mod> ( const Ipp<datatype>* pSrc1 , int src1Step , const Ipp<datatype>*
+pSrc2 , int src2Step , Ipp<datatype>* pDst , int dstStep , IppiSize roiSize , int
+scaleFactor );
+
+// Contrast-enhancement.
+IppStatus ippiMulC_<mod> ( const Ipp<datatype>* pSrc , int srcStep , Ipp<datatype> value ,
+Ipp<datatype>* pDst , int dstStep , IppiSize roiSize , int scaleFactor );
+
+IppStatus ippiAbs_<mod> ( const Ipp<datatype>* pSrc , int srcStep , Ipp<datatype>* pDst ,
+int dstStep , IppiSize roiSize );
+
+IppStatus ippiAbsDiff_<mod> ( const Ipp<datatype>* pSrc1 , int src1Step , const
+Ipp<datatype>* pSrc2 , int src2Step , Ipp<datatype>* pDst , int dstStep , IppiSize
+roiSize );
+
+IppStatus ippiSqr_<mod> ( const Ipp<datatype>* pSrc , int srcStep , Ipp<datatype>* pDst ,
+int dstStep , IppiSize roiSize , int scaleFactor );
+
+IppStatus ippiSqrt_<mod> ( const Ipp<datatype>* pSrc , int srcStep , Ipp<datatype>* pDst ,
+int dstStep , IppiSize roiSize , int scaleFactor );
+
+IppStatus ippiLn_<mod> ( const Ipp<datatype>* pSrc , int srcStep , Ipp<datatype>* pDst , int
+dstStep , IppiSize roiSize , int scaleFactor );
+
+IppStatus ippiExp_<mod> ( const Ipp<datatype>* pSrc , int srcStep , Ipp<datatype>* pDst ,
+int dstStep , IppiSize roiSize , int scaleFactor );
+
+IppStatus ippiDotProd_<mod> ( const Ipp<srcDatatype>* pSrc1 , int src1Step , const
+Ipp<srcDatatype>* pSrc2 , int src2Step , IppiSize roiSize , Ipp64f* pDp );
+
+IppStatus ippiRShiftC_<mod> ( const Ipp<datatype>* pSrc , int srcStep , Ipp32u value ,
+Ipp<datatype>* pDst , int dstStep , IppiSize roiSize );
+
+IppStatus ippiLShiftC_<mod> ( const Ipp<datatype>* pSrc , int srcStep , Ipp32u value ,
+Ipp<datatype>* pDst , int dstStep , IppiSize roiSize );
+*/

@@ -53,7 +53,7 @@ where
         Self{ tgt : Image::new_constant(img_sz.0, img_sz.1, P::from(0)), kernel }
     }
 
-    pub fn apply(&mut self, img : &Window<P>) -> Option<&Image<P>> {
+    pub fn erode(&mut self, img : &Window<P>) -> Option<&Image<P>> {
         let src : core::Mat = img.clone().into();
         let mut dst : core::Mat = self.tgt.full_window_mut().into();
         unsafe {
@@ -79,7 +79,8 @@ pub struct Dilation<P>
 where
     P : Scalar + From<u8> + Debug + Copy + Default
 {
-    tgt : Image<P>
+    tgt : Image<P>,
+    kernel : MorphKernel
 }
 
 impl<P> Dilation<P>
@@ -87,24 +88,38 @@ where
     P : Scalar + From<u8> + Debug + Copy + Default
 {
 
-    pub fn new(dim : (usize, usize)) -> Self {
-        Self{ tgt : Image::new_constant(dim.0, dim.1, P::from(0)) }
+    pub fn new(img_sz : (usize, usize), kernel_sz : usize, shape : MorphShape, iterations : usize) -> Self {
+        let kernel = build_kernel(kernel_sz, iterations, shape);
+        Self{ tgt : Image::new_constant(img_sz.0, img_sz.1, P::from(0)), kernel }
     }
 
-    pub fn apply(&mut self) -> Option<&Image<P>> {
-        /*imgproc::dilate(
-            src: &dyn ToInputArray,
-            dst: &mut dyn ToOutputArray,
-            kernel: &dyn ToInputArray,
-            anchor: Point,
-            iterations: i32,
-            border_type: i32,
-            border_value: Scalar
-        ).ok()?*/
-        unimplemented!()
+    pub fn dilate(&mut self, img : &Window<P>) -> Option<&Image<P>> {
+        let src : core::Mat = img.clone().into();
+        let mut dst : core::Mat = self.tgt.full_window_mut().into();
+        unsafe {
+            imgproc::dilate(
+                &src,
+                &mut dst,
+                &self.kernel.kernel,
+                self.kernel.anchor,
+                self.kernel.iterations,
+                core::BORDER_CONSTANT,
+                self.kernel.border_val
+            ).ok()?;
+        }
+        Some(&self.tgt)
+    }
+
+    pub fn retrieve(&self) -> &Image<P> {
+        &self.tgt
     }
 
 }
 
 // TODO opening=erosion followed by dilation; closing=dilationn followed by erosion.
 
+// IppStatus ippiDilate3x3_64f_C1R(const Ipp64f* pSrc, int srcStep, Ipp<datatype>* pDst,
+// int dstStep, IppiSize roiSize );
+
+// IppStatus ippiErode3x3_64f_C1R(const Ipp64f* pSrc, int srcStep, Ipp64f* pDst, int
+// dstStep, IppiSize roiSize );

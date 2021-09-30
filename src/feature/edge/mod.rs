@@ -1,7 +1,7 @@
 use crate::threshold::Threshold;
 use crate::image::Window;
 use crate::image::iter;
-use crate::shape::Polygon;
+use crate::feature::shape::Polygon;
 
 // An edge is a Vec<(usize, usize)>. Two edges intersect if at least one
 // of the instances of the cartesian product of their sub-edges (neighboring pairs of points forming edges of size 2)
