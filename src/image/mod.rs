@@ -348,16 +348,16 @@ where
     }
 }
 
-/*impl<N> IndexMut<(usize, usize)> for Image<N> 
+impl<N> IndexMut<(usize, usize)> for Image<N>
 where
-    N : Scalar
+    N : Scalar + Copy + Default
 {
     
     fn index_mut(&mut self, index: (usize, usize)) -> &mut Self::Output {
-        &mut self.buf[index]
+        &mut self.buf[index::linear_index(index, self.ncols)]
     }
     
-}*/
+}
 
 /*impl<N> AsRef<DMatrix<N>> for Image<N> 
 where
@@ -565,6 +565,83 @@ where
             return None;
         }
         Some(iter::vertical_col_iterator(self.rows(), comp_dist, col))
+    }
+
+    /// Iterate over one of the lower-triangular diagonals the image, starting at given row.
+    /// If to_right is passed, iterate from the top-left to bottom-right corner. If not, iterate from the
+    /// top-right to bottom-left corner.
+    pub fn lower_to_right_diagonal_pixel_pairs(
+        &'a self,
+        row : usize,
+        comp_dist : usize,
+    ) -> Option<impl Iterator<Item=((usize, usize), (&'a N, &'a N))>> {
+        if row < self.height() {
+            Some(iter::diagonal_right_row_iterator(self.rows(), comp_dist, (row, 0)))
+        } else {
+            None
+        }
+    }
+
+    pub fn upper_to_right_diagonal_pixel_pairs(
+        &'a self,
+        col : usize,
+        comp_dist : usize,
+    ) -> Option<impl Iterator<Item=((usize, usize), (&'a N, &'a N))>> {
+        if col < self.width() {
+            Some(iter::diagonal_right_row_iterator(self.rows(), comp_dist, (0, col)))
+        } else {
+            None
+        }
+    }
+
+    pub fn lower_to_left_diagonal_pixel_pairs(
+        &'a self,
+        row : usize,
+        comp_dist : usize,
+    ) -> Option<impl Iterator<Item=((usize, usize), (&'a N, &'a N))>> {
+        if row < self.height() {
+            Some(iter::diagonal_left_row_iterator(self.rows(), comp_dist, (row, self.width()-1)))
+        } else {
+            None
+        }
+    }
+
+    pub fn upper_to_left_diagonal_pixel_pairs(
+        &'a self,
+        col : usize,
+        comp_dist : usize,
+    ) -> Option<impl Iterator<Item=((usize, usize), (&'a N, &'a N))>> {
+        if col < self.width() {
+            Some(iter::diagonal_left_row_iterator(self.rows(), comp_dist, (0, col)))
+        } else {
+            None
+        }
+    }
+
+    pub fn to_right_diagonal_pixel_pairs(
+        &'a self,
+        comp_dist : usize
+    ) -> impl Iterator<Item=((usize, usize), (&'a N, &'a N))> {
+        (0..self.height()).step_by(comp_dist)
+            .map(move |r| self.lower_to_right_diagonal_pixel_pairs(r, comp_dist).unwrap() )
+            .flatten()
+            .chain((0..self.width()).step_by(comp_dist)
+                .map(move |c| self.upper_to_right_diagonal_pixel_pairs(c, comp_dist).unwrap() )
+                .flatten()
+            )
+    }
+
+    pub fn to_left_diagonal_pixel_pairs(
+        &'a self,
+        comp_dist : usize
+    ) -> impl Iterator<Item=((usize, usize), (&'a N, &'a N))> {
+        (0..self.height()).step_by(comp_dist)
+            .map(move |r| self.lower_to_left_diagonal_pixel_pairs(r, comp_dist).unwrap() )
+            .flatten()
+            .chain((0..self.width()).step_by(comp_dist)
+                .map(move |c| self.upper_to_left_diagonal_pixel_pairs(c, comp_dist).unwrap() )
+                .flatten()
+            )
     }
 
     pub fn rows(&self) -> impl Iterator<Item=&[N]> + Clone {
@@ -1226,9 +1303,8 @@ where
 
     type Output = N;
 
-    fn index(&self, _index: (usize, usize)) -> &Self::Output {
-        // &self.win[index]
-        unimplemented!()
+    fn index(&self, index: (usize, usize)) -> &Self::Output {
+        &self.win[index::linear_index((self.offset.0 + index.0, self.offset.1 + index.1), self.orig_sz.1)]
     }
 }
 
@@ -1237,14 +1313,13 @@ where
     N : Scalar + Copy
 {
     
-    fn index_mut(&mut self, _index: (usize, usize)) -> &mut Self::Output {
-        //&mut self.win[index]
-        unimplemented!()
+    fn index_mut(&mut self, index: (usize, usize)) -> &mut Self::Output {
+        &mut self.win[index::linear_index((self.offset.0 + index.0, self.offset.1 + index.1), self.orig_sz.1)]
     }
     
 }
 
-impl<'a, N> AsRef<DMatrixSlice<'a, N>> for Window<'a, N> 
+/*impl<'a, N> AsRef<DMatrixSlice<'a, N>> for Window<'a, N>
 where
     N : Scalar + Copy
 {
@@ -1252,7 +1327,7 @@ where
         // &self.win
         unimplemented!()
     }
-}
+}*/
 
 /*impl<'a, M, N> Downsample<Image<N>> for Window<'a, M> 
 where

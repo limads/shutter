@@ -40,3 +40,59 @@ where
         .map(move |(row_ix, (lower, upper))| (comp_dist*row_ix, (&lower[col], &upper[col])) )
 }
 
+/// Iterates over a diagonal, starting at given (row, col) and going from top-left to bottom-right
+pub fn diagonal_right_row_iterator<'a, N>(
+    rows : impl Iterator<Item=&'a [N]> + Clone + 'a,
+    comp_dist : usize,
+    start : (usize, usize)
+) -> impl Iterator<Item=((usize, usize), (&'a N, &'a N))>+'a
+where
+    N : Copy + 'a
+{
+    let lower_rows = rows.clone().skip(start.0).step_by(comp_dist);
+    let upper_rows = rows.clone().skip(start.0+comp_dist).step_by(comp_dist);
+    lower_rows.zip(upper_rows)
+        .enumerate()
+        .map(move |(ix, (row1, row2))| {
+            let px_ix = (start.0 + comp_dist*ix, comp_dist*ix);
+            (px_ix, (&row1[ix*comp_dist], &row2[(ix+1)*comp_dist]))
+         })
+}
+
+// Iterates over a diagonal, starting at given (row, col) and going from top-right to bottom-left
+pub fn diagonal_left_row_iterator<'a, N>(
+    rows : impl Iterator<Item=&'a [N]> + Clone + 'a,
+    comp_dist : usize,
+    start : (usize, usize)
+) -> impl Iterator<Item=((usize, usize), (&'a N, &'a N))>+'a
+where
+    N : Copy + 'a
+{
+    let lower_rows = rows.clone().skip(start.0).step_by(comp_dist);
+    let upper_rows = rows.clone().skip(start.0+comp_dist).step_by(comp_dist);
+    lower_rows.zip(upper_rows)
+        .enumerate()
+        .map(move |(ix, (row1, row2))| {
+            let px_ix = (start.0 + comp_dist*ix, start.1 - comp_dist*ix);
+            (px_ix, (&row1[start.1 - ix*comp_dist], &row2[start.1 - (ix+1)*comp_dist]))
+         })
+}
+
+#[test]
+fn diag() {
+    use crate::image::Image;
+    let mut img = Image::new_constant(10, 10, 1);
+
+    for r in 0..10 {
+        for c in 0..10 {
+            img[(r, c)] = r;
+        }
+    }
+
+    diagonal_right_row_iterator(img.full_window().rows(), 2, (0, 0))
+        .for_each(|(ix, px)| println!("{:?} : {:?}", ix, px) );
+
+    diagonal_left_row_iterator(img.full_window().rows(), 2, (0, 9))
+        .for_each(|(ix, px)| println!("{:?} : {:?}", ix, px) );
+}
+
