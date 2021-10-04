@@ -49,13 +49,18 @@ pub fn diagonal_right_row_iterator<'a, N>(
 where
     N : Copy + 'a
 {
+    let nrows = rows.clone().count();
+    let ncols = rows.clone().next().unwrap().len();
+    let take_n = (nrows.saturating_sub(start.0) / comp_dist).min(ncols.saturating_sub(start.1) / comp_dist).saturating_sub(1);
     let lower_rows = rows.clone().skip(start.0).step_by(comp_dist);
     let upper_rows = rows.clone().skip(start.0+comp_dist).step_by(comp_dist);
     lower_rows.zip(upper_rows)
         .enumerate()
+        .take(take_n)
         .map(move |(ix, (row1, row2))| {
-            let px_ix = (start.0 + comp_dist*ix, comp_dist*ix);
-            (px_ix, (&row1[ix*comp_dist], &row2[(ix+1)*comp_dist]))
+            let px_ix = (start.0 + comp_dist*ix, start.1 + comp_dist*ix);
+            // println!("{:?}", (start, nrows, ncols, take_n, px_ix));
+            (px_ix, (&row1[px_ix.1], &row2[px_ix.1 + comp_dist]))
          })
 }
 
@@ -68,13 +73,18 @@ pub fn diagonal_left_row_iterator<'a, N>(
 where
     N : Copy + 'a
 {
+    let nrows = rows.clone().count();
+    let ncols = rows.clone().next().unwrap().len();
+    let take_n = (nrows.saturating_sub(start.0) / comp_dist).min(start.1 / comp_dist).saturating_sub(1);
     let lower_rows = rows.clone().skip(start.0).step_by(comp_dist);
-    let upper_rows = rows.clone().skip(start.0+comp_dist).step_by(comp_dist);
+    let upper_rows = rows.skip(start.0+comp_dist).step_by(comp_dist);
     lower_rows.zip(upper_rows)
         .enumerate()
+        .take(take_n)
         .map(move |(ix, (row1, row2))| {
             let px_ix = (start.0 + comp_dist*ix, start.1 - comp_dist*ix);
-            (px_ix, (&row1[start.1 - ix*comp_dist], &row2[start.1 - (ix+1)*comp_dist]))
+            // println!("{:?}", (start, nrows, ncols, take_n, ncols, px_ix));
+            (px_ix, (&row1[px_ix.1], &row2[px_ix.1 - comp_dist]))
          })
 }
 
@@ -89,9 +99,11 @@ fn diag() {
         }
     }
 
+    println!("Diagonal right:");
     diagonal_right_row_iterator(img.full_window().rows(), 2, (0, 0))
         .for_each(|(ix, px)| println!("{:?} : {:?}", ix, px) );
 
+    println!("Diagonal left:");
     diagonal_left_row_iterator(img.full_window().rows(), 2, (0, 9))
         .for_each(|(ix, px)| println!("{:?} : {:?}", ix, px) );
 }

@@ -155,12 +155,99 @@ pub fn is_white_dark_bounded_transition(
 ) {
     let diff = *a as i16 - *b as i16;
     let a_match_up = *a > thr.upper.min && *a < thr.upper.max;
-    // let a_match_up = true;
     let b_match_low = *b > thr.lower.min && *b < thr.lower.max;
     if a_match_up && b_match_low && diff > max_left.1 {
         *max_left = (i+(comp_dist/2), diff);
         *found = true;
     }
+}
+
+pub fn is_white_dark_diagonal_bounded_transition(
+    max : &mut ((usize, usize), i16),
+    found : &mut bool,
+    to_right : bool,
+    comp_dist : usize,
+    a : &u8,
+    b : &u8,
+    thr : &EdgeThreshold
+) {
+    let diff = *a as i16 - *b as i16;
+    let a_match_up = *a > thr.upper.min && *a < thr.upper.max;
+    let b_match_low = *b > thr.lower.min && *b < thr.lower.max;
+    if a_match_up && b_match_low && diff > max.1 {
+        let y = max.0.0+(comp_dist/2);
+        let x = if to_right {
+            max.0.1+(comp_dist/2)
+        } else {
+            max.0.1.saturating_sub(comp_dist/2)
+        };
+        *max = ((y, x), diff);
+        *found = true;
+    }
+}
+
+pub fn is_dark_white_diagonal_bounded_transition(
+    max : &mut ((usize, usize), i16),
+    found : &mut bool,
+    to_right : bool,
+    comp_dist : usize,
+    a : &u8,
+    b : &u8,
+    thr : &EdgeThreshold
+) {
+    let diff = *a as i16 - *b as i16;
+    let a_match_low = *a > thr.lower.min && *a < thr.lower.max;
+    let b_match_up =  *b > thr.upper.min && *b < thr.upper.max;
+    if a_match_low && b_match_up && diff < max.1 {
+        let y = max.0.0+(comp_dist/2);
+        let x = if to_right {
+            max.0.1+(comp_dist/2)
+        } else {
+            max.0.1.saturating_sub(comp_dist/2)
+        };
+        *max = ((y, x), diff);
+        *found = true;
+    }
+}
+
+pub fn diagonal_bounded_pair<'a>(
+    diag_iter : impl Iterator<Item=((usize, usize), (&'a u8, &'a u8))>,
+    to_right : bool,
+    edge_thresh : &EdgeThreshold
+) -> (Option<(usize, usize)>, Option<(usize, usize)>) {
+    let (mut white_dark, mut dark_white) = (((0, 0), 0), ((0, 0), 0));
+    let (mut white_dark_found, mut dark_white_found) = (false, false);
+    diag_iter.for_each(|(ix, (a, b))| {
+        is_white_dark_diagonal_bounded_transition(
+            &mut white_dark,
+            &mut white_dark_found,
+            to_right,
+            4,
+            a,
+            b,
+            &edge_thresh
+        );
+        is_dark_white_diagonal_bounded_transition(
+            &mut dark_white,
+            &mut dark_white_found,
+            to_right,
+            4,
+            a,
+            b,
+            &edge_thresh
+        );
+    });
+    let white_dark = if white_dark_found {
+        Some(white_dark.0)
+    } else {
+        None
+    };
+    let dark_white = if dark_white_found {
+        Some(dark_white.0)
+    } else {
+        None
+    };
+    (white_dark, dark_white)
 }
 
 /// Verify is bit levels a->b represent a dark->white transition
@@ -176,7 +263,6 @@ pub fn is_dark_white_bounded_transition(
     let diff = *a as i16 - *b as i16;
     let a_match_low = *a > thr.lower.min && *a < thr.lower.max;
     let b_match_up =  *b > thr.upper.min && *b < thr.upper.max;
-    // let b_match_up = true;
     if a_match_low && b_match_up && diff < max_right.1 {
         *max_right = (i+(comp_dist/2), diff);
         *found = true;

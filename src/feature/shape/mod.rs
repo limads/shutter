@@ -471,7 +471,7 @@ pub mod cvellipse {
 
     // TODO make WindowMut
     pub fn draw_ellipse(window : Window<'_, u8>, el : &Ellipse) {
-        let thickness = 2;
+        let thickness = 1;
         let line_type = 8;
         let shift = 0;
         let mut m : core::Mat = window.into();

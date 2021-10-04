@@ -218,6 +218,11 @@ where
         self.buf.copy_from_slice(other.buf.as_slice());
     }
     
+    pub fn copy_from_slice(&mut self, slice : &[N]) {
+        assert!(self.buf.len() == slice.len());
+        self.buf.copy_from_slice(&slice);
+    }
+
     pub fn as_slice(&self) -> &[N] {
         &self.buf[..]
     }
@@ -358,24 +363,6 @@ where
     }
     
 }
-
-/*impl<N> AsRef<DMatrix<N>> for Image<N> 
-where
-    N : Scalar
-{
-    fn as_ref(&self) -> &DMatrix<N> {
-        &self.buf
-    }
-}
-
-impl<N> AsMut<DMatrix<N>> for Image<N> 
-where
-    N : Scalar
-{
-    fn as_mut(&mut self) -> &mut DMatrix<N> {
-        &mut self.buf
-    }
-}*/
 
 /// Borrowed subset of an image. Referencing the whole source slice (instead of just its
 /// portion of interest) might be useful to represent overlfowing operations (e.g. draw)
