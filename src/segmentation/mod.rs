@@ -663,6 +663,19 @@ pub struct PatchSegmentation {
     n_patches : usize
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum ColorMode {
+
+    Exact,
+
+    Above,
+
+    Below,
+
+    // Carries an absolute value tolerance
+    Within(u8)
+}
+
 impl PatchSegmentation {
 
     pub fn new(px_spacing : usize) -> Self {
@@ -677,9 +690,9 @@ impl PatchSegmentation {
     }
 
     /// Returns only segments matching the given color.
-    pub fn segment_color<'a>(&'a mut self, win : &WindowMut<'_, u8>, color : u8) -> &'a [Patch] {
+    pub fn segment_single_color<'a>(&'a mut self, win : &WindowMut<'_, u8>, color : u8, mode : ColorMode) -> &'a [Patch] {
         let src_win = unsafe { crate::image::create_immutable(&win) };
-        let n_patches = single_color_patches(&mut self.patches, &src_win, self.px_spacing, color);
+        let n_patches = single_color_patches(&mut self.patches, &src_win, self.px_spacing, color, mode);
         self.n_patches = n_patches;
         &self.patches[0..self.n_patches]
     }
@@ -708,12 +721,15 @@ impl PatchSearch {
     }
 }
 
-/// Search the image for disjoint color patches of a single user-specified color
+/// Search the image for disjoint color patches of a single user-specified color. If tol
+/// is informed, any pixel witin patch+- tol is considered. If not, only pixels with strictly
+/// the desired color are returned.
 pub fn single_color_patches(
     patches : &mut Vec<Patch>,
     win : &Window<'_, u8>,
     px_spacing : usize,
-    color : u8
+    color : u8,
+    mode : ColorMode
 ) -> usize {
     let mut n_patches = 0;
     let mut search = PatchSearch::new(win, px_spacing);
@@ -734,7 +750,13 @@ pub fn single_color_patches(
         }
         let merges_left = search.left_patch_ix.is_some();
         let merges_top = prev_row_mask[c];
-        if px_color == color {
+        let color_match = match mode {
+            ColorMode::Within(tol) => ((px_color as i16 - color as i16).abs() as u8) < tol,
+            ColorMode::Exact => px_color == color,
+            ColorMode::Above => px_color >= color,
+            ColorMode::Below => px_color <= color
+        };
+        if color_match {
             append_or_update_patch(patches, &mut search, &mut n_patches, win, merges_left, merges_top, r, c, color, px_spacing);
             prev_row_mask[c] = true;
         } else {

@@ -447,6 +447,22 @@ impl Ellipse {
     }
 }
 
+/// Returns the square the circle encloses.
+pub fn inner_square_for_circle(center : (usize, usize), radius : usize) -> Option<(usize, usize, usize, usize)> {
+    // Those quantities will be the same for squares, but can be generalized
+    // later for axis-aligned ellipsoids for a non-symmetrical rect, by informing two
+    // radii values. sin(45) = cos(45) for squares, but the angle will be different for
+    // generic rects.
+    let half_width = (std::f64::consts::FRAC_PI_4.cos() * radius as f64) as usize;
+    let half_height = (std::f64::consts::FRAC_PI_4.sin() * radius as f64) as usize;
+    Some((
+        center.0.checked_sub(half_height)?,
+        center.1.checked_sub(half_width)?,
+        2*half_height,
+        2*half_width
+    ))
+}
+
 #[cfg(feature="opencvlib")]
 pub mod cvellipse {
 
@@ -463,9 +479,9 @@ pub mod cvellipse {
         pt_vec
     }
 
-    pub fn fit_circle(pts : &[(usize, usize)]) -> Result<((usize, usize), usize), String> {
-        let ellipse = fit_ellipse(pts)?;
-        let radius = (ellipse.large_axis / 2.) as usize;
+    pub fn fit_circle(pts : &[(usize, usize)], method : Method) -> Result<((usize, usize), usize), String> {
+        let ellipse = fit_ellipse(pts, method)?;
+        let radius = ((ellipse.large_axis*0.5 + ellipse.small_axis*0.5) / 2.) as usize;
         Ok((ellipse.center, radius))
     }
 
@@ -489,12 +505,41 @@ pub mod cvellipse {
         );
     }
 
-    /// Returns position and radius of fitted circle. Also see fit_ellipse_ams; fit_ellipse_direct.
-    pub fn fit_ellipse(pts : &[(usize, usize)]) -> Result<Ellipse, String> {
+    #[derive(Clone, Copy)]
+    pub enum Method {
 
+        /// Implemented in OpenCV with Andrew W Fitzgibbon and Robert B Fisher. A buyer's guide to conic fitting.
+        /// In Proceedings of the 6th British conference on Machine vision (Vol. 2),
+        /// pages 513–522. BMVA Press, 1995.
+        LeastSquares,
+
+        /// Implemented in OpenCV with Andrew Fitzgibbon, Maurizio Pilu, and Robert B. Fisher.
+        /// Direct least square fitting of ellipses. IEEE Transactions on Pattern Analysis and Machine Intelligence, 21(5):476–480, 1999.
+        Direct,
+
+        /// Implemented in OpenCV with Gabriel Taubin. Estimation of planar curves, surfaces, and nonplanar space curves defined
+        /// by implicit equations with applications to edge and range image segmentation.
+        /// IEEE Transactions on Pattern Analysis and Machine Intelligence, 13(11):1115–1138, 1991.
+        ApproxMeanSquare
+    }
+
+    /// Returns position and radius of fitted circle. Also see fit_ellipse_ams; fit_ellipse_direct.
+    pub fn fit_ellipse(pts : &[(usize, usize)], method : Method) -> Result<Ellipse, String> {
         let pt_vec = convert_points(pts);
-        let rotated_rect = imgproc::fit_ellipse(&pt_vec)
-            .map_err(|e| format!("Ellipse fitting error ({})", e))?;
+        let rotated_rect = match method {
+            Method::LeastSquares => {
+                imgproc::fit_ellipse(&pt_vec)
+                    .map_err(|e| format!("Ellipse fitting error ({})", e))?
+            },
+            Method::Direct => {
+                imgproc::fit_ellipse_direct(&pt_vec)
+                    .map_err(|e| format!("Ellipse fitting error ({})", e))?
+            },
+            Method::ApproxMeanSquare => {
+                imgproc::fit_ellipse_direct(&pt_vec)
+                    .map_err(|e| format!("Ellipse fitting error ({})", e))?
+            }
+        };
         let center_pt = rotated_rect.center();
         if center_pt.y < 0.0 || center_pt.x < 0.0 {
             return Err(format!("Circle outside image boundaries"));

@@ -49,4 +49,7 @@ pub struct SparsePyrLK {
     ) -> Result<Ptr<dyn SparsePyrLKOpticalFlow>>
 }*/
 
+ Point2d 	cv::phaseCorrelate (InputArray src1, InputArray src2, InputArray window=noArray(), double *response=0)
+ 	The function is used to detect translational shifts that occur between two images. More...
+
 */

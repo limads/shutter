@@ -9,7 +9,7 @@ pub struct ColorStats {
 
 impl ColorStats {
 
-    pub fn calculate(win : &Window<'_, u8>, spacing : usize) -> Self {
+    pub fn calculate(win : &Window<'_, u8>, spacing : usize) -> Option<Self> {
         let mut avg : u64 = 0;
 
         let mut min = u8::MAX;
@@ -25,14 +25,18 @@ impl ColorStats {
                 max = *px;
             }
         }
-        let avg = (avg / n_px as u64) as u8;
+        if n_px >= 1 {
+            let avg = (avg / n_px as u64) as u8;
 
-        let mut absdev : u64 = 0;
-        for px in win.pixels(spacing) {
-            absdev += (*px as i16 - avg as i16).abs() as u64;
+            let mut absdev : u64 = 0;
+            for px in win.pixels(spacing) {
+                absdev += (*px as i16 - avg as i16).abs() as u64;
+            }
+            let absdev = (absdev / n_px) as u8;
+            Some(ColorStats { avg, absdev, min, max })
+        } else {
+            None
         }
-        let absdev = (absdev / n_px) as u8;
-        ColorStats { avg, absdev, min, max }
     }
 
 }
