@@ -12,6 +12,7 @@ use parry2d::shape::ConvexPolygon;
 use nalgebra::geometry::Point2;
 use std::cmp::Ordering;
 use parry2d::query::PointQuery;
+use std::borrow::Borrow;
 
 // #[cfg(feature="opencvlib")]
 // pub mod fgmm;
@@ -93,7 +94,7 @@ fn split_vertically() {
 
 impl Patch {
 
-    /// Starts a new patch, optionally with a pixel buffer to be recycled.
+    /// Starts a new patch.
     pub fn new(pt : (usize, usize), color : u8, scale : usize, img_height : usize ) -> Self {
         /*let pxs = if let Some(mut pxs) = pxs {
             pxs.clear();
@@ -666,14 +667,53 @@ pub struct PatchSegmentation {
 #[derive(Debug, Clone, Copy)]
 pub enum ColorMode {
 
-    Exact,
+    Exact(u8),
 
-    Above,
+    Above(u8),
 
-    Below,
+    Below(u8),
 
-    // Carries an absolute value tolerance
-    Within(u8)
+    // Carries a value and an absolute value tolerance around it
+    Within(u8, u8),
+
+    // Carries a value, an lower absolute tolerance and an upper absolute tolerance around it.
+    Between(u8, u8, u8)
+}
+
+impl ColorMode {
+
+    fn color(&self) -> u8 {
+        match &self {
+            ColorMode::Exact(c) => *c,
+            ColorMode::Above(c) => *c,
+            ColorMode::Below(c) => *c,
+            ColorMode::Within(c, _) => *c,
+            ColorMode::Between(c, _, _) => *c,
+        }
+    }
+
+    fn set_reference_color(&mut self, color : u8) {
+        match self {
+            ColorMode::Within(ref mut c, _) => *c = color,
+            ColorMode::Exact(ref mut c) => *c = color,
+            ColorMode::Above(ref mut c) => *c = color,
+            ColorMode::Below(ref mut c) => *c = color,
+            ColorMode::Between(ref mut c, _, _) => *c = color
+        }
+    }
+
+    fn matches(&self, px_color : u8) -> bool {
+        match self {
+            ColorMode::Within(color, tol) => ((px_color as i16 - *color as i16).abs() as u8) < *tol,
+            ColorMode::Exact(color) => px_color == *color,
+            ColorMode::Above(color) => px_color >= *color,
+            ColorMode::Below(color) => px_color <= *color,
+            ColorMode::Between(color, low_tol, high_tol) => {
+                px_color >= color.saturating_sub(*low_tol) && px_color <= color.saturating_add(*high_tol)
+            }
+        }
+    }
+
 }
 
 impl PatchSegmentation {
@@ -682,18 +722,27 @@ impl PatchSegmentation {
         Self { patches : Vec::with_capacity(16), px_spacing, n_patches : 0 }
     }
 
-    pub fn segment_all<'a>(&'a mut self, win : &WindowMut<'_, u8>) -> &'a [Patch] {
+    pub fn segment_all<'a>(&'a mut self, win : &WindowMut<'_, u8>, mode : ColorMode) -> &'a [Patch] {
         let src_win = unsafe { crate::image::create_immutable(&win) };
-        let n_patches = color_patches(&mut self.patches, &src_win, self.px_spacing);
+        let n_patches = color_patches(&mut self.patches, &src_win, self.px_spacing, mode);
         self.n_patches = n_patches;
         &self.patches[0..self.n_patches]
     }
 
     /// Returns only segments matching the given color.
-    pub fn segment_single_color<'a>(&'a mut self, win : &WindowMut<'_, u8>, color : u8, mode : ColorMode) -> &'a [Patch] {
+    pub fn segment_single_color<'a>(&'a mut self, win : &WindowMut<'_, u8>, mode : ColorMode) -> &'a [Patch] {
         let src_win = unsafe { crate::image::create_immutable(&win) };
-        let n_patches = single_color_patches(&mut self.patches, &src_win, self.px_spacing, color, mode);
+
+        // TODO remove this to avoid reallocating pixel vectors.
+        // self.patches.clear();
+
+        let n_patches = single_color_patches(&mut self.patches, &src_win, self.px_spacing, mode);
         self.n_patches = n_patches;
+        assert!(self.patches[0..self.n_patches].iter().all(|patch| patch.color == mode.color() ));
+        &self.patches[0..self.n_patches]
+    }
+
+    pub fn patches(&self) -> &[Patch] {
         &self.patches[0..self.n_patches]
     }
 
@@ -719,24 +768,30 @@ impl PatchSearch {
         let (left_patch_ix, top_patch_ix) : (Option<usize>, Option<usize>) = (None, None);
         Self { prev_row_patch_ixs, left_patch_ix, top_patch_ix, nrow, ncol }
     }
+
 }
 
 /// Search the image for disjoint color patches of a single user-specified color. If tol
 /// is informed, any pixel witin patch+- tol is considered. If not, only pixels with strictly
 /// the desired color are returned.
-pub fn single_color_patches(
+pub (crate) fn single_color_patches(
     patches : &mut Vec<Patch>,
     win : &Window<'_, u8>,
     px_spacing : usize,
-    color : u8,
     mode : ColorMode
 ) -> usize {
     let mut n_patches = 0;
+
+    /// TODO avoid reallocating this structure, which has Vec<usize>.
     let mut search = PatchSearch::new(win, px_spacing);
+
+    // TODO also avoid reallocating this structure.
     let mut prev_row_mask : Vec<bool> = Vec::with_capacity(search.ncol);
+
     for c in (0..search.ncol) {
         prev_row_mask.push(false);
     }
+
     for (ix, px) in win.pixels(px_spacing).enumerate() {
         let (r, c) = (ix / search.ncol, ix % search.ncol);
         let px_color = win[(r*px_spacing, c*px_spacing)];
@@ -745,19 +800,17 @@ pub fn single_color_patches(
         } else {
             None
         };
+
+        // The search is set to the previous entry at append_or_update_patch if matched.
         if c == 0 {
             search.left_patch_ix = None;
         }
+
         let merges_left = search.left_patch_ix.is_some();
         let merges_top = prev_row_mask[c];
-        let color_match = match mode {
-            ColorMode::Within(tol) => ((px_color as i16 - color as i16).abs() as u8) < tol,
-            ColorMode::Exact => px_color == color,
-            ColorMode::Above => px_color >= color,
-            ColorMode::Below => px_color <= color
-        };
+        let color_match = mode.matches(px_color);
         if color_match {
-            append_or_update_patch(patches, &mut search, &mut n_patches, win, merges_left, merges_top, r, c, color, px_spacing);
+            append_or_update_patch(patches, &mut search, &mut n_patches, win, merges_left, merges_top, r, c, mode.color(), px_spacing);
             prev_row_mask[c] = true;
         } else {
             prev_row_mask[c] = false;
@@ -771,7 +824,12 @@ pub fn single_color_patches(
 /// Returns up to which index of patches the new data is valid. We keep patches of a previous iteration
 /// so the pixel vectors within patches do not get reallocated. In the public API, we use this quantity
 /// to limit the index of the patch slice only to the points generated by the current iteration.
-pub fn color_patches(patches : &mut Vec<Patch>, win : &Window<'_, u8>, px_spacing : usize) -> usize {
+pub(crate) fn color_patches(
+    patches : &mut Vec<Patch>,
+    win : &Window<'_, u8>,
+    px_spacing : usize,
+    mut mode : ColorMode
+) -> usize {
 
     /*// Recycle previous pixel vectors to avoid reallocations
     let mut prev_pxs : Vec<Vec<(usize, usize)>> = patches
@@ -792,6 +850,8 @@ pub fn color_patches(patches : &mut Vec<Patch>, win : &Window<'_, u8>, px_spacin
         //prev_row_patch_ixs.insert(c, 0);
     //    prev_row_patch_ixs.push(0);
     // }
+
+    /// TODO avoid reallocating this structure, which has Vec<usize>.
     let mut search = PatchSearch::new(win, px_spacing);
 
     for (ix, px) in win.pixels(px_spacing).enumerate() {
@@ -799,12 +859,14 @@ pub fn color_patches(patches : &mut Vec<Patch>, win : &Window<'_, u8>, px_spacin
         let color = win[(r*px_spacing, c*px_spacing)];
 
         let might_merge_top = if r >= 1 {
-            color == win[((r-1)*px_spacing, c*px_spacing)]
+            mode.set_reference_color(win[((r-1)*px_spacing, c*px_spacing)]);
+            mode.matches(color)
         } else {
             false
         };
         let might_merge_left = if c >= 1 {
-            color == win[(r*px_spacing, (c-1)*px_spacing)]
+            mode.set_reference_color(win[(r*px_spacing, (c-1)*px_spacing)]);
+            mode.matches(color)
         } else {
             false
         };
@@ -908,6 +970,7 @@ fn append_or_update_patch(
                 patches[*n_patches].outer_rect = (r, c, 1, 1);
                 patches[*n_patches].color = color;
                 patches[*n_patches].scale = px_spacing;
+                patches[*n_patches].img_height = win.height();
             } else {
                 patches.push(Patch::new((r, c), color, px_spacing, win.height()));
             }
@@ -925,7 +988,15 @@ fn merge_left_to_top_patch(patches : &mut Vec<Patch>, search : &mut PatchSearch,
     patches[search.top_patch_ix.unwrap()].expand(&left_patch.pxs);
 
     // Remove old left patch (now merged with top).
-    patches.swap_remove(search.left_patch_ix.unwrap());
+    // TODO if patches still contains data from the previous iteration, we will swap with a junk patch here.
+    // patches.swap_remove(search.left_patch_ix.unwrap());
+    patches.remove(search.left_patch_ix.unwrap());
+
+    if let Some(ref mut ix) = search.top_patch_ix {
+        if *ix > search.left_patch_ix.unwrap() {
+            *ix -= 1;
+        }
+    }
 
     for mut ix in search.prev_row_patch_ixs.iter_mut() {
 
@@ -938,15 +1009,19 @@ fn merge_left_to_top_patch(patches : &mut Vec<Patch>, search : &mut PatchSearch,
         // Everything pointing to last patch index now points to
         // the old left patch, since we did a swap remove.
         // n_patches here still refer to the previous iteration
-        if *ix == (*n_patches - 1) {
-            *ix = search.left_patch_ix.unwrap();
+        // if *ix == (*n_patches - 1) {
+        //    *ix = search.left_patch_ix.unwrap();
+        // }
+        if *ix > search.left_patch_ix.unwrap() {
+            *ix -= 1;
         }
     }
 
-    if search.top_patch_ix.unwrap() == (*n_patches - 1) {
-        search.top_patch_ix = Some(search.left_patch_ix.unwrap());
-    }
-    *n_patches -= 1
+    // if search.top_patch_ix.unwrap() == (*n_patches - 1) {
+    //    search.top_patch_ix = Some(search.left_patch_ix.unwrap());
+    // }
+
+    *n_patches -= 1;
 }
 
 #[test]
@@ -1040,10 +1115,23 @@ pub fn binary_patches(label_win : &Window<'_, u8>, px_spacing : usize) -> Vec<Bi
     patches
 }
 
+fn flatten_to_8bit(v : &f64) -> u8 {
+    v.max(0.0).min(255.0) as u8
+}
+
 /// Transform each cluster mean to a valid 8-bit color value.
-pub fn extract_colors(km : &KMeans) -> Vec<u8> {
+pub fn extract_mean_colors(km : &KMeans) -> Vec<u8> {
     km.means()
-        .map(|m| m[0].max(0.0).min(255.0) as u8 )
+        .map(|m| flatten_to_8bit(&m[0]) )
+        .collect::<Vec<_>>()
+}
+
+pub fn extract_extreme_colors(
+    km : &KMeans,
+    sample : impl Iterator<Item=impl Borrow<[f64]>> + Clone
+) -> Vec<(u8, u8)> {
+    (0..km.means().count()).map(|ix| bayes::fit::cluster::extremes(&km, sample.clone(), ix).unwrap() )
+        .map(|(low, high)| (flatten_to_8bit(&low), flatten_to_8bit(&high)) )
         .collect::<Vec<_>>()
 }
 
@@ -1065,7 +1153,7 @@ pub fn segment_colors(win : &Window<'_, u8>, px_spacing : usize, n_colors : usiz
 
 pub fn segment_colors_to_image(win : &Window<'_, u8>, px_spacing : usize, n_colors : usize) -> Image<u8> {
     let km = segment_colors(win, px_spacing, n_colors);
-    let colors = extract_colors(&km);
+    let colors = extract_mean_colors(&km);
     let ncol = win.width() / px_spacing;
     Image::from_vec(
         km.allocations().iter().map(|alloc| colors[*alloc] ).collect(),

@@ -334,7 +334,8 @@ fn filter_single(
     let n = found.len();
 
     while i <= n-2 {
-        if let Ok(group_sz) = define_if_sequence_close(found, i, 8, 16, check_single_closeness) {
+        // if let Ok(group_sz) = define_if_sequence_close(found, i, 8, 16, check_single_closeness) {
+        if let Ok(group_sz) = define_if_sequence_close(found, i, 4, 36, check_single_closeness) {
             update_groups_vector(found, groups, i..i+group_sz, are_single_groups_aligned);
             i += group_sz;
         } else {
@@ -352,8 +353,8 @@ fn filter_single(
     }
 }
 
-/// Gets the bottom row and current row as long as the left and right samples are sufficiently
-/// close, irrespective of their position in the iris.
+/// Gets the bottom row and current raster row as long as the left and right samples
+/// in the raster line are sufficiently close, irrespective of their absolute position.
 fn filter_pairs(
     filtered : &mut Vec<(usize, usize)>,
     groups : &mut Vec<std::ops::Range<usize>>,

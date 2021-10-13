@@ -8,6 +8,7 @@ use simba::simd::{AutoSimd};
 use std::convert::TryFrom;
 use crate::segmentation::{self, Patch, BinaryPatch, Neighborhood};
 use itertools::Itertools;
+use crate::segmentation::ColorMode;
 
 #[cfg(feature="opencvlib")]
 use opencv::core;
@@ -715,7 +716,7 @@ impl<'a> Window<'a, u8> {
     /// Extract contiguous image regions of homogeneous color.
     pub fn patches(&self, px_spacing : usize) -> Vec<Patch> {
         let mut patches = Vec::new();
-        segmentation::color_patches(&mut patches, self, px_spacing);
+        segmentation::color_patches(&mut patches, self, px_spacing, ColorMode::Exact(0));
         patches
     }
 
@@ -1029,7 +1030,7 @@ impl WindowMut<'_, u8> {
             }
         };
         let mut patches = Vec::new();
-        segmentation::color_patches(&mut patches, &src_win, px_spacing);
+        segmentation::color_patches(&mut patches, &src_win, px_spacing, ColorMode::Exact(0));
         patches
     }
 
