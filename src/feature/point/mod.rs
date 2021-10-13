@@ -448,4 +448,6 @@ pub fn is_single_group_enclosing_rect_vertical(found : &[(usize, usize)],group :
     rect_ratio > 1.0
 }
 
-
+// TODO calculate outer (enclosing) circle for a set of points as:
+// (1) Get largest point distance. This is the diameter.
+// (2) Set center as halfway of this distance.

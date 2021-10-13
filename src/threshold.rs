@@ -1,7 +1,7 @@
 use crate::image::*;
 
 /// Represents an interval over the 8-bit intensity level.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Copy)]
 pub struct Threshold {
     pub min : u8,
     pub max : u8

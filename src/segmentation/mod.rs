@@ -92,7 +92,133 @@ fn split_vertically() {
     println!("{:?}", patch.try_split_vertically(4, (4, 4)));
 }
 
+/// Returns the pixel that centralizes the given color. If this color is distributed
+/// in a homogeneous region, the center can be used as a seed for the patch.
+/// If pixels matches mode not exactly, pixels are weighted in the inverse proportion of the target color.
+pub fn color_momentum(win : &Window<'_, u8>, px_spacing : usize, mode : ColorMode) -> Option<(usize, usize)> {
+    let (mut sum_r, mut sum_c) = (0.0, 0.0);
+    let mut n_matches = 0;
+    for (r, c, color) in win.labeled_pixels(px_spacing) {
+        if mode.matches(color) {
+            // let dist = (color as i16 mode.color() as i16).abs() as u8;
+            /*let weight = if dist == 0 {
+                1.0
+            } else {
+                1. / dist as f64 - (mode.absolute_tolerance() as f64 / 2.)
+            };*/
+            sum_r += r as f64; //* weight;
+            sum_c += c as f64; //* weight;
+            n_matches += 1;
+        }
+    }
+    if n_matches >= 1 {
+        Some(((sum_r / n_matches as f64) as usize, (sum_c / n_matches as f64) as usize))
+    } else {
+        None
+    }
+}
+
+#[test]
+fn momentum() {
+    let mut img = Image::new_constant(24, 24, 0);
+    for r in 8..16 {
+        for c in 8..16 {
+            img[(r, c)] = 1;
+        }
+    }
+    println!("{:?}", color_momentum(&img.full_window(), 1, ColorMode::Exact(1)));
+}
+
+#[test]
+fn patch_growth() {
+    let mut img = Image::new_constant(24, 24, 0);
+    for r in 8..16 {
+        for c in 8..16 {
+            img[(r, c)] = 1;
+        }
+    }
+    println!("{:?}", Patch::grow(&img.full_window(), (11, 11), ColorMode::Exact(1)));
+}
+
+/// Extract a single patch, using the color momentum as seed.
+pub fn main_patch(win : &Window<'_, u8>, px_spacing : usize, mode : ColorMode) -> Option<Patch> {
+    let seed = color_momentum(win, px_spacing, mode)?;
+    Some(Patch::grow(win, seed, mode))
+}
+
 impl Patch {
+
+    /// Grows a patch from a pixel seed.
+    pub fn grow(win : &Window<'_, u8>, seed : (usize, usize), mut mode : ColorMode) -> Self {
+        let mut patch = Patch::new(seed, win[seed], 1, win.height());
+        mode.set_reference_color(win[seed]);
+
+        let (mut grows_left, mut grows_top, mut grows_right, mut grows_bottom) = (true, true, true, true);
+
+        let mut abs_dist = 1;
+        loop {
+            let left = if grows_left { seed.1.checked_sub(abs_dist) } else { None };
+            let top = if grows_top { seed.0.checked_sub(abs_dist) } else { None };
+            let right = if grows_right {
+                if seed.1 + abs_dist < win.width() { Some(seed.1 + abs_dist) } else { None }
+            } else {
+                None
+            };
+            let bottom = if grows_bottom {
+                if seed.0 + abs_dist < win.height() { Some(seed.0 + abs_dist) } else { None }
+            } else {
+                None
+            };
+
+            let mut grows_top = false;
+            if let Some(r) = top {
+                for c in seed.1.saturating_sub(abs_dist)..((seed.1+abs_dist+1).min(win.width())) {
+                    if mode.matches(win[(r, c)]) && (patch.pixel_is_above((r, c)) || patch.pixel_is_left((r, c)) || patch.pixel_is_right((r, c)) ) {
+                        patch.expand(&[(r, c)]);
+                        grows_top = true;
+                    }
+                }
+            }
+
+            let mut grows_bottom = false;
+            if let Some(r) = bottom {
+                for c in seed.1.saturating_sub(abs_dist)..((seed.1+abs_dist+1).min(win.width())) {
+                    if mode.matches(win[(r, c)]) && (patch.pixel_is_below((r, c)) || patch.pixel_is_left((r, c)) || patch.pixel_is_right((r, c)) ) {
+                        patch.expand(&[(r, c)]);
+                        grows_bottom = true;
+                    }
+                }
+            }
+
+            let mut grows_left = false;
+            if let Some(c) = left {
+                for r in seed.0.saturating_sub(abs_dist-1)..((seed.0+abs_dist).min(win.height())) {
+                    if mode.matches(win[(r, c)]) && (patch.pixel_is_left((r, c)) || patch.pixel_is_above((r, c)) || patch.pixel_is_below((r, c)) ) {
+                        patch.expand(&[(r, c)]);
+                        grows_left = true;
+                    }
+                }
+            }
+
+            let mut grows_right = false;
+            if let Some(c) = left {
+                for r in seed.0.saturating_sub(abs_dist-1)..((seed.0+abs_dist).min(win.height())) {
+                    if mode.matches(win[(r, c)]) && (patch.pixel_is_right((r, c)) || patch.pixel_is_above((r, c)) || patch.pixel_is_below((r, c)) ) {
+                        patch.expand(&[(r, c)]);
+                        grows_right = true;
+                    }
+                }
+            }
+
+            if !grows_left && !grows_right && !grows_bottom && !grows_top {
+                return patch;
+            }
+
+            abs_dist += 1;
+        }
+
+        patch
+    }
 
     /// Starts a new patch.
     pub fn new(pt : (usize, usize), color : u8, scale : usize, img_height : usize ) -> Self {
@@ -275,15 +401,15 @@ impl Patch {
         let rect_r = self.outer_rect.0 + self.outer_rect.2;
 
         // First is true when first pixel at row is being inserted; second after.
-        let is_below = (rect_r == r || rect_r == r+1);
+        // let is_below = (rect_r == r || rect_r == r+1);
 
         // assert!(self.pxs.is_sorted_by(|a, b| a.0.partial_cmp(&b.0 )));
 
         r >= 1 &&
-            is_below &&
+            // is_below &&
             self.outer_rect.1 <= c &&
             self.outer_rect.1 + self.outer_rect.3 >= c &&
-            self.pxs.iter().rev().take_while(|px| px.0 >= r-1 ).any(|px| px.0 == r-1 && px.1 == c )
+            self.pxs.iter().rev() /*.take_while(|px| px.0 >= r-1 ).*/ .any(|px| (px.0 == r || px.0 == r-1) && px.1 == c )
     }
 
     pub fn pixel_is_right(&self, (r, c) : (usize, usize)) -> bool {
@@ -291,33 +417,59 @@ impl Patch {
         let rect_c = self.outer_rect.1 + self.outer_rect.3;
 
         // First is true when first pixel at col is being inserted; second after.
-        let is_right = (rect_c == c || rect_c == c+1);
+        // let is_right = (rect_c == c || rect_c == c+1);
         c >= 1 &&
-            is_right &&
+            // is_right &&
             self.outer_rect.0 <= r &&
             self.outer_rect.0 + self.outer_rect.2 >= r &&
-            self.pxs.iter().rev().any(|px|  px.0 == r && px.1 == c-1 )
+            self.pxs.iter().rev().any(|px| px.0 == r && (px.1 == c || px.1 == c-1) )
+    }
+
+    pub fn pixel_is_left(&self, (r, c) : (usize, usize)) -> bool {
+        let is_left = self.outer_rect.1 > 0 && self.outer_rect.1 - 1 == c;
+        is_left &&
+        self.outer_rect.0 <= r &&
+        self.outer_rect.0 + self.outer_rect.2 >= r &&
+        self.pxs.iter().rev().any(|px| px.0 == r && (px.1 == c || px.1 == c+1) )
+    }
+
+    pub fn pixel_is_above(&self, (r, c) : (usize, usize)) -> bool {
+        let is_above = self.outer_rect.0 > 0 && self.outer_rect.0 - 1 == r;
+        is_above &&
+        self.outer_rect.1 <= c &&
+        self.outer_rect.1 + self.outer_rect.3 >= c &&
+        self.pxs.iter().rev() /*.take_while(|px| px.0 >= r-1 ).*/ .any(|px| (px.0 == r || px.0 == r+1) && px.1 == c )
     }
 
     pub fn expand(&mut self, pts : &[(usize, usize)]) {
         for pt in pts.iter() {
             self.pxs.push(*pt);
             if pt.0 < self.outer_rect.0 {
+                self.outer_rect.2 = self.outer_rect.2 + (self.outer_rect.0 - pt.0);
                 self.outer_rect.0 = pt.0;
-                self.outer_rect.2 = (pt.0 - self.outer_rect.0)+1;
+
+                // self.outer_rect.2 = (pt.0 - self.outer_rect.0)+1;
             }
             if pt.1 < self.outer_rect.1 {
+                self.outer_rect.3 = self.outer_rect.3 + (self.outer_rect.1 - pt.1);
                 self.outer_rect.1 = pt.1;
-                self.outer_rect.3 = (pt.1 - self.outer_rect.1)+1;
+                // self.outer_rect.3 = (pt.1 - self.outer_rect.1)+1;
             }
-            let new_h = (pt.0 - self.outer_rect.0)+1;
+            if pt.0 > self.outer_rect.0 + self.outer_rect.2 {
+                self.outer_rect.2 = pt.0 - self.outer_rect.0;
+            }
+            if pt.1 > self.outer_rect.1 + self.outer_rect.3 {
+                self.outer_rect.3 = pt.1 - self.outer_rect.1;
+            }
+
+            /*let new_h = (pt.0 - self.outer_rect.0)+1;
             let new_w = (pt.1 - self.outer_rect.1)+1;
             if new_h > self.outer_rect.2 {
                 self.outer_rect.2 = new_h;
             }
             if new_w > self.outer_rect.3 {
                 self.outer_rect.3 = new_w;
-            }
+            }*/
 
             // When adding more than one point, we are merging two
             // patches. In this case, we must guarantee that row order
@@ -682,6 +834,16 @@ pub enum ColorMode {
 
 impl ColorMode {
 
+    fn absolute_tolerance(&self) -> u8 {
+        match &self {
+            ColorMode::Exact(c) => 1,
+            ColorMode::Above(c) => 255 - *c,
+            ColorMode::Below(c) => *c,
+            ColorMode::Within(c, tol) => c.saturating_add(*tol) - c.saturating_sub(*tol),
+            ColorMode::Between(c, low_tol, high_tol) => c.saturating_add(*high_tol) - c.saturating_sub(*low_tol),
+        }
+    }
+
     fn color(&self) -> u8 {
         match &self {
             ColorMode::Exact(c) => *c,
@@ -786,15 +948,15 @@ pub (crate) fn single_color_patches(
     let mut search = PatchSearch::new(win, px_spacing);
 
     // TODO also avoid reallocating this structure.
-    let mut prev_row_mask : Vec<bool> = Vec::with_capacity(search.ncol);
+    let mut prev_row_mask : Vec<bool> = Vec::with_capacity(win.width());
 
-    for c in (0..search.ncol) {
+    for c in (0..win.width()) {
         prev_row_mask.push(false);
     }
 
-    for (ix, px) in win.pixels(px_spacing).enumerate() {
-        let (r, c) = (ix / search.ncol, ix % search.ncol);
-        let px_color = win[(r*px_spacing, c*px_spacing)];
+    for (r, c, px_color) in win.labeled_pixels(px_spacing) {
+        // let (r, c) = (ix / win.width(), ix % win.width());
+        // let px_color = win[(r*px_spacing, c*px_spacing)];
         search.top_patch_ix = if r >= 1 && prev_row_mask[c] {
             Some(search.prev_row_patch_ixs[c])
         } else {
@@ -854,9 +1016,9 @@ pub(crate) fn color_patches(
     /// TODO avoid reallocating this structure, which has Vec<usize>.
     let mut search = PatchSearch::new(win, px_spacing);
 
-    for (ix, px) in win.pixels(px_spacing).enumerate() {
-        let (r, c) = (ix / search.ncol, ix % search.ncol);
-        let color = win[(r*px_spacing, c*px_spacing)];
+    for (r, c, color) in win.labeled_pixels(px_spacing) {
+        // let (r, c) = (ix / win.width(), ix % win.width());
+        // let color = win[(r*px_spacing, c*px_spacing)];
 
         let might_merge_top = if r >= 1 {
             mode.set_reference_color(win[((r-1)*px_spacing, c*px_spacing)]);

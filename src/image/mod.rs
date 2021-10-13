@@ -433,6 +433,13 @@ where
 
 }
 
+fn shrink_to_divisor(mut n : usize, by : usize) -> usize {
+    while n % by != 0 {
+        n -= 1;
+    }
+    n
+}
+
 impl<'a, N> Window<'a, N>
 where
     N : Scalar + Mul<Output=N> + MulAssign + Copy
@@ -455,6 +462,12 @@ where
         } else {
             None
         }
+    }
+
+    pub fn shrink_to_subsample(&'a self, by : usize) -> Option<Window<'a, N>> {
+        let height = shrink_to_divisor(self.height(), by);
+        let width = shrink_to_divisor(self.width(), by);
+        self.sub_window((0, 0), (height, width))
     }
 
     /// Creates a window that cover the whole slice src, assuming it represents a square image.
@@ -541,6 +554,14 @@ where
         let tl = self.offset.0 * stride + self.offset.1;
         let start = tl + ix*stride;
         Some(&self.win[start..(start+self.win_sz.1)])
+    }
+
+    pub fn column(&'a self, ix : usize) -> Option<impl Iterator<Item=N> + 'a > {
+        if ix < self.width() {
+            Some(self.rows().map(move |row| row[ix] ))
+        } else {
+            None
+        }
     }
 
     /// Iterates over pairs of pixels within a row, carrying the column index of the left element at first position
@@ -712,6 +733,17 @@ impl<'a> Iterator for PackedIterator<'a, u8> {
 }*/
 
 impl<'a> Window<'a, u8> {
+
+    /// Returns iterator over (subsampled row index, subsampled col index, pixel color).
+    pub fn labeled_pixels(&'a self, px_spacing : usize) -> impl Iterator<Item=(usize, usize, u8)> +'a {
+        self.pixels(px_spacing)
+            .enumerate()
+            .map(move |(ix, px)| {
+                let (r, c) = (ix / self.width(), ix % self.width());
+                // win[(r*px_spacing, c*px_spacing)]) )
+                (r, c, *px)
+            })
+    }
 
     /// Extract contiguous image regions of homogeneous color.
     pub fn patches(&self, px_spacing : usize) -> Vec<Patch> {

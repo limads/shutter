@@ -595,6 +595,3 @@ pub mod cvellipse {
 
 // pub enum EllipseError {
 // }
-
-
-

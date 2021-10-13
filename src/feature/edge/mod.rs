@@ -94,7 +94,7 @@ impl Into<Vec<(usize, usize)>> for Edge {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct EdgeThreshold {
     pub lower : Threshold,
     pub upper : Threshold
