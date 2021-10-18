@@ -3,6 +3,8 @@
 
 // pub(crate) mod foreign;
 
+// pub mod histogram;
+
 // Scalar image operations
 pub mod scalar;
 

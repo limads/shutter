@@ -63,3 +63,9 @@ IppStatus ippiDCT8x8Inv_2x2_16s_C1(const Ipp16s* pSrc, Ipp16s* pDst );
 // TODO use image_conv::convolution(&img, filter, 1, PaddingType::UNIFORM(1)); with custom filters.
 // mss_saliency = "1.0.6" for salient portion extraction.
 */
+
+// Separability of Kernels (Szelisky, p. 116, after Perona, 1995). If SVD of the 2d kernel matrix has only
+// the first singular value not zeroed, then the Kernel is separable into \sqrt \sigma_0 u_0 (vertical)
+// and \sqrt \sigma_0 v_0^T (horizontal) kernels.
+
+

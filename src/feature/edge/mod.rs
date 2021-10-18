@@ -2,6 +2,7 @@ use crate::threshold::Threshold;
 use crate::image::Window;
 use crate::image::iter;
 use crate::feature::shape::Polygon;
+use std::default::Default;
 
 // An edge is a Vec<(usize, usize)>. Two edges intersect if at least one
 // of the instances of the cartesian product of their sub-edges (neighboring pairs of points forming edges of size 2)
@@ -94,7 +95,7 @@ impl Into<Vec<(usize, usize)>> for Edge {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct EdgeThreshold {
     pub lower : Threshold,
     pub upper : Threshold

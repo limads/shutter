@@ -2,6 +2,7 @@ use opencv::{core, imgproc};
 use crate::image::*;
 use nalgebra::Scalar;
 use std::fmt::Debug;
+use num_traits::Zero;
 
 #[derive(Clone, Debug)]
 pub enum MorphShape {
@@ -45,7 +46,7 @@ where
 
 impl<P> Erosion<P>
 where
-    P : Scalar + From<u8> + Debug + Copy + Default
+    P : Scalar + From<u8> + Debug + Copy + Default + Zero
 {
 
     pub fn new(img_sz : (usize, usize), kernel_sz : usize, shape : MorphShape, iterations : usize) -> Self {
@@ -85,7 +86,7 @@ where
 
 impl<P> Dilation<P>
 where
-    P : Scalar + From<u8> + Debug + Copy + Default
+    P : Scalar + From<u8> + Debug + Copy + Default + Zero
 {
 
     pub fn new(img_sz : (usize, usize), kernel_sz : usize, shape : MorphShape, iterations : usize) -> Self {

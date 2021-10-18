@@ -5,6 +5,7 @@ use crate::image::*;
 use nalgebra::*;
 use std::fmt::Debug;
 use std::any::Any;
+use num_traits::Zero;
 
 pub struct TemplateSearch<T>
 where
@@ -17,7 +18,7 @@ where
 
 impl<T> TemplateSearch<T>
 where
-    T : Scalar + Debug + Copy + Default
+    T : Scalar + Debug + Copy + Default + Zero
 {
 
     /// Returns local maxima over regions with the given size.

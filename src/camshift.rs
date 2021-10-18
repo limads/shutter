@@ -1,15 +1,5 @@
 use nalgebra::*;
 
-/// Calculates the intensity histogram of the image read.
-/// Always return a 256-sized vector of bit values.
-pub histogram(pixels : &[u8]) -> DVector<u8> {
-    let mut hist : DVector<u8> = DVector::from_element(256, 0);
-    for px in pixels {
-        hist[px] += 1;
-    }
-    hist
-}
-
 /// Binary threshold over the passed image. Writes byte value 255 if above threshold,
 /// and writes byte value 0 otherwise.
 pub binary_threshold(pixels : &DMatrix<u8>, thr : u8) -> DMatrix<u8> {
@@ -34,7 +24,7 @@ pub partition_threshold(
 /// Binary threshold that considers a match if the pixel intensity value is +-tol around
 /// the intensity histogram peak value.
 pub backproject(pixels : &DMatrix<u8>, tol : u8) -> DMatrix<u8> {
-    let hist = histogram(pixels.as_slice());
+    let hist = crate::histogram::histogram(pixels.as_slice());
     let peak = hist.iamax_full();
     let thr_min = (peak - tol).min(0);
     let thr_max = (peak + tol).max(255);

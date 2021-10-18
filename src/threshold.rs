@@ -1,10 +1,19 @@
 use crate::image::*;
+use std::default::Default;
 
 /// Represents an interval over the 8-bit intensity level.
 #[derive(Clone, Debug, Copy)]
 pub struct Threshold {
     pub min : u8,
     pub max : u8
+}
+
+impl Default for Threshold {
+
+    fn default() -> Self {
+        Self { min : 0, max : 255 }
+    }
+
 }
 
 /// Ouptuts a 0-bit (0 OR 255) binary umage

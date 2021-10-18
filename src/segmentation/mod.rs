@@ -13,6 +13,7 @@ use nalgebra::geometry::Point2;
 use std::cmp::Ordering;
 use parry2d::query::PointQuery;
 use std::borrow::Borrow;
+use crate::feature::point;
 
 // #[cfg(feature="opencvlib")]
 // pub mod fgmm;
@@ -22,7 +23,10 @@ use std::borrow::Borrow;
 
 /// The most general patch is a set of pixel positions with a homogeneous color
 /// and a scale that was used for extraction. The patch is assumed to be
-/// homonegeneous within a pixel spacing given by the scale field.
+/// homonegeneous within a pixel spacing given by the scale field. TODO if the
+/// patch is dense (has no holes in it), we can represent it with another
+/// structure called contour, holding only external boundray pixels. If the patch
+/// has holes, we must represent all pixels with this patch structure.
 #[derive(Clone, Debug, Default)]
 pub struct Patch {
     // Instead of storing all pixels, we can store a rect and only
@@ -92,6 +96,18 @@ fn split_vertically() {
     println!("{:?}", patch.try_split_vertically(4, (4, 4)));
 }
 
+/*pub fn color_limit(win : &Window<'_, u8>, row : usize, center : usize, px_spacing : usize, max_diff : u8) -> (usize, usize) {
+    win.horizontal_pixel_pairs(row, comp_dist)
+        .take_while(|(c, px_a, px_b)|
+            if c < center {
+
+            } else {
+            if c > center {
+
+            }
+        )
+}*/
+
 /// Returns the pixel that centralizes the given color. If this color is distributed
 /// in a homogeneous region, the center can be used as a seed for the patch.
 /// If pixels matches mode not exactly, pixels are weighted in the inverse proportion of the target color.
@@ -118,6 +134,47 @@ pub fn color_momentum(win : &Window<'_, u8>, px_spacing : usize, mode : ColorMod
     }
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum Strategy {
+    Eager,
+    Conservative(usize)
+}
+
+/// Calculates the color momentum, but if the momentum pixel is not at a valid color,
+/// position the momentum to the closest pixel that also matches it.
+pub fn adjusted_color_momentum(
+    win : &Window<'_, u8>,
+    px_spacing : usize,
+    mode : ColorMode,
+    strategy : Strategy
+) -> Option<(usize, usize)> {
+    let mom = color_momentum(win, px_spacing, mode)?;
+
+    let mut found = Vec::new();
+
+    if mode.matches(win[mom]) && strategy == Strategy::Eager {
+        Some(mom)
+    } else {
+        for (px_pos, px) in win.expanding_pixels(mom, px_spacing) {
+            if mode.matches(*px) {
+                match strategy {
+                    Strategy::Eager => {
+                        return Some(px_pos);
+                    },
+                    Strategy::Conservative(n_required) => {
+                        found.push(px_pos);
+                        if found.len() == n_required {
+                            let stats = point::PointStats::calculate(&found[..]);
+                            return Some(stats.centroid);
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+}
+
 #[test]
 fn momentum() {
     let mut img = Image::new_constant(24, 24, 0);
@@ -137,87 +194,293 @@ fn patch_growth() {
             img[(r, c)] = 1;
         }
     }
-    println!("{:?}", Patch::grow(&img.full_window(), (11, 11), ColorMode::Exact(1)));
+
+    /*img[(6,5)] = 1;
+    img[(6,6)] = 1;
+    img[(7,5)] = 1;
+    img[(7,6)] = 1;
+    img[(7,7)] = 1;
+    img[(7,8)] = 1;*/
+
+    println!("{:?}", Patch::grow(&img.full_window(), (11, 11), 1, ColorMode::Exact(1), None));
 }
 
 /// Extract a single patch, using the color momentum as seed.
-pub fn main_patch(win : &Window<'_, u8>, px_spacing : usize, mode : ColorMode) -> Option<Patch> {
+pub fn extract_main_patch(win : &Window<'_, u8>, px_spacing : usize, mode : ColorMode) -> Option<Patch> {
     let seed = color_momentum(win, px_spacing, mode)?;
-    Some(Patch::grow(win, seed, mode))
+    Some(Patch::grow(win, seed, 1, mode, None)).unwrap()
 }
+
+#[derive(Default, Clone)]
+struct RowPair {
+    curr : Vec<(usize, usize)>,
+    past : Vec<(usize, usize)>
+}
+
+impl RowPair {
+
+    fn new(px : (usize, usize)) -> Self {
+        let (curr, mut past) = (Vec::with_capacity(64), Vec::with_capacity(64));
+        past.push(px);
+        Self { curr, past }
+    }
+
+}
+
+#[derive(Default)]
+struct ExpandingPatch {
+    top : RowPair,
+    left : RowPair,
+    bottom : RowPair,
+    right : RowPair
+}
+
+impl ExpandingPatch {
+
+    fn new(px : (usize, usize)) -> Self {
+        let pair = RowPair::new(px);
+        Self {
+            top : pair.clone(),
+            left : pair.clone(),
+            bottom : pair.clone(),
+            right : pair
+        }
+    }
+
+}
+
+fn pixel_horizontally_aligned_to_rect(outer_rect : &(usize, usize, usize, usize), (r, c) : (usize, usize)) -> bool {
+    r >= outer_rect.0 /*.saturating_sub(1)*/ &&
+        r <= (outer_rect.0 + outer_rect.2) /*.saturating_add(1)*/
+}
+
+fn pixel_vertically_aligned_to_rect(outer_rect : &(usize, usize, usize, usize), (r, c) : (usize, usize)) -> bool {
+    c >= outer_rect.1 /*.saturating_sub(1)*/  &&
+        c <= (outer_rect.1 + outer_rect.3) /*.saturating_add(1)*/
+}
+
+fn pixel_to_right_of_rect(outer_rect : &(usize, usize, usize, usize), (r, c) : (usize, usize)) -> bool {
+    pixel_horizontally_aligned_to_rect(outer_rect, (r, c))
+}
+
+fn pixel_to_left_of_rect(outer_rect : &(usize, usize, usize, usize), (r, c) : (usize, usize)) -> bool {
+    pixel_horizontally_aligned_to_rect(outer_rect, (r, c))
+}
+
+fn pixel_above_rect(outer_rect : &(usize, usize, usize, usize), (r, c) : (usize, usize)) -> bool {
+    pixel_vertically_aligned_to_rect(outer_rect, (r, c))
+}
+
+fn pixel_below_rect(outer_rect : &(usize, usize, usize, usize), (r, c) : (usize, usize)) -> bool {
+    pixel_horizontally_aligned_to_rect(outer_rect, (r, c))
+}
+
+fn pixel_neighbors_row(row : &[(usize, usize)], px : (usize, usize)) -> bool {
+    row.binary_search_by(|row_px|
+        if (row_px.1 as i16 - px.1 as i16).abs() <= 1 {
+            Ordering::Equal
+        } else {
+            row_px.1.cmp(&px.1)
+        }
+    ).is_ok()
+}
+
+fn pixel_neighbors_col(col : &[(usize, usize)], px : (usize, usize)) -> bool {
+    col.binary_search_by(|col_px|
+        if (col_px.0 as i16 - px.0 as i16).abs() <= 1 {
+            Ordering::Equal
+        } else {
+            col_px.0.cmp(&px.0)
+        }
+    ).is_ok()
+}
+
+fn pixel_neighbors_last_at_row(row : &[(usize, usize)], px : (usize, usize)) -> bool {
+    row.last().map(|last| (last.1 as i16 - px.1 as i16).abs() <= 1 ).unwrap_or(false)
+}
+
+fn pixel_neighbors_last_at_col(col : &[(usize, usize)], px : (usize, usize)) -> bool {
+    col.last().map(|last| (last.0 as i16 - px.0 as i16).abs() <= 1 ).unwrap_or(false)
+}
+
+fn pixel_neighbors_top(exp_patch : &ExpandingPatch, px : (usize, usize)) -> bool {
+    pixel_neighbors_last_at_row(&exp_patch.top.curr[..], px) ||
+        pixel_neighbors_row(&exp_patch.top.past[..], px)
+}
+
+fn pixel_neighbors_left(exp_patch : &ExpandingPatch, px : (usize, usize)) -> bool {
+    pixel_neighbors_last_at_col(&exp_patch.left.curr[..], px) ||
+        pixel_neighbors_col(&exp_patch.left.past[..], px)
+}
+
+fn pixel_neighbors_bottom(exp_patch : &ExpandingPatch, px : (usize, usize)) -> bool {
+    pixel_neighbors_last_at_row(&exp_patch.bottom.curr[..], px) ||
+        pixel_neighbors_row(&exp_patch.bottom.past[..], px)
+}
+
+fn pixel_neighbors_right(exp_patch : &ExpandingPatch, px : (usize, usize)) -> bool {
+    pixel_neighbors_last_at_col(&exp_patch.right.curr[..], px) ||
+        pixel_neighbors_col(&exp_patch.right.past[..], px)
+}
+
+// Dense strategy here.
+// TODO to build patch with only the external contour, verify which elements
+// past_row and curr_row have in common. Drop all elements of past_row that also
+// are present in current row, and push current_row and all remaining elements of
+// past_row that were not dropped. Perhaps we can make this function generic over which
+// allocation strategy to self.pxs we use here.
+fn expand_dense_patch(exp_patch : &mut ExpandingPatch, patch : &mut Patch, outer_rect : (usize, usize, usize, usize)) {
+    for ext in [&mut exp_patch.top, &mut exp_patch.left, &mut exp_patch.bottom, &mut exp_patch.right] {
+        if patch.pxs.len() > 1 || ext.past.get(0).cloned() != Some((patch.pxs[0])) {
+            // TODO do this extend for dense patches.
+            // patch.pxs.extend(ext.past.drain(..));
+
+            // Do this for sparse patches.
+            ext.past.clear();
+        }
+        patch.outer_rect = outer_rect;
+        mem::swap(&mut ext.curr, &mut ext.past);
+    }
+}
+
+/*pub fn expand_contour_patch(exp_patch : &mut ExpandingPatch, patch : &mut Patch, outer_rect : (usize, usize, usize, usize)) {
+    for ext in [&mut exp_patch.top, &mut exp_patch.left, &mut exp_patch.bottom, &mut exp_patch.right] {
+        if patch.pxs.len() > 1 || ext.past.get(0).cloned() != Some((patch.pxs[0])) {
+            patch.pxs.extend(ext.past.drain(..));
+        }
+        patch.outer_rect = outer_rect;
+        mem::swap(&mut ext.curr, &mut ext.past);
+    }
+}*/
 
 impl Patch {
 
     /// Grows a patch from a pixel seed.
-    pub fn grow(win : &Window<'_, u8>, seed : (usize, usize), mut mode : ColorMode) -> Self {
+    /// cf. Connected Components (Szeliski, 2011, p. 131)
+    pub fn grow(win : &Window<'_, u8>, seed : (usize, usize), px_spacing : usize, mut mode : ColorMode, max_area : Option<usize>) -> Option<Self> {
         let mut patch = Patch::new(seed, win[seed], 1, win.height());
         mode.set_reference_color(win[seed]);
 
         let (mut grows_left, mut grows_top, mut grows_right, mut grows_bottom) = (true, true, true, true);
 
-        let mut abs_dist = 1;
+        // Still need to alter pixel_neighbors_row and pixel_below_rect, etc to account for differing px_spacings.
+        // Will check the absolute difference is <= px_spacing there.
+        assert!(px_spacing == 1);
+
+        let mut abs_dist = px_spacing;
+        let mut exp_patch = ExpandingPatch::new(seed);
+        let mut outer_rect = (seed.0, seed.1, 1, 1);
         loop {
-            let left = if grows_left { seed.1.checked_sub(abs_dist) } else { None };
-            let top = if grows_top { seed.0.checked_sub(abs_dist) } else { None };
-            let right = if grows_right {
+            let left_col = if grows_left { seed.1.checked_sub(abs_dist) } else { None };
+            let top_row = if grows_top { seed.0.checked_sub(abs_dist) } else { None };
+            let right_col = if grows_right {
                 if seed.1 + abs_dist < win.width() { Some(seed.1 + abs_dist) } else { None }
             } else {
                 None
             };
-            let bottom = if grows_bottom {
+            let bottom_row = if grows_bottom {
                 if seed.0 + abs_dist < win.height() { Some(seed.0 + abs_dist) } else { None }
             } else {
                 None
             };
 
-            let mut grows_top = false;
-            if let Some(r) = top {
-                for c in seed.1.saturating_sub(abs_dist)..((seed.1+abs_dist+1).min(win.width())) {
-                    if mode.matches(win[(r, c)]) && (patch.pixel_is_above((r, c)) || patch.pixel_is_left((r, c)) || patch.pixel_is_right((r, c)) ) {
-                        patch.expand(&[(r, c)]);
-                        grows_top = true;
-                    }
-                }
-            }
+            let row_end = (seed.0+abs_dist+1).min(win.height());
+            let col_end = (seed.1+abs_dist+1).min(win.width());
+            let row_range = (seed.0.saturating_sub(abs_dist)..( row_end )).step_by(px_spacing);
+            let col_range = (seed.1.saturating_sub(abs_dist)..( col_end )).step_by(px_spacing);
 
-            let mut grows_bottom = false;
-            if let Some(r) = bottom {
-                for c in seed.1.saturating_sub(abs_dist)..((seed.1+abs_dist+1).min(win.width())) {
-                    if mode.matches(win[(r, c)]) && (patch.pixel_is_below((r, c)) || patch.pixel_is_left((r, c)) || patch.pixel_is_right((r, c)) ) {
-                        patch.expand(&[(r, c)]);
-                        grows_bottom = true;
+            // TODO when pixel is not in rect range, we can break the loop.
+
+            let mut grows_top = false;
+            if exp_patch.top.past.len() >= 1 {
+                let top_range = (exp_patch.top.past[0].1.saturating_sub(1))..(exp_patch.top.past[exp_patch.top.past.len()-1].1 + 1);
+                if let Some(r) = top_row {
+                    for c in /*col_range.clone()*/ top_range.clone() {
+                        let px = (r, c);
+                        let is_corner = (c == top_range.start || c == top_range.end-1);
+                        if mode.matches(win[px]) && (is_corner || (pixel_above_rect(&outer_rect, px) && pixel_neighbors_top(&exp_patch, px))) {
+                            if !grows_top {
+                                outer_rect.0 = r;
+                                outer_rect.2 += px_spacing;
+                                grows_top = true;
+                            }
+                            exp_patch.top.curr.push(px);
+                        }
                     }
                 }
             }
 
             let mut grows_left = false;
-            if let Some(c) = left {
-                for r in seed.0.saturating_sub(abs_dist-1)..((seed.0+abs_dist).min(win.height())) {
-                    if mode.matches(win[(r, c)]) && (patch.pixel_is_left((r, c)) || patch.pixel_is_above((r, c)) || patch.pixel_is_below((r, c)) ) {
-                        patch.expand(&[(r, c)]);
-                        grows_left = true;
+            if exp_patch.left.past.len() >= 1 {
+                let left_range = (exp_patch.left.past[0].0.saturating_sub(1))..(exp_patch.left.past[exp_patch.left.past.len()-1].0 + 1);
+                if let Some(c) = left_col {
+                    for r in /*row_range.clone().skip(1).take(row_end-1)*/ left_range.clone() {
+                        let px = (r, c);
+                        let is_corner = (r == left_range.start || r == left_range.end-1);
+                        if mode.matches(win[px]) && (is_corner || (pixel_to_left_of_rect(&outer_rect, px) && pixel_neighbors_left(&exp_patch, px))) {
+                            if !grows_left {
+                                outer_rect.1 = c;
+                                outer_rect.3 += px_spacing;
+                                grows_left = true;
+                            }
+                            exp_patch.left.curr.push(px);
+                        }
+                    }
+                }
+            }
+
+            let mut grows_bottom = false;
+            if exp_patch.bottom.past.len() >= 1 {
+                let bottom_range = (exp_patch.bottom.past[0].1.saturating_sub(1))..(exp_patch.bottom.past[exp_patch.bottom.past.len()-1].1 + 1);
+                if let Some(r) = bottom_row {
+                    for c in /*col_range*/ bottom_range.clone() {
+                        let px = (r, c);
+                        let is_corner = (r == bottom_range.start || r == bottom_range.end-1);
+                        if mode.matches(win[px]) && (is_corner || (pixel_below_rect(&outer_rect, px) && pixel_neighbors_bottom(&exp_patch, px))) {
+                            if !grows_bottom {
+                                outer_rect.2 += px_spacing;
+                                grows_bottom = true;
+                            }
+                            exp_patch.bottom.curr.push(px);
+                        }
                     }
                 }
             }
 
             let mut grows_right = false;
-            if let Some(c) = left {
-                for r in seed.0.saturating_sub(abs_dist-1)..((seed.0+abs_dist).min(win.height())) {
-                    if mode.matches(win[(r, c)]) && (patch.pixel_is_right((r, c)) || patch.pixel_is_above((r, c)) || patch.pixel_is_below((r, c)) ) {
-                        patch.expand(&[(r, c)]);
-                        grows_right = true;
+            if exp_patch.right.past.len() >= 1 {
+                let right_range = (exp_patch.right.past[0].0.saturating_sub(1))..(exp_patch.right.past[exp_patch.right.past.len()-1].0 + 1);
+                if let Some(c) = right_col {
+                    for r in /*row_range.skip(1).take(row_end-1)*/ right_range.clone() {
+                        let px = (r, c);
+                        let is_corner = (c == right_range.start || c == right_range.end-1);
+                        if mode.matches(win[px]) && (is_corner || (pixel_to_right_of_rect(&outer_rect, px) && pixel_neighbors_right(&exp_patch, px))) {
+                            if !grows_right {
+                                outer_rect.3 += px_spacing;
+                                grows_right = true;
+                            }
+                            exp_patch.right.curr.push(px);
+                        }
                     }
                 }
             }
 
-            if !grows_left && !grows_right && !grows_bottom && !grows_top {
-                return patch;
+            expand_dense_patch(&mut exp_patch, &mut patch, outer_rect);
+            if let Some(area) = max_area {
+                if /*patch.pxs.len()*/ outer_rect.2 * outer_rect.3 > area {
+                    return None;
+                }
             }
 
-            abs_dist += 1;
+            let grows_any = grows_left || grows_right || grows_bottom || grows_top;
+            if !grows_any {
+                return Some(patch);
+            }
+
+            abs_dist += px_spacing;
         }
 
-        patch
+        Some(patch)
     }
 
     /// Starts a new patch.
@@ -407,8 +670,7 @@ impl Patch {
 
         r >= 1 &&
             // is_below &&
-            self.outer_rect.1 <= c &&
-            self.outer_rect.1 + self.outer_rect.3 >= c &&
+            pixel_below_rect(&self.outer_rect, (r, c)) &&
             self.pxs.iter().rev() /*.take_while(|px| px.0 >= r-1 ).*/ .any(|px| (px.0 == r || px.0 == r-1) && px.1 == c )
     }
 
@@ -420,24 +682,21 @@ impl Patch {
         // let is_right = (rect_c == c || rect_c == c+1);
         c >= 1 &&
             // is_right &&
-            self.outer_rect.0 <= r &&
-            self.outer_rect.0 + self.outer_rect.2 >= r &&
+            pixel_to_right_of_rect(&self.outer_rect, (r, c)) &&
             self.pxs.iter().rev().any(|px| px.0 == r && (px.1 == c || px.1 == c-1) )
     }
 
     pub fn pixel_is_left(&self, (r, c) : (usize, usize)) -> bool {
         let is_left = self.outer_rect.1 > 0 && self.outer_rect.1 - 1 == c;
         is_left &&
-        self.outer_rect.0 <= r &&
-        self.outer_rect.0 + self.outer_rect.2 >= r &&
-        self.pxs.iter().rev().any(|px| px.0 == r && (px.1 == c || px.1 == c+1) )
+            pixel_to_left_of_rect(&self.outer_rect, (r, c)) &&
+            self.pxs.iter().rev().any(|px| px.0 == r && (px.1 == c || px.1 == c+1) )
     }
 
     pub fn pixel_is_above(&self, (r, c) : (usize, usize)) -> bool {
         let is_above = self.outer_rect.0 > 0 && self.outer_rect.0 - 1 == r;
         is_above &&
-        self.outer_rect.1 <= c &&
-        self.outer_rect.1 + self.outer_rect.3 >= c &&
+        pixel_above_rect(&self.outer_rect, (r, c)) &&
         self.pxs.iter().rev() /*.take_while(|px| px.0 >= r-1 ).*/ .any(|px| (px.0 == r || px.0 == r+1) && px.1 == c )
     }
 

@@ -9,6 +9,7 @@ use std::convert::TryFrom;
 use crate::segmentation::{self, Patch, BinaryPatch, Neighborhood};
 use itertools::Itertools;
 use crate::segmentation::ColorMode;
+use num_traits::Zero;
 
 #[cfg(feature="opencvlib")]
 use opencv::core;
@@ -79,8 +80,25 @@ where
 
 impl<N> Image<N>
 where
-    N : Scalar + Copy + Default
+    N : Scalar + Copy + Default + Zero
 {
+
+    pub fn subsample_from(&mut self, content : &[N], ncols : usize, sample_n : usize) {
+        assert!(ncols < content.len(), "ncols smaller than content length");
+        let nrows = content.len() / ncols;
+        let sparse_ncols = ncols / sample_n;
+        let sparse_nrows = nrows / sample_n;
+        self.ncols = sparse_ncols;
+        if self.buf.len() != sparse_nrows * sparse_ncols {
+            self.buf.clear();
+            self.buf.extend((0..(sparse_nrows*sparse_ncols)).map(|_| N::zero() ));
+        }
+        for r in 0..sparse_nrows {
+            for c in 0..sparse_ncols {
+                self.buf[r*sparse_ncols + c] = content[r*sample_n*ncols + c*sample_n];
+            }
+        }
+    }
 
     #[cfg(feature="opencvlib")]
     pub fn equalize_mut(&mut self) {
@@ -670,6 +688,31 @@ where
         iterate_row_wise(self.win, self.offset, self.win_sz, self.orig_sz, spacing).step_by(spacing)
     }
 
+    /// Iterate over image pixels, expanding from a given location, until any image border is found.
+    /// Iteration happens clock-wise from the seed pixel.
+    pub fn expanding_pixels(
+        &self,
+        seed : (usize, usize),
+        px_spacing : usize
+    ) -> impl Iterator<Item=((usize, usize), &N)> + Clone {
+        let min_dist = seed.0.min(self.height() - seed.0).min(seed.1).min(self.width() - seed.1);
+        (1..min_dist).map(move |abs_dist| {
+            let left_col = seed.1 - abs_dist;
+            let top_row = seed.0 - abs_dist;
+            let right_col = seed.1 + abs_dist;
+            let bottom_row = seed.0 + abs_dist;
+            let row_range = (seed.0.saturating_sub(abs_dist-px_spacing)..((seed.0+abs_dist).min(self.height()))).step_by(px_spacing);
+            let col_range = (seed.1.saturating_sub(abs_dist)..((seed.1+abs_dist+px_spacing).min(self.width()))).step_by(px_spacing);
+            let top_iter = col_range.clone().map(move |c| ((top_row, c), &self[(top_row, c)] ) );
+            let right_iter = row_range.clone().map(move |r| ((r, right_col), &self[(r, right_col)] ) );
+            let bottom_iter = col_range.rev().map(move |c| ((bottom_row, c), &self[(bottom_row, c)] ) );
+            let left_iter = row_range.rev().map(move |r| ((r, left_col), &self[(r, left_col)] ) );
+
+                // Skip first element of each iterator because it is already contained in the last one.
+                top_iter.chain(right_iter.skip(1)).chain(bottom_iter.skip(1)).chain(left_iter.skip(1))
+        }).flatten()
+    }
+
     // Returns the most representative k-colors of the image using K-means
     // pub fn colors(&self, px_spacing : usize, n_colors : usize) -> Vec<u8> {
     // }
@@ -688,7 +731,7 @@ where
 
     pub fn clone_owned(&self) -> Image<N>
     where
-        N : Copy + Default
+        N : Copy + Default + Zero
     {
         let mut buf = Vec::new();
         self.rows().for_each(|row| buf.extend(row.iter().cloned()) );
