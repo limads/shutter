@@ -14,6 +14,8 @@ use std::cmp::Ordering;
 use parry2d::query::PointQuery;
 use std::borrow::Borrow;
 use crate::feature::point;
+use crate::feature::edge::euclidian;
+use crate::image::index::index_distance;
 
 // #[cfg(feature="opencvlib")]
 // pub mod fgmm;
@@ -171,7 +173,16 @@ pub fn adjusted_color_momentum(
                 }
             }
         }
-        None
+
+        match strategy {
+            // TODO decide logic if required number of points was not found.
+            Strategy::Conservative(_) => {
+                let stats = point::PointStats::calculate(&found[..]);
+                Some(stats.centroid)
+            },
+            _ => None
+        }
+
     }
 }
 
@@ -202,13 +213,13 @@ fn patch_growth() {
     img[(7,7)] = 1;
     img[(7,8)] = 1;*/
 
-    println!("{:?}", Patch::grow(&img.full_window(), (11, 11), 1, ColorMode::Exact(1), None));
+    println!("{:?}", Patch::grow(&img.full_window(), (11, 11), 1, ColorMode::Exact(1), ReferenceMode::Constant, None, ExpansionMode::Contour));
 }
 
 /// Extract a single patch, using the color momentum as seed.
 pub fn extract_main_patch(win : &Window<'_, u8>, px_spacing : usize, mode : ColorMode) -> Option<Patch> {
     let seed = color_momentum(win, px_spacing, mode)?;
-    Some(Patch::grow(win, seed, 1, mode, None)).unwrap()
+    Some(Patch::grow(win, seed, 1, mode, ReferenceMode::Constant, None, ExpansionMode::Dense)).unwrap()
 }
 
 #[derive(Default, Clone)]
@@ -323,24 +334,73 @@ fn pixel_neighbors_right(exp_patch : &ExpandingPatch, px : (usize, usize)) -> bo
         pixel_neighbors_col(&exp_patch.right.past[..], px)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExpansionMode {
+    Rect,
+    Contour,
+    Dense
+}
+
 // Dense strategy here.
 // TODO to build patch with only the external contour, verify which elements
 // past_row and curr_row have in common. Drop all elements of past_row that also
 // are present in current row, and push current_row and all remaining elements of
 // past_row that were not dropped. Perhaps we can make this function generic over which
 // allocation strategy to self.pxs we use here.
-fn expand_dense_patch(exp_patch : &mut ExpandingPatch, patch : &mut Patch, outer_rect : (usize, usize, usize, usize)) {
+fn expand_patch(
+    exp_patch : &mut ExpandingPatch,
+    patch : &mut Patch,
+    outer_rect : (usize, usize, usize, usize),
+    mode : ExpansionMode,
+    win : &Window<'_, u8>
+) {
     for ext in [&mut exp_patch.top, &mut exp_patch.left, &mut exp_patch.bottom, &mut exp_patch.right] {
-        if patch.pxs.len() > 1 || ext.past.get(0).cloned() != Some((patch.pxs[0])) {
-            // TODO do this extend for dense patches.
-            // patch.pxs.extend(ext.past.drain(..));
-
-            // Do this for sparse patches.
+        let is_seed = ext.past.len() == 1 && ext.past.get(0).cloned() == Some((patch.pxs[0]));
+        if is_seed {
             ext.past.clear();
+            mem::swap(&mut ext.curr, &mut ext.past);
+            continue;
         }
-        patch.outer_rect = outer_rect;
-        mem::swap(&mut ext.curr, &mut ext.past);
+        match mode {
+            ExpansionMode::Rect => {
+                ext.past.clear();
+                mem::swap(&mut ext.curr, &mut ext.past);
+            },
+            ExpansionMode::Dense => {
+                patch.pxs.extend(ext.past.drain(..));
+                mem::swap(&mut ext.curr, &mut ext.past);
+            },
+            ExpansionMode::Contour => {
+                if ext.curr.len() > 0 {
+                    /*match ext.past.len() {
+                        0 => { },
+                        1 => {
+                            patch.pxs.push(ext.past[0]);
+                        },
+                        _ => {
+                            // Just push past border extreme pixels for non-final iterations.
+                            patch.pxs.push(ext.past[0]);
+                            patch.pxs.push(ext.past[ext.past.len()-1]);
+                        }
+                    }*/
+                    patch.pxs.push(ext.past[0]);
+                    if ext.past.len() > 1 {
+                        patch.pxs.push(ext.past[ext.past.len()-1]);
+                    }
+
+                    // Stop swapping at the last empty border so eventually we reach the final
+                    // branch with the last past pixels that were found.
+                    ext.past.clear();
+                } else {
+                    // The last patch iteration will take all remaining contour values.
+                    patch.pxs.extend(ext.past.drain(..));
+                }
+                mem::swap(&mut ext.curr, &mut ext.past);
+            }
+        }
     }
+    // }
+    patch.outer_rect = outer_rect;
 }
 
 /*pub fn expand_contour_patch(exp_patch : &mut ExpandingPatch, patch : &mut Patch, outer_rect : (usize, usize, usize, usize)) {
@@ -353,11 +413,55 @@ fn expand_dense_patch(exp_patch : &mut ExpandingPatch, patch : &mut Patch, outer
     }
 }*/
 
+fn close_contour(patch : &mut Patch, win : &Window<'_, u8>) {
+    // Remove seed
+    patch.pxs.swap_remove(0);
+
+    // Order by pairwise closeness.
+    for ix in 1..patch.pxs.len() {
+        let (closest_ix, _) = patch.pxs.iter().enumerate().skip(ix)
+            .min_by(|(_, px1), (_, px2)| {
+                index_distance(**px1, patch.pxs[ix-1], win.height()).0
+                    .partial_cmp(&index_distance(**px2, patch.pxs[ix-1], win.height()).0)
+                    .unwrap_or(Ordering::Equal)
+            } ).unwrap();
+        patch.pxs.swap(closest_ix, ix);
+    }
+
+    // Last element will not be close to neighborhood, just remove it.
+    patch.pxs.pop();
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReferenceMode {
+    Constant,
+    Adaptive
+}
+
+fn update_stats(mode : &mut ColorMode, n_px : &mut usize, sum : &mut u64, sum_abs_dev : &mut u64, ref_mode : ReferenceMode, new : u8) {
+    if ref_mode == ReferenceMode::Adaptive {
+        *sum += new as u64;
+        *n_px += 1;
+        let mean = *sum / *n_px as u64;
+        // let abs_dev = (mean as i64 - new as i64).abs() as u64;
+        // *sum_abs_dev += abs_dev;
+        mode.set_reference_color(mean as u8);
+    }
+}
+
 impl Patch {
 
     /// Grows a patch from a pixel seed.
     /// cf. Connected Components (Szeliski, 2011, p. 131)
-    pub fn grow(win : &Window<'_, u8>, seed : (usize, usize), px_spacing : usize, mut mode : ColorMode, max_area : Option<usize>) -> Option<Self> {
+    pub fn grow(
+        win : &Window<'_, u8>,
+        seed : (usize, usize),
+        px_spacing : usize,
+        mut mode : ColorMode,
+        ref_mode : ReferenceMode,
+        max_area : Option<usize>,
+        exp_mode : ExpansionMode
+    ) -> Option<Self> {
         let mut patch = Patch::new(seed, win[seed], 1, win.height());
         mode.set_reference_color(win[seed]);
 
@@ -370,6 +474,11 @@ impl Patch {
         let mut abs_dist = px_spacing;
         let mut exp_patch = ExpandingPatch::new(seed);
         let mut outer_rect = (seed.0, seed.1, 1, 1);
+
+        let mut n_px = 0;
+        let mut sum_abs_dev : u64 = 0;
+        let mut sum : u64 = win[seed] as u64;
+
         loop {
             let left_col = if grows_left { seed.1.checked_sub(abs_dist) } else { None };
             let top_row = if grows_top { seed.0.checked_sub(abs_dist) } else { None };
@@ -405,6 +514,7 @@ impl Patch {
                                 grows_top = true;
                             }
                             exp_patch.top.curr.push(px);
+                            update_stats(&mut mode, &mut n_px, &mut sum, &mut sum_abs_dev, ref_mode, win[px]);
                         }
                     }
                 }
@@ -424,6 +534,7 @@ impl Patch {
                                 grows_left = true;
                             }
                             exp_patch.left.curr.push(px);
+                            update_stats(&mut mode, &mut n_px, &mut sum, &mut sum_abs_dev, ref_mode, win[px]);
                         }
                     }
                 }
@@ -442,6 +553,7 @@ impl Patch {
                                 grows_bottom = true;
                             }
                             exp_patch.bottom.curr.push(px);
+                            update_stats(&mut mode, &mut n_px, &mut sum, &mut sum_abs_dev, ref_mode, win[px]);
                         }
                     }
                 }
@@ -460,20 +572,24 @@ impl Patch {
                                 grows_right = true;
                             }
                             exp_patch.right.curr.push(px);
+                            update_stats(&mut mode, &mut n_px, &mut sum, &mut sum_abs_dev, ref_mode, win[px]);
                         }
                     }
                 }
             }
 
-            expand_dense_patch(&mut exp_patch, &mut patch, outer_rect);
+            let grows_any = grows_left || grows_right || grows_bottom || grows_top;
+            expand_patch(&mut exp_patch, &mut patch, outer_rect, exp_mode, win);
             if let Some(area) = max_area {
                 if /*patch.pxs.len()*/ outer_rect.2 * outer_rect.3 > area {
                     return None;
                 }
             }
 
-            let grows_any = grows_left || grows_right || grows_bottom || grows_top;
             if !grows_any {
+                if exp_mode == ExpansionMode::Contour {
+                    close_contour(&mut patch, win);
+                }
                 return Some(patch);
             }
 

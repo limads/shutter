@@ -22,6 +22,7 @@ pub fn index_to_plane_coord(ix : (usize, usize), nrow : usize) -> (f64, f64) {
 /// cartesian plane) and the destination index as (dist, angle). Angles are in radians, and
 /// count positive from 0º-180º (0 rad - 3.14 rad) and negative from 180º-360º (3.14 rad - 0 rad).
 /// This is as if the positive radian value has been "reflected" over the lower half of the trig circle. 
+/// TODO create version with just the distance calculation, which will just reflect the y coordinate.
 pub fn index_distance(src : (usize, usize), dst : (usize, usize), nrow : usize) -> (f64, f64) {
     let (src_x, src_y) = index_to_plane_coord(src, nrow);
     let (dst_x, dst_y) = index_to_plane_coord(dst, nrow);

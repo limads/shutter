@@ -1,6 +1,8 @@
 #![doc(html_logo_url = "https://raw.githubusercontent.com/limads/shutter/master/assets/logo.png")]
 #![allow(unused)]
 
+pub mod io;
+
 // pub(crate) mod foreign;
 
 // pub mod histogram;

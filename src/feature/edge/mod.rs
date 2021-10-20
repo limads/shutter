@@ -77,7 +77,7 @@ impl Edge {
 
 }
 
-fn euclidian(a : &[f64], b : &[f64]) -> f64 {
+pub fn euclidian(a : &[f64], b : &[f64]) -> f64 {
     a.iter().zip(b.iter()).map(|(ai, bi)| (ai - bi).powf(2.) ).sum::<f64>().sqrt()
 }
 

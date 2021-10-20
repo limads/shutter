@@ -35,7 +35,7 @@ pub use dwt::*;*/
 // #[cfg(feature="gsl")]
 // pub use interp::Interpolation2D;
 
-pub mod pgm;
+use crate::io;
 
 #[cfg(feature="ipp")]
 pub mod ipp;
@@ -1465,7 +1465,7 @@ where
     f64 : From<N>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", pgm::build_pgm_string_from_slice(&self.win, self.orig_sz.1))
+        write!(f, "{}", io::build_pgm_string_from_slice(&self.win, self.orig_sz.1))
     }
 }
 
@@ -1475,7 +1475,7 @@ where
     f64 : From<N>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", pgm::build_pgm_string_from_slice(&self.win, self.orig_sz.1))
+        write!(f, "{}", io::build_pgm_string_from_slice(&self.win, self.orig_sz.1))
     }
 }
 
@@ -1485,9 +1485,42 @@ where
     f64 : From<N>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", pgm::build_pgm_string_from_slice(&self.buf[..], self.ncols))
+        write!(f, "{}", io::build_pgm_string_from_slice(&self.buf[..], self.ncols))
     }
 }
+
+#[cfg(feature="literate")]
+impl literate::show::Show for Window<'_, u8> {
+
+    fn show(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // crate::io::to_html(&self).fmt(f)
+        write!(f, "{}", crate::io::to_html(&self) )
+    }
+
+}
+
+#[cfg(feature="literate")]
+impl literate::show::Show for Image<u8> {
+
+    fn show(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // crate::io::to_html(&self.full_window()).fmt(f)
+        write!(f, "{}", crate::io::to_html(&self.full_window()) )
+    }
+
+}
+
+/*#[cfg(feature="literate")]
+impl<'a> literate::show::Stack<'a> for Window<'a, u8> {
+
+    fn header(&'a self) -> Option<Box<dyn Display>> {
+        None
+    }
+
+    fn stack(&'a self) -> Vec<&'a dyn Show> {
+        vec![self as &dyn Show]
+    }
+
+}*/
 
 #[test]
 fn checkerboard() {
