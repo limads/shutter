@@ -298,11 +298,11 @@ fn pixel_neighbors_row(row : &[(usize, usize)], px : (usize, usize)) -> bool {
 
 fn pixel_neighbors_col(col : &[(usize, usize)], px : (usize, usize)) -> bool {
     col.binary_search_by(|col_px|
-        if (col_px.0 as i16 - px.0 as i16).abs() <= 1 {
-            Ordering::Equal
-        } else {
-            col_px.0.cmp(&px.0)
-        }
+        // if (col_px.0 as i16 - px.0 as i16).abs() <= 1 {
+        //    Ordering::Equal
+        //} else {
+        col_px.0.cmp(&px.0)
+        // }
     ).is_ok()
 }
 
@@ -449,6 +449,61 @@ fn update_stats(mode : &mut ColorMode, n_px : &mut usize, sum : &mut u64, sum_ab
     }
 }
 
+fn expand_rect(rect : &mut (usize, usize, usize, usize), exp : &ExpandingPatch) {
+    let mut max_right = rect.1 + rect.3;
+    let mut max_bottom = rect.0 + rect.2;
+    if exp.top.curr.len() >= 1 {
+        if exp.top.curr[0].0 < rect.0 {
+            rect.0 = exp.top.curr[0].0;
+        }
+        if exp.top.curr[0].1 < rect.1 {
+            rect.1 = exp.top.curr[0].1;
+        }
+        if exp.top.curr[exp.top.curr.len()-1].1 > max_right {
+            max_right = exp.top.curr[exp.top.curr.len()-1].1;
+        }
+    }
+
+    if exp.left.curr.len() >= 1 {
+        if exp.left.curr[0].1 < rect.1 {
+            rect.1 = exp.left.curr[0].1;
+        }
+        if exp.left.curr[0].0 < rect.0 {
+            rect.0 = exp.left.curr[0].0;
+        }
+        if exp.left.curr[exp.left.curr.len()-1].0 > max_bottom {
+            max_bottom = exp.left.curr[exp.left.curr.len()-1].0;
+        }
+    }
+
+    if exp.bottom.curr.len() >= 1 {
+        if exp.bottom.curr[0].0 > max_bottom {
+            max_bottom = exp.bottom.curr[0].0;
+        }
+        if exp.bottom.curr[0].1 < rect.1 {
+            rect.1 = exp.bottom.curr[0].1;
+        }
+        if exp.bottom.curr[exp.bottom.curr.len()-1].1 > max_right {
+            max_right = exp.bottom.curr[exp.bottom.curr.len()-1].1;
+        }
+    }
+
+    if exp.right.curr.len() >= 1 {
+        if exp.right.curr[0].1 > max_right {
+            max_right = exp.right.curr[0].1;
+        }
+        if exp.right.curr[0].0 < rect.0 {
+            rect.0 = exp.right.curr[0].0;
+        }
+        if exp.right.curr[exp.right.curr.len()-1].0 > max_bottom {
+            max_bottom = exp.right.curr[exp.right.curr.len()-1].0;
+        }
+    }
+
+    rect.2 = max_bottom - rect.0;
+    rect.3 = max_right - rect.1;
+}
+
 impl Patch {
 
     /// Grows a patch from a pixel seed.
@@ -480,6 +535,7 @@ impl Patch {
         let mut sum : u64 = win[seed] as u64;
 
         loop {
+            assert!(exp_patch.top.curr.is_empty() && exp_patch.left.curr.is_empty() && exp_patch.right.curr.is_empty() && exp_patch.bottom.curr.is_empty());
             let left_col = if grows_left { seed.1.checked_sub(abs_dist) } else { None };
             let top_row = if grows_top { seed.0.checked_sub(abs_dist) } else { None };
             let right_col = if grows_right {
@@ -502,15 +558,15 @@ impl Patch {
 
             let mut grows_top = false;
             if exp_patch.top.past.len() >= 1 {
-                let top_range = (exp_patch.top.past[0].1.saturating_sub(1))..(exp_patch.top.past[exp_patch.top.past.len()-1].1 + 1);
+                let top_range = (exp_patch.top.past[0].1.saturating_sub(1))..((exp_patch.top.past[exp_patch.top.past.len()-1].1 + 2).min(win.width()));
                 if let Some(r) = top_row {
                     for c in /*col_range.clone()*/ top_range.clone() {
                         let px = (r, c);
                         let is_corner = (c == top_range.start || c == top_range.end-1);
-                        if mode.matches(win[px]) && (is_corner || (pixel_above_rect(&outer_rect, px) && pixel_neighbors_top(&exp_patch, px))) {
+                        if mode.matches(win[px]) && (is_corner || ( /*pixel_above_rect(&outer_rect, px) &&*/ pixel_neighbors_top(&exp_patch, px))) {
                             if !grows_top {
-                                outer_rect.0 = r;
-                                outer_rect.2 += px_spacing;
+                                // outer_rect.0 = r;
+                                // outer_rect.2 += px_spacing;
                                 grows_top = true;
                             }
                             exp_patch.top.curr.push(px);
@@ -522,15 +578,15 @@ impl Patch {
 
             let mut grows_left = false;
             if exp_patch.left.past.len() >= 1 {
-                let left_range = (exp_patch.left.past[0].0.saturating_sub(1))..(exp_patch.left.past[exp_patch.left.past.len()-1].0 + 1);
+                let left_range = (exp_patch.left.past[0].0.saturating_sub(1))..((exp_patch.left.past[exp_patch.left.past.len()-1].0 + 2).min(win.height()));
                 if let Some(c) = left_col {
                     for r in /*row_range.clone().skip(1).take(row_end-1)*/ left_range.clone() {
                         let px = (r, c);
                         let is_corner = (r == left_range.start || r == left_range.end-1);
-                        if mode.matches(win[px]) && (is_corner || (pixel_to_left_of_rect(&outer_rect, px) && pixel_neighbors_left(&exp_patch, px))) {
+                        if mode.matches(win[px]) && ( is_corner || ( /*pixel_to_left_of_rect(&outer_rect, px) &&*/ pixel_neighbors_left(&exp_patch, px))) {
                             if !grows_left {
-                                outer_rect.1 = c;
-                                outer_rect.3 += px_spacing;
+                                // outer_rect.1 = c;
+                                // outer_rect.3 += px_spacing;
                                 grows_left = true;
                             }
                             exp_patch.left.curr.push(px);
@@ -542,14 +598,14 @@ impl Patch {
 
             let mut grows_bottom = false;
             if exp_patch.bottom.past.len() >= 1 {
-                let bottom_range = (exp_patch.bottom.past[0].1.saturating_sub(1))..(exp_patch.bottom.past[exp_patch.bottom.past.len()-1].1 + 1);
+                let bottom_range = (exp_patch.bottom.past[0].1.saturating_sub(1))..((exp_patch.bottom.past[exp_patch.bottom.past.len()-1].1 + 2).min(win.width()));
                 if let Some(r) = bottom_row {
                     for c in /*col_range*/ bottom_range.clone() {
                         let px = (r, c);
                         let is_corner = (r == bottom_range.start || r == bottom_range.end-1);
-                        if mode.matches(win[px]) && (is_corner || (pixel_below_rect(&outer_rect, px) && pixel_neighbors_bottom(&exp_patch, px))) {
+                        if mode.matches(win[px]) && (is_corner || ( /*pixel_below_rect(&outer_rect, px) &&*/ pixel_neighbors_bottom(&exp_patch, px))) {
                             if !grows_bottom {
-                                outer_rect.2 += px_spacing;
+                                // outer_rect.2 += px_spacing;
                                 grows_bottom = true;
                             }
                             exp_patch.bottom.curr.push(px);
@@ -561,14 +617,14 @@ impl Patch {
 
             let mut grows_right = false;
             if exp_patch.right.past.len() >= 1 {
-                let right_range = (exp_patch.right.past[0].0.saturating_sub(1))..(exp_patch.right.past[exp_patch.right.past.len()-1].0 + 1);
+                let right_range = (exp_patch.right.past[0].0.saturating_sub(1))..((exp_patch.right.past[exp_patch.right.past.len()-1].0 + 2).min(win.height()));
                 if let Some(c) = right_col {
                     for r in /*row_range.skip(1).take(row_end-1)*/ right_range.clone() {
                         let px = (r, c);
                         let is_corner = (c == right_range.start || c == right_range.end-1);
-                        if mode.matches(win[px]) && (is_corner || (pixel_to_right_of_rect(&outer_rect, px) && pixel_neighbors_right(&exp_patch, px))) {
+                        if mode.matches(win[px]) && (is_corner || ( /*pixel_to_right_of_rect(&outer_rect, px) &&*/ pixel_neighbors_right(&exp_patch, px))) {
                             if !grows_right {
-                                outer_rect.3 += px_spacing;
+                                // outer_rect.3 += px_spacing;
                                 grows_right = true;
                             }
                             exp_patch.right.curr.push(px);
@@ -579,6 +635,7 @@ impl Patch {
             }
 
             let grows_any = grows_left || grows_right || grows_bottom || grows_top;
+            expand_rect(&mut outer_rect, &exp_patch);
             expand_patch(&mut exp_patch, &mut patch, outer_rect, exp_mode, win);
             if let Some(area) = max_area {
                 if /*patch.pxs.len()*/ outer_rect.2 * outer_rect.3 > area {
