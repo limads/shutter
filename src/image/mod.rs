@@ -1203,6 +1203,7 @@ impl WindowMut<'_, u8> {
                 for (p1, p2) in pts.iter().take(n-1).zip(pts.iter().skip(1)) {
                     self.draw(Mark::Line(*p1, *p2, col));
                 }
+                self.draw(Mark::Line(pts[0], pts[pts.len()-1], col));
             }
         }
     }

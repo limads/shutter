@@ -354,7 +354,30 @@ fn expand_patch(
     mode : ExpansionMode,
     win : &Window<'_, u8>
 ) {
-    for ext in [&mut exp_patch.top, &mut exp_patch.left, &mut exp_patch.bottom, &mut exp_patch.right] {
+
+    // Only push corner when those conditions are not met for the desired pair.
+    let tl_joined = match (exp_patch.left.curr.first(), exp_patch.top.curr.first()) {
+        (Some(left), Some(top)) => (left.0 as i32 - top.0 as i32).abs() <= 1 && (left.1 as i32 - top.1 as i32).abs() <= 1,
+        _ => false
+    };
+    let tr_joined = match (exp_patch.top.curr.last(), exp_patch.right.curr.first()) {
+        (Some(top), Some(right)) => (top.0 as i32 - right.0 as i32).abs() as i32 <= 1 && (top.1 as i32 - right.1 as i32).abs() <= 1,
+        _ => false
+    };
+    let bl_joined = match (exp_patch.left.curr.last(), exp_patch.bottom.curr.first()) {
+        (Some(left), Some(bottom)) => (left.0 as i32 - bottom.0 as i32).abs() <= 1 && (left.1 as i32 - bottom.1 as i32).abs() as i32 <= 1,
+        _ => false
+    };
+    let br_joined = match (exp_patch.right.curr.last(), exp_patch.bottom.curr.last()) {
+        (Some(right), Some(bottom)) => (right.0 as i32 - bottom.0 as i32).abs() <= 1 && (right.1 as i32 - bottom.1 as i32).abs() <= 1,
+        _ => false
+    };
+
+    // Also iterate over this: if corners_joined[ix] push corner.
+    let mut exp_fronts = [&mut exp_patch.top, &mut exp_patch.left, &mut exp_patch.bottom, &mut exp_patch.right];
+    let corners_joined = [(tl_joined, tr_joined), (tl_joined, bl_joined), (bl_joined, br_joined), (tr_joined, br_joined)];
+
+    for (mut ext, (fst_corner, snd_corner)) in exp_fronts.iter_mut().zip(corners_joined.iter()) {
         let is_seed = ext.past.len() == 1 && ext.past.get(0).cloned() == Some((patch.pxs[0]));
         if is_seed {
             ext.past.clear();
@@ -383,8 +406,17 @@ fn expand_patch(
                             patch.pxs.push(ext.past[ext.past.len()-1]);
                         }
                     }*/
-                    patch.pxs.push(ext.past[0]);
-                    if ext.past.len() > 1 {
+
+                    // TODO Remove old corner pixels
+                    // ext.past.remove(4 - ix);
+
+                    // Only push corners when the distance between corners of edge limits
+                    // are not sufficient to represent the shape in its current state.
+                    if !*fst_corner {
+                        patch.pxs.push(ext.past[0]);
+                    }
+
+                    if ext.past.len() > 1 && !*snd_corner {
                         patch.pxs.push(ext.past[ext.past.len()-1]);
                     }
 
@@ -400,7 +432,7 @@ fn expand_patch(
         }
     }
     // }
-    patch.outer_rect = outer_rect;
+
 }
 
 /*pub fn expand_contour_patch(exp_patch : &mut ExpandingPatch, patch : &mut Patch, outer_rect : (usize, usize, usize, usize)) {
@@ -636,7 +668,9 @@ impl Patch {
 
             let grows_any = grows_left || grows_right || grows_bottom || grows_top;
             expand_rect(&mut outer_rect, &exp_patch);
+            patch.outer_rect = outer_rect;
             expand_patch(&mut exp_patch, &mut patch, outer_rect, exp_mode, win);
+
             if let Some(area) = max_area {
                 if /*patch.pxs.len()*/ outer_rect.2 * outer_rect.3 > area {
                     return None;
