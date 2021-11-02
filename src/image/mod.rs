@@ -6,9 +6,9 @@ use std::fmt;
 use std::fmt::Debug;
 use simba::simd::{AutoSimd};
 use std::convert::TryFrom;
-use crate::segmentation::{self, Patch, BinaryPatch, Neighborhood};
+use crate::feature::color::{self, Patch, BinaryPatch, Neighborhood};
 use itertools::Itertools;
-use crate::segmentation::ColorMode;
+use crate::feature::color::ColorMode;
 use num_traits::Zero;
 
 #[cfg(feature="opencvlib")]
@@ -227,7 +227,6 @@ where
         );
     }
     
-
     /*
     // TODO
     IppStatus ippiCopy_<mod> ( const Ipp<datatype>* pSrc , int srcStep , Ipp<datatype>* pDst ,
@@ -343,6 +342,15 @@ impl Image<u8> {
 
     pub fn draw(&mut self, mark : Mark) {
         self.full_window_mut().draw(mark);
+    }
+
+    /// Builds a binary image from a set of points.
+    pub fn binary_from_points(nrow : usize, ncol : usize, pts : impl Iterator<Item=(usize, usize)>) -> Self {
+        let mut img = Image::<u8>::new_constant(nrow, ncol, 0);
+        for pt in pts {
+            img[pt] = 255;
+        }
+        img
     }
 }
 
@@ -777,6 +785,23 @@ impl<'a> Iterator for PackedIterator<'a, u8> {
 
 impl<'a> Window<'a, u8> {
 
+    pub fn nonzero_pixels(&'a self, px_spacing : usize) -> impl Iterator<Item=&'a u8> +'a {
+        self.pixels(px_spacing).filter(|px| **px > 0 )
+    }
+
+    pub fn masked_pixels(&'a self, mask : &'a Window<'_, u8>) -> impl Iterator<Item=&'a u8> +'a {
+        mask.nonzero_labeled_pixels(1).map(move |(r, c, _)| &self[(r, c)] )
+    }
+
+    pub fn nonzero_labeled_pixels(&'a self, px_spacing : usize) -> impl Iterator<Item=(usize, usize, u8)> +'a {
+        self.labeled_pixels(px_spacing).filter(|(_, _, px)| *px > 0 )
+    }
+
+    /// Iterate over pixels, as long as they are non-zero at the mask window.
+    pub fn masked_labeled_pixels(&'a self, mask : &'a Window<'_, u8>) -> impl Iterator<Item=(usize, usize, u8)> +'a {
+        mask.nonzero_labeled_pixels(1).map(move |(r, c, _)| (r, c, self[(r, c)]) )
+    }
+
     /// Returns iterator over (subsampled row index, subsampled col index, pixel color).
     pub fn labeled_pixels(&'a self, px_spacing : usize) -> impl Iterator<Item=(usize, usize, u8)> +'a {
         self.pixels(px_spacing)
@@ -791,7 +816,7 @@ impl<'a> Window<'a, u8> {
     /// Extract contiguous image regions of homogeneous color.
     pub fn patches(&self, px_spacing : usize) -> Vec<Patch> {
         let mut patches = Vec::new();
-        segmentation::color_patches(&mut patches, self, px_spacing, ColorMode::Exact(0));
+        color::color_patches(&mut patches, self, px_spacing, ColorMode::Exact(0));
         patches
     }
 
@@ -799,15 +824,26 @@ impl<'a> Window<'a, u8> {
         // TODO if we have a binary or a bit image with just a few classes,
         // there is no need for KMeans. Just use the allocations.
         // let label_img = segmentation::segment_colors_to_image(self, px_spacing, n_colors);
-        segmentation::binary_patches(self, px_spacing)
+        color::binary_patches(self, px_spacing)
     }
 
     /// If higher, returns binary image with all pixels > thresh set to 255 and others set to 0;
     /// If !higher, returns binary image with pixels < thresh set to 255 and others set to 0.
-    #[cfg(feature="opencvlib")]
     pub fn threshold_mut(&self, dst : &mut Image<u8>, thresh : u8, higher : bool) {
         assert!(self.shape() == dst.shape());
-        crate::threshold::threshold_window(self, dst, thresh as f64, 255.0, higher);
+
+        #[cfg(feature="opencvlib")]
+        {
+            crate::threshold::threshold_window(self, dst, thresh as f64, 255.0, higher);
+        }
+
+        for (src, mut dst) in self.pixels(1).zip(dst.full_window_mut().pixels_mut(1)) {
+            if (!higher && *src < thresh) || (higher && *src > thresh) {
+                *dst = 255;
+            } else {
+                *dst = 0;
+            }
+        }
     }
 
     /*/// Packed iterator over contigous byte regions of the image within
@@ -1105,7 +1141,7 @@ impl WindowMut<'_, u8> {
             }
         };
         let mut patches = Vec::new();
-        segmentation::color_patches(&mut patches, &src_win, px_spacing, ColorMode::Exact(0));
+        color::color_patches(&mut patches, &src_win, px_spacing, ColorMode::Exact(0));
         patches
     }
 
@@ -1282,6 +1318,16 @@ where
 
     pub fn pixels_mut(&'a mut self, spacing : usize) -> impl Iterator<Item=&'a mut N> {
         self.rows_mut().step_by(spacing).map(move |r| r.iter_mut().step_by(spacing) ).flatten()
+    }
+
+    pub fn labeled_pixels_mut(&'a mut self, spacing : usize) -> impl Iterator<Item=(usize, usize, &'a mut N)> +'a {
+        let w = self.width();
+        self.pixels_mut(spacing)
+            .enumerate()
+            .map(move |(ix, px)| {
+                let (r, c) = (ix / w, ix % w);
+                (r, c, px)
+            })
     }
 
     /*/// Applies closure to sub_window. Useful when you need to apply an operation
@@ -1490,22 +1536,28 @@ where
     }
 }
 
-#[cfg(feature="literate")]
-impl literate::show::Show for Window<'_, u8> {
+impl showable::Show for Window<'_, u8> {
 
     fn show(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // crate::io::to_html(&self).fmt(f)
         write!(f, "{}", crate::io::to_html(&self) )
     }
 
+    fn modality(&self) -> showable::Modality {
+        showable::Modality::XML
+    }
+
 }
 
-#[cfg(feature="literate")]
-impl literate::show::Show for Image<u8> {
+impl showable::Show for Image<u8> {
 
     fn show(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // crate::io::to_html(&self.full_window()).fmt(f)
         write!(f, "{}", crate::io::to_html(&self.full_window()) )
+    }
+
+    fn modality(&self) -> showable::Modality {
+        showable::Modality::XML
     }
 
 }

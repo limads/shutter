@@ -54,7 +54,7 @@ pub mod filter;
 
 pub mod cluster;
 
-pub mod segmentation;
+// pub mod segmentation;
 
 #[cfg(feature="opencvlib")]
 pub mod geom;

@@ -2,9 +2,68 @@ use crate::image::Window;
 use std::iter::FromIterator;
 use std::collections::HashMap;
 use std::ops::Range;
+use crate::image::WindowMut;
+// use crate::segmentation;
 
 /*IppStatus ippiHistogram_<mod>(const Ipp<dataType>* pSrc, int srcStep, IppiSize roiSize,
 Ipp32u* pHist, const IppiHistogramSpec* pSpec, Ipp8u* pBuffer );*/
+
+mod segmentation;
+
+pub use segmentation::*;
+
+#[derive(Debug, Clone, Copy)]
+pub struct ColorCluster {
+    pub color : u8,
+    pub n_px : usize,
+    pub min : u8,
+    pub max : u8
+}
+
+impl ColorCluster {
+
+    pub fn belong(&self, px : u8) -> bool {
+        px >= self.min && px <= self.max
+    }
+
+}
+
+pub struct ColorClustering {
+    pub colors : Vec<ColorCluster>
+}
+
+impl ColorClustering {
+
+    pub fn calculate(win : &Window<'_, u8>, px_spacing : usize, n_colors : usize, hist_init : bool) -> Self {
+        let km = segmentation::segment_colors(&win, px_spacing, n_colors, hist_init);
+        let means = segmentation::extract_mean_colors(&km);
+        let px_iter = win.pixels(px_spacing).map(|d| [*d as f64] );
+        let extremes = segmentation::extract_extreme_colors(&km, px_iter);
+        let n_pxs = (0..n_colors).map(|c| km.count_allocations(c) ).collect::<Vec<_>>();
+        let mut colors = means.iter().zip(extremes.iter().zip(n_pxs.iter()))
+            .map(|(color, ((min, max), n_px))| ColorCluster { color : *color, min : *min, max : *max, n_px : *n_px })
+            .collect::<Vec<_>>();
+        colors.sort_by(|c1, c2| c1.color.cmp(&c2.color) );
+        Self { colors }
+    }
+
+    /// Paints each pixel with the assigned cluster average. Paint black unassigned clusters.
+    pub fn paint<'a>(&'a self, win : &'a mut WindowMut<'a, u8>) {
+        for mut px in win.pixels_mut(1) {
+            let mut painted = false;
+            for c in self.colors.iter() {
+                if c.belong(*px) {
+                    *px = c.color;
+                    painted = true;
+                }
+            }
+            if !painted {
+                *px = 0;
+            }
+        }
+    }
+
+}
 
 pub trait ColorHistogram {
 
@@ -15,9 +74,9 @@ pub struct SparseHistogram(HashMap<u8, usize>);
 
 impl SparseHistogram {
 
-    pub fn calculate(win : &Window<'_, u8>, spacing : usize) -> Self {
+    pub fn calculate_from_pixels<'a>(px_iter : impl Iterator<Item=&'a u8>) -> Self {
         let mut hist : HashMap<u8, usize> = HashMap::new();
-        for px in win.pixels(spacing) {
+        for px in px_iter {
             if let Some(mut px) = hist.get_mut(px) {
                 *px += 1;
             } else {
@@ -26,10 +85,22 @@ impl SparseHistogram {
         }
         Self(hist)
     }
+
+    pub fn calculate(win : &Window<'_, u8>, spacing : usize) -> Self {
+        Self::calculate_from_pixels(win.pixels(spacing))
+    }
+}
+
+impl From<SparseHistogram> for DenseHistogram {
+
+    fn from(sparse : SparseHistogram) -> Self {
+        unimplemented!()
+    }
+
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct ColorMode {
+pub struct Mode {
     pub color : u8,
     pub n_pxs : usize
 }
@@ -41,21 +112,42 @@ pub struct DenseHistogram([usize; 256]);
 
 impl DenseHistogram {
 
-    pub fn calculate(win : &Window<'_, u8>, spacing : usize) -> Self {
+    pub fn calculate_from_pixels<'a>(px_iter : impl Iterator<Item=&'a u8>) -> Self {
         let mut hist = [0; 256];
-        for px in win.pixels(spacing) {
+        for px in px_iter {
             hist[*px as usize] += 1;
         }
         Self(hist)
     }
 
+    pub fn calculate(win : &Window<'_, u8>, spacing : usize) -> Self {
+        Self::calculate_from_pixels(win.pixels(spacing))
+    }
+
     /// Returns the histogram modes. The vector contains at most [required] modes,
     /// but might contain fewer than than if there is no pixel that satisfies
     /// the spacing constraints.
-    pub fn modes(&self, required : usize, min_space : usize) -> Vec<ColorMode> {
+    pub fn modes(&self, required : usize, min_space : usize) -> Vec<Mode> {
         let mut modes = Vec::new();
         next_mode(&mut modes, &self.0[..], required, min_space);
-        modes.drain(..).map(|ix| ColorMode { n_pxs : self.0[ix], color : ix as u8 }).collect()
+        modes.drain(..).map(|ix| Mode { n_pxs : self.0[ix], color : ix as u8 }).collect()
+    }
+
+    /// Finds the k-1 smallest values between each pair of the k modes. Might contain
+    /// fewer discriminants if fewer modes are found.
+    pub fn discriminants(&self, modes : &[Mode]) -> Vec<usize> {
+        modes.iter().take(modes.len()-1).zip(modes.iter().skip(1))
+            .filter_map(|(m1, m2)| {
+                if let Some(m) = self.0[(m1.color as usize)..(m2.color as usize)].iter().enumerate().min_by(|a, b| a.1.cmp(&b.1)) {
+                    Some(m.0 + m1.color as usize)
+                } else {
+                    None
+                }
+            }).collect()
+    }
+
+    pub fn bins<'a>(&'a self) -> impl Iterator<Item=(u8, usize)> + 'a {
+        self.0.iter().enumerate().map(|(ix, n)| (ix as u8, *n) )
     }
 }
 
@@ -66,13 +158,28 @@ fn find_mode_at_range(
     range : &Range<usize>,
     min_space : usize
 ) {
-    if let Some((ix, m)) = vals[range.clone()].iter().enumerate().max_by(|a, b| a.1.cmp(&b.1) ) {
-        // TODO iterate only over region within [start+min_space, end-min_space].
-        if *m > max.1 && (range.start == 0 || ix > min_space) && (range.end == 256 || (range.end - range.start).saturating_sub(ix) > min_space) {
-            *max = (range.start + ix, *m);
+    // println!("Iteration start");
+    // println!("{:?}", (&range, &max, &found, &min_space));
+    let range_len = range.end - range.start;
+    if let Some((ix, max_val)) = vals[range.clone()].iter().enumerate().max_by(|a, b| a.1.cmp(&b.1) ) {
+        // let far_from_left = ix > min_space;
+        // let far_from_right = range_len - ix > min_space;
+        /*let far = (range.start == 0 && range.end == 256) ||
+            (range.start == 0 && far_from_right) ||
+            (range.end == 256 && far_from_left) ||
+            (far_from_left && far_from_right);*/
+        // println!("Far = {:?}", far);
+        if *max_val > max.1 {
+            *max = (range.start + ix, *max_val);
             *found = true;
         }
+    } else {
+        // println!("No max val for {:?}", range);
     }
+
+    // println!("Iteration end");
+    // println!("{:?}", (&range, &max, &found, &min_space));
+    // println!("\n\n");
 }
 
 fn next_mode(modes : &mut Vec<usize>, vals : &[usize], mut required : usize, min_space : usize) {
@@ -84,17 +191,22 @@ fn next_mode(modes : &mut Vec<usize>, vals : &[usize], mut required : usize, min
             find_mode_at_range(&mut max, &mut found_mode, vals, &(0..256), min_space);
         },
         1 => {
-            find_mode_at_range(&mut max, &mut found_mode, vals, &(0..modes[0]), min_space);
-            find_mode_at_range(&mut max, &mut found_mode, vals, &(modes[0].saturating_add(1)..256), min_space);
+            find_mode_at_range(&mut max, &mut found_mode, vals, &(0..modes[0].saturating_sub(min_space)), min_space);
+            modes.sort();
+            find_mode_at_range(&mut max, &mut found_mode, vals, &(modes[0].saturating_add(min_space+1)..256), min_space);
+            modes.sort();
         },
         _ => {
-            let fst_range_arr = [0..modes[0]];
-            let last_range_arr = [modes[n-1].saturating_add(1)..256];
+            // Just arrays with a single range each. Any impl Iterator here that yields
+            // a single element would work, since we will chain it below.
+            let fst_range_arr = [0..modes[0].saturating_sub(min_space)];
+            let last_range_arr = [modes[n-1].saturating_add(min_space+1).min(256)..256];
             let fst_range = fst_range_arr.into_iter().cloned();
             let found_pairs = modes.iter().take(n-1)
                 .zip(modes.iter().skip(1))
-                .map(|(a, b)| (a.saturating_add(1)..*b) );
+                .map(|(a, b)| (a.saturating_add(min_space+1).min(b.saturating_sub(min_space))..(b.saturating_sub(min_space)) ));
             let last_range = last_range_arr.into_iter().cloned();
+
             for range in fst_range.chain(found_pairs).chain(last_range) {
                 find_mode_at_range(&mut max, &mut found_mode, vals, &range, min_space);
             }

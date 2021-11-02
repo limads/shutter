@@ -4,6 +4,97 @@ use away::Metric;
 use std::cmp::{PartialEq, Ordering};
 use nalgebra::*;
 
+pub fn point_euclidian(a : (usize, usize), b : (usize, usize)) -> f32 {
+    ((a.0 as f32 - b.0 as f32).powf(2.) + (a.1 as f32 - b.1 as f32).powf(2.)).sqrt()
+}
+
+/// Verifies if point is inside the circle.
+pub fn circle_contains(circle : &((usize, usize), f32), pt : (usize, usize)) -> bool {
+    point_euclidian(circle.0, pt) < circle.1
+}
+
+pub fn circle_from_diameter(a : (usize, usize), b : (usize, usize)) -> ((usize, usize), f32) {
+    let r = point_euclidian(a, b) / 2.;
+
+    // Guarantees reference point is always at x-positive quadrant.
+    let (base_pt, ref_pt) = if a.1 < b.1 {
+        (&a, &b)
+    } else {
+        (&b, &a)
+    };
+    let base = ref_pt.1 as f32 - base_pt.1 as f32;
+    let side = ref_pt.0 as f32 - base_pt.0 as f32;
+    let theta = side.atan2(base);
+
+    let midpoint = (base_pt.0 + (theta.sin() * r) as usize, base_pt.1 + (theta.cos() * r) as usize);
+    (midpoint, r)
+}
+
+/// Returns center and radius of the largest circle with a pair of points
+/// in the set that forms its diameter that does not contain any of the other points.
+pub fn inner_circle(pts : &[(usize, usize)]) -> Option<((usize, usize), f32)> {
+
+    let mut dists = Vec::new();
+    for a in pts.iter() {
+        for b in pts.iter() {
+            if a != b {
+                dists.push((*a, *b, point_euclidian(*a, *b)));
+            }
+        }
+    }
+
+    dists.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal) );
+
+    let mut base_ix = 0;
+    while base_ix < dists.len() - 1 {
+        let (base_a, base_b) = (dists[base_ix].0, dists[base_ix].1);
+        let mut ix = base_ix+1;
+        while ix < dists.len() {
+            let (a, b) = (dists[ix].0, dists[ix].1);
+            if a == base_a || b == base_b || a == base_b || b == base_a {
+                dists.remove(ix);
+            } else {
+                ix += 1;
+            }
+            dbg!(base_ix, ix);
+        }
+        base_ix += 1;
+    }
+
+    if dists.len() < 2 {
+        return None;
+    }
+
+    let mut base_ix = 0;
+    let mut pair_ix = 1;
+    while base_ix < dists.len() - 1 {
+        let mut circle = circle_from_diameter(dists[base_ix].0, dists[base_ix].1);
+        circle.1 += (2.).sqrt();
+        while pair_ix < dists.len() {
+            if circle_contains(&circle, dists[pair_ix].0) || circle_contains(&circle, dists[pair_ix].1) {
+                base_ix = pair_ix;
+                pair_ix = base_ix + 1;
+                break;
+            } else {
+                pair_ix += 1;
+            }
+            dbg!(base_ix, pair_ix);
+        }
+        if pair_ix == dists.len() {
+            return Some(circle);
+        }
+    }
+
+    None
+
+}
+
+#[test]
+fn test_inner_circle() {
+    let pts = [(0, 0), (0, 1), (0, 2), (1, 1), (2, 1), (3, 1), (10, 11), (11, 10)];
+    println!("{:?}", inner_circle(&pts[..]));
+}
+
 pub fn rect_overlap(r1 : &(usize, usize, usize, usize), r2 : &(usize, usize, usize, usize)) -> bool {
     let tl_vdist = (r1.0 as i32 - r2.0 as i32).abs();
     let tl_hdist = (r1.1 as i32 - r2.1 as i32).abs();
@@ -287,6 +378,9 @@ fn slope(pt1 : (usize, usize), pt2 : (usize, usize)) -> f64 {
     (pt1.0 as f64 * -1. - pt2.0 as f64 * -1.) / (pt1.1 as f64 - pt2.1 as f64)
 }
 
+/// Approximate an ellipse by taking two pairs of points with the largest vertical
+/// and largest horizontal ellipse. If vert > horizontal distance, the ellipse will be tall;
+/// if horiz > vert distance, the ellipse will be wide.
 pub fn ellipse_extremes(
     pts : &[(usize, usize)]
 ) -> Option<(((usize, usize), (usize, usize)), ((usize, usize), (usize, usize)))> {
@@ -480,7 +574,7 @@ pub mod cvellipse {
     }
 
     pub fn fit_circle(pts : &[(usize, usize)], method : Method) -> Result<((usize, usize), usize), String> {
-        let ellipse = fit_ellipse(pts, method)?;
+        let ellipse = EllipseFitting::new().fit_ellipse(pts, method)?;
         let radius = ((ellipse.large_axis*0.5 + ellipse.small_axis*0.5) / 2.) as usize;
         Ok((ellipse.center, radius))
     }
@@ -523,37 +617,54 @@ pub mod cvellipse {
         ApproxMeanSquare
     }
 
-    /// Returns position and radius of fitted circle. Also see fit_ellipse_ams; fit_ellipse_direct.
-    pub fn fit_ellipse(pts : &[(usize, usize)], method : Method) -> Result<Ellipse, String> {
-        let pt_vec = convert_points(pts);
-        let rotated_rect = match method {
-            Method::LeastSquares => {
-                imgproc::fit_ellipse(&pt_vec)
-                    .map_err(|e| format!("Ellipse fitting error ({})", e))?
-            },
-            Method::Direct => {
-                imgproc::fit_ellipse_direct(&pt_vec)
-                    .map_err(|e| format!("Ellipse fitting error ({})", e))?
-            },
-            Method::ApproxMeanSquare => {
-                imgproc::fit_ellipse_direct(&pt_vec)
-                    .map_err(|e| format!("Ellipse fitting error ({})", e))?
-            }
-        };
-        let center_pt = rotated_rect.center();
-        if center_pt.y < 0.0 || center_pt.x < 0.0 {
-            return Err(format!("Circle outside image boundaries"));
+    pub struct EllipseFitting {
+        pt_vec : core::Vector<core::Point2i>
+    }
+
+    impl EllipseFitting {
+
+        pub fn new() -> Self {
+            Self { pt_vec : core::Vector::new() }
         }
-        let center = (center_pt.y as usize, center_pt.x as usize);
-        let angle = rotated_rect.angle();
-        let size = rotated_rect.size();
-        let angle = rotated_rect.angle();
-        Ok(Ellipse {
-            center,
-            large_axis : rotated_rect.size().width as f64,
-            small_axis : rotated_rect.size().height as f64,
-            angle : angle as f64
-        })
+
+        /// Returns position and radius of fitted circle. Also see fit_ellipse_ams; fit_ellipse_direct.
+        pub fn fit_ellipse(&mut self, pts : &[(usize, usize)], method : Method) -> Result<Ellipse, String> {
+
+            // let pt_vec = convert_points(pts);
+            self.pt_vec.clear();
+            for pt in pts.iter() {
+                self.pt_vec.push(core::Point2i::new(pt.1 as i32, pt.0 as i32));
+            }
+
+            let rotated_rect = match method {
+                Method::LeastSquares => {
+                    imgproc::fit_ellipse(&self.pt_vec)
+                        .map_err(|e| format!("Ellipse fitting error ({})", e))?
+                },
+                Method::Direct => {
+                    imgproc::fit_ellipse_direct(&self.pt_vec)
+                        .map_err(|e| format!("Ellipse fitting error ({})", e))?
+                },
+                Method::ApproxMeanSquare => {
+                    imgproc::fit_ellipse_direct(&self.pt_vec)
+                        .map_err(|e| format!("Ellipse fitting error ({})", e))?
+                }
+            };
+            let center_pt = rotated_rect.center();
+            if center_pt.y < 0.0 || center_pt.x < 0.0 {
+                return Err(format!("Circle outside image boundaries"));
+            }
+            let center = (center_pt.y as usize, center_pt.x as usize);
+            let angle = rotated_rect.angle();
+            let size = rotated_rect.size();
+            let angle = rotated_rect.angle();
+            Ok(Ellipse {
+                center,
+                large_axis : rotated_rect.size().width as f64,
+                small_axis : rotated_rect.size().height as f64,
+                angle : angle as f64
+            })
+        }
     }
 
     pub struct EnclosingCircle {

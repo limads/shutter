@@ -33,7 +33,7 @@ pub fn decode(
         .map_err(|_| { "Error building decoder" })?;
     let color_type = dec.color_type();
     if color_type != ColorType::L8 {
-        return Err("Unsupported color type");
+        return Err("Image import error: Unsupported color type. Convert image to L8 first.");
     }
     let nrows = dec.dimensions().0 as usize;
     let ncols = dec.dimensions().1 as usize;

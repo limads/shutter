@@ -16,6 +16,7 @@ use std::borrow::Borrow;
 use crate::feature::point;
 use crate::feature::edge::euclidian;
 use crate::image::index::index_distance;
+use super::*;
 
 // #[cfg(feature="opencvlib")]
 // pub mod fgmm;
@@ -1770,17 +1771,34 @@ pub fn extract_extreme_colors(
 /// (2) For images 2..n:
 ///     (2.1). Find closest mean to each pixel
 ///     (2.2). Modify pixels to have this mean value.
-pub fn segment_colors(win : &Window<'_, u8>, px_spacing : usize, n_colors : usize) -> KMeans {
+pub fn segment_colors(win : &Window<'_, u8>, px_spacing : usize, n_colors : usize, hist_init : bool) -> KMeans {
+    let allocations = if hist_init {
+        let hist = DenseHistogram::calculate(win, px_spacing);
+        let modes = hist.modes(n_colors, ((256 / n_colors) / 4) );
+        if modes.len() == n_colors {
+            let mut allocs : Vec<usize> = win.pixels(px_spacing)
+                .map(|px| {
+                    modes.iter()
+                        .enumerate()
+                        .min_by(|m1, m2| (*px as i16 - m1.1.color as i16).abs().cmp(&(*px as i16 - m2.1.color as i16).abs()) ).unwrap().0
+                }).collect();
+            Some(allocs)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     let km = KMeans::estimate(
         win.pixels(px_spacing).map(|d| [*d as f64] ),
-        KMeansSettings { n_cluster : n_colors, max_iter : 1000 }
+        KMeansSettings { n_cluster : n_colors, max_iter : 1000, allocations }
     ).unwrap();
 
     km
 }
 
 pub fn segment_colors_to_image(win : &Window<'_, u8>, px_spacing : usize, n_colors : usize) -> Image<u8> {
-    let km = segment_colors(win, px_spacing, n_colors);
+    let km = segment_colors(win, px_spacing, n_colors, true);
     let colors = extract_mean_colors(&km);
     let ncol = win.width() / px_spacing;
     Image::from_vec(

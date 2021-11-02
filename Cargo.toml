@@ -34,7 +34,7 @@ itertools = "0.10.1"
 parry2d="0.7.1"
 base64 = "0.13.0"
 image = "0.23.14"
-literate = { path = "../literate", optional=true }
+showable = { path = "../showable" }
 
 # euclid = "0.22.6"
 
