@@ -376,7 +376,7 @@ where
     type Output = N;
 
     fn index(&self, index: (usize, usize)) -> &Self::Output {
-        &self.buf[index::linear_index(index, self.ncols)]
+        unsafe { self.buf.get_unchecked(index::linear_index(index, self.ncols)) }
     }
 }
 
@@ -386,7 +386,7 @@ where
 {
     
     fn index_mut(&mut self, index: (usize, usize)) -> &mut Self::Output {
-        &mut self.buf[index::linear_index(index, self.ncols)]
+        unsafe { self.buf.get_unchecked_mut(index::linear_index(index, self.ncols)) }
     }
     
 }
@@ -785,25 +785,25 @@ impl<'a> Iterator for PackedIterator<'a, u8> {
 
 impl<'a> Window<'a, u8> {
 
-    pub fn nonzero_pixels(&'a self, px_spacing : usize) -> impl Iterator<Item=&'a u8> +'a {
+    pub fn nonzero_pixels(&'a self, px_spacing : usize) -> impl Iterator<Item=&'a u8> +'a + Clone {
         self.pixels(px_spacing).filter(|px| **px > 0 )
     }
 
-    pub fn masked_pixels(&'a self, mask : &'a Window<'_, u8>) -> impl Iterator<Item=&'a u8> +'a {
+    pub fn masked_pixels(&'a self, mask : &'a Window<'_, u8>) -> impl Iterator<Item=&'a u8> +'a + Clone {
         mask.nonzero_labeled_pixels(1).map(move |(r, c, _)| &self[(r, c)] )
     }
 
-    pub fn nonzero_labeled_pixels(&'a self, px_spacing : usize) -> impl Iterator<Item=(usize, usize, u8)> +'a {
+    pub fn nonzero_labeled_pixels(&'a self, px_spacing : usize) -> impl Iterator<Item=(usize, usize, u8)> +'a + Clone {
         self.labeled_pixels(px_spacing).filter(|(_, _, px)| *px > 0 )
     }
 
     /// Iterate over pixels, as long as they are non-zero at the mask window.
-    pub fn masked_labeled_pixels(&'a self, mask : &'a Window<'_, u8>) -> impl Iterator<Item=(usize, usize, u8)> +'a {
+    pub fn masked_labeled_pixels(&'a self, mask : &'a Window<'_, u8>) -> impl Iterator<Item=(usize, usize, u8)> +'a + Clone {
         mask.nonzero_labeled_pixels(1).map(move |(r, c, _)| (r, c, self[(r, c)]) )
     }
 
     /// Returns iterator over (subsampled row index, subsampled col index, pixel color).
-    pub fn labeled_pixels(&'a self, px_spacing : usize) -> impl Iterator<Item=(usize, usize, u8)> +'a {
+    pub fn labeled_pixels(&'a self, px_spacing : usize) -> impl Iterator<Item=(usize, usize, u8)> +'a + Clone {
         self.pixels(px_spacing)
             .enumerate()
             .map(move |(ix, px)| {
@@ -896,7 +896,7 @@ where
         let off_ix = (self.offset.0 + index.0, self.offset.1 + index.1);
         let (limit_row, limit_col) = (self.offset.0 + self.win_sz.0, self.offset.1 + self.win_sz.1);
         if off_ix.0 < limit_row && off_ix.1 < limit_col {
-            &self.win[index::linear_index(off_ix, self.orig_sz.1)]
+            unsafe { self.win.get_unchecked(index::linear_index(off_ix, self.orig_sz.1)) }
         } else {
             panic!("Invalid window index: {:?}", index);
         }
@@ -924,9 +924,9 @@ pub fn iterate_row_wise<N>(
     row_spacing : usize
 ) -> impl Iterator<Item=&N> + Clone {
     let start = orig_sz.1 * offset.0 + offset.1;
-    (0..win_sz.0).step_by(row_spacing).map(move |i| {
+    (0..win_sz.0).step_by(row_spacing).map(move |i| unsafe {
         let row_offset = start + i*orig_sz.1;
-        &src[row_offset..(row_offset+win_sz.1)]
+        src.get_unchecked(row_offset..(row_offset+win_sz.1))
     }).flatten()
 }
 
@@ -1243,7 +1243,7 @@ impl WindowMut<'_, u8> {
             }
         }
     }
-    
+
 }
 
 pub(crate) unsafe fn create_immutable<'a>(win : &'a WindowMut<'a, u8>) -> Window<'a, u8> {
@@ -1297,7 +1297,7 @@ where
 
 impl<'a, N> WindowMut<'a, N>
 where
-    N : Scalar + Copy + Mul<Output=N> + MulAssign
+    N : Scalar + Copy + Mul<Output=N> + MulAssign + PartialOrd
 {
 
     pub fn orig_sz(&self) -> (usize, usize) {
@@ -1314,6 +1314,10 @@ where
 
     pub fn fill(&'a mut self, color : N) {
         self.pixels_mut(1).for_each(|px| *px = color );
+    }
+
+    pub fn paint(&'a mut self, min : N, max : N, color : N) {
+        self.pixels_mut(1).for_each(|px| if *px >= min && *px <= max { *px = color; } );
     }
 
     pub fn pixels_mut(&'a mut self, spacing : usize) -> impl Iterator<Item=&'a mut N> {
@@ -1344,7 +1348,7 @@ where
     /// Analogous to slice::copy_within, copy a the sub_window (src, dim) to the sub_window (dst, dim).
     pub fn copy_within(&'a mut self, src : (usize, usize), dst : (usize, usize), dim : (usize, usize)) {
         use crate::feature::shape;
-        assert!(!shape::rect_overlap(&(src.0, src.1, dim.0, dim.1), &(dst.0, dst.1, dim.0, dim.1)), "copy_within: Windows overlap");
+        assert!(!shape::rect_overlaps(&(src.0, src.1, dim.0, dim.1), &(dst.0, dst.1, dim.0, dim.1)), "copy_within: Windows overlap");
         let src_win = unsafe {
             Window {
                 offset : (self.offset.0 + src.0, self.offset.1 + src.1),
@@ -1414,7 +1418,7 @@ where
     type Output = N;
 
     fn index(&self, index: (usize, usize)) -> &Self::Output {
-        &self.win[index::linear_index((self.offset.0 + index.0, self.offset.1 + index.1), self.orig_sz.1)]
+        unsafe { self.win.get_unchecked(index::linear_index((self.offset.0 + index.0, self.offset.1 + index.1), self.orig_sz.1)) }
     }
 }
 
@@ -1424,7 +1428,7 @@ where
 {
     
     fn index_mut(&mut self, index: (usize, usize)) -> &mut Self::Output {
-        &mut self.win[index::linear_index((self.offset.0 + index.0, self.offset.1 + index.1), self.orig_sz.1)]
+        unsafe { self.win.get_unchecked_mut(index::linear_index((self.offset.0 + index.0, self.offset.1 + index.1), self.orig_sz.1)) }
     }
     
 }

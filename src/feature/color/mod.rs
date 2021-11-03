@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::ops::Range;
 use crate::image::WindowMut;
 // use crate::segmentation;
+use bayes::fit::{cluster::KMeans, cluster::KMeansSettings, Estimator};
 
 /*IppStatus ippiHistogram_<mod>(const Ipp<dataType>* pSrc, int srcStep, IppiSize roiSize,
 Ipp32u* pHist, const IppiHistogramSpec* pSpec, Ipp8u* pBuffer );*/
@@ -34,10 +35,11 @@ pub struct ColorClustering {
 
 impl ColorClustering {
 
-    pub fn calculate(win : &Window<'_, u8>, px_spacing : usize, n_colors : usize, hist_init : bool) -> Self {
-        let km = segmentation::segment_colors(&win, px_spacing, n_colors, hist_init);
+    pub fn calculate_from_pixels<'a>(pxs : impl Iterator<Item=&'a u8> + 'a + Clone, n_colors : usize, hist_init : bool) -> Self {
+        let km = segment_colors(pxs.clone(), n_colors, hist_init);
         let means = segmentation::extract_mean_colors(&km);
-        let px_iter = win.pixels(px_spacing).map(|d| [*d as f64] );
+        //let px_iter = win.pixels(px_spacing).map(|d| [*d as f64] );
+        let px_iter = pxs.map(|d| [*d as f64] );
         let extremes = segmentation::extract_extreme_colors(&km, px_iter);
         let n_pxs = (0..n_colors).map(|c| km.count_allocations(c) ).collect::<Vec<_>>();
         let mut colors = means.iter().zip(extremes.iter().zip(n_pxs.iter()))
@@ -45,6 +47,10 @@ impl ColorClustering {
             .collect::<Vec<_>>();
         colors.sort_by(|c1, c2| c1.color.cmp(&c2.color) );
         Self { colors }
+    }
+
+    pub fn calculate(win : &Window<'_, u8>, px_spacing : usize, n_colors : usize, hist_init : bool) -> Self {
+        Self::calculate_from_pixels(win.pixels(px_spacing), n_colors, hist_init)
     }
 
     /// Paints each pixel with the assigned cluster average. Paint black unassigned clusters.
@@ -64,6 +70,50 @@ impl ColorClustering {
     }
 
 }
+
+/// Returns an image, with each pixel attributed to its closest K-means color pixel
+/// according to a given subsampling given by px_spacing. Also return the allocations,
+/// which are the indices of the color vector each pixel in raster order belongs to.
+/// (1) Call k-means for image 1
+/// (2) For images 2..n:
+///     (2.1). Find closest mean to each pixel
+///     (2.2). Modify pixels to have this mean value.
+pub fn segment_colors<'a>(pxs : impl Iterator<Item=&'a u8> + 'a + Clone, n_colors : usize, hist_init : bool) -> KMeans {
+    let allocations = if hist_init {
+        let hist = DenseHistogram::calculate_from_pixels(pxs.clone());
+        let modes = hist.modes(n_colors, ((256 / n_colors) / 4) );
+        if modes.len() == n_colors {
+            let mut allocs : Vec<usize> = pxs.clone()
+                .map(|px| {
+                    modes.iter()
+                        .enumerate()
+                        .min_by(|m1, m2| (*px as i16 - m1.1.color as i16).abs().cmp(&(*px as i16 - m2.1.color as i16).abs()) ).unwrap().0
+                }).collect();
+            Some(allocs)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let km = KMeans::estimate(
+        // win.pixels(px_spacing).map(|d| [*d as f64] ),
+        pxs.map(|d| [*d as f64] ),
+        KMeansSettings { n_cluster : n_colors, max_iter : 1000, allocations }
+    ).unwrap();
+
+    km
+}
+
+/*pub fn segment_colors_to_image(win : &Window<'_, u8>, px_spacing : usize, n_colors : usize) -> Image<u8> {
+    let km = segment_colors(win, px_spacing, n_colors, true);
+    let colors = extract_mean_colors(&km);
+    let ncol = win.width() / px_spacing;
+    Image::from_vec(
+        km.allocations().iter().map(|alloc| colors[*alloc] ).collect(),
+        ncol
+    )
+}*/
 
 pub trait ColorHistogram {
 

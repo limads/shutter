@@ -35,8 +35,8 @@ pub fn decode(
     if color_type != ColorType::L8 {
         return Err("Image import error: Unsupported color type. Convert image to L8 first.");
     }
-    let nrows = dec.dimensions().0 as usize;
-    let ncols = dec.dimensions().1 as usize;
+    let nrows = dec.dimensions().1 as usize;
+    let ncols = dec.dimensions().0 as usize;
     let mut buf = Vec::<u8>::from_iter((0..(nrows * ncols)).map(|_| 0 ));
     let img = dec.read_image(&mut buf[..])
         .map_err(|_| { "Error reading image" })?;
@@ -61,11 +61,10 @@ pub fn encode(
     {
         let ref mut writ = BufWriter::new(&mut dst);
         let encoder = png::PngEncoder::new(writ);
-        let nrows = dec.len() / dec.width();
         encoder.encode(
             dec.as_slice(),
             dec.width() as u32,
-            nrows as u32,
+            dec.height() as u32,
             image::ColorType::L8
         ).map_err(|e|{ println!("{:?}", e); "Could not encode image" } )?;
     }

@@ -154,7 +154,7 @@ pub fn is_white_dark_bounded_transition(
     i : usize,
     thr : &EdgeThreshold
 ) {
-    let diff = *a as i16 - *b as i16;
+    let diff = (*a as i16 - *b as i16).abs();
     let a_match_up = *a > thr.upper.min && *a < thr.upper.max;
     let b_match_low = *b > thr.lower.min && *b < thr.lower.max;
     if a_match_up && b_match_low && diff > max_left.1 {
@@ -172,7 +172,7 @@ pub fn is_white_dark_diagonal_bounded_transition(
     b : &u8,
     thr : &EdgeThreshold
 ) {
-    let diff = *a as i16 - *b as i16;
+    let diff = (*a as i16 - *b as i16).abs();
     let a_match_up = *a > thr.upper.min && *a < thr.upper.max;
     let b_match_low = *b > thr.lower.min && *b < thr.lower.max;
     if a_match_up && b_match_low && diff > max.1 {
@@ -196,10 +196,10 @@ pub fn is_dark_white_diagonal_bounded_transition(
     b : &u8,
     thr : &EdgeThreshold
 ) {
-    let diff = *a as i16 - *b as i16;
+    let diff = (*a as i16 - *b as i16).abs();
     let a_match_low = *a > thr.lower.min && *a < thr.lower.max;
     let b_match_up =  *b > thr.upper.min && *b < thr.upper.max;
-    if a_match_low && b_match_up && diff < max.1 {
+    if a_match_low && b_match_up && diff > max.1 {
         let y = max.0.0+(comp_dist/2);
         let x = if to_right {
             max.0.1+(comp_dist/2)
@@ -261,10 +261,10 @@ pub fn is_dark_white_bounded_transition(
     i : usize,
     thr : &EdgeThreshold
 ) {
-    let diff = *a as i16 - *b as i16;
+    let diff = (*a as i16 - *b as i16).abs();
     let a_match_low = *a > thr.lower.min && *a < thr.lower.max;
     let b_match_up =  *b > thr.upper.min && *b < thr.upper.max;
-    if a_match_low && b_match_up && diff < max_right.1 {
+    if a_match_low && b_match_up && diff > max_right.1 {
         *max_right = (i+(comp_dist/2), diff);
         *found = true;
     }

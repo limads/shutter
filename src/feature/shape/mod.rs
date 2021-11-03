@@ -43,8 +43,10 @@ pub fn inner_circle(pts : &[(usize, usize)]) -> Option<((usize, usize), f32)> {
         }
     }
 
-    dists.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal) );
+    // Order from largest to smallest distance.
+    dists.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal) );
 
+    // Remove repeated points.
     let mut base_ix = 0;
     while base_ix < dists.len() - 1 {
         let (base_a, base_b) = (dists[base_ix].0, dists[base_ix].1);
@@ -56,7 +58,7 @@ pub fn inner_circle(pts : &[(usize, usize)]) -> Option<((usize, usize), f32)> {
             } else {
                 ix += 1;
             }
-            dbg!(base_ix, ix);
+            // dbg!(base_ix, ix);
         }
         base_ix += 1;
     }
@@ -65,22 +67,21 @@ pub fn inner_circle(pts : &[(usize, usize)]) -> Option<((usize, usize), f32)> {
         return None;
     }
 
-    let mut base_ix = 0;
-    let mut pair_ix = 1;
-    while base_ix < dists.len() - 1 {
-        let mut circle = circle_from_diameter(dists[base_ix].0, dists[base_ix].1);
-        circle.1 += (2.).sqrt();
-        while pair_ix < dists.len() {
-            if circle_contains(&circle, dists[pair_ix].0) || circle_contains(&circle, dists[pair_ix].1) {
-                base_ix = pair_ix;
-                pair_ix = base_ix + 1;
+    let mut ix = 0;
+    while ix < dists.len() {
+        let mut circle = circle_from_diameter(dists[ix].0, dists[ix].1);
+        circle.1 = (circle.1 - (2.).sqrt()).max(1.);
+
+        let mut point_inside = false;
+        for test_ix in (0..ix).chain(ix+1..dists.len()) {
+            if circle_contains(&circle, dists[test_ix].0) || circle_contains(&circle, dists[test_ix].1) {
+                ix += 1;
+                point_inside = true;
                 break;
-            } else {
-                pair_ix += 1;
             }
-            dbg!(base_ix, pair_ix);
         }
-        if pair_ix == dists.len() {
+
+        if !point_inside {
             return Some(circle);
         }
     }
@@ -91,16 +92,80 @@ pub fn inner_circle(pts : &[(usize, usize)]) -> Option<((usize, usize), f32)> {
 
 #[test]
 fn test_inner_circle() {
-    let pts = [(0, 0), (0, 1), (0, 2), (1, 1), (2, 1), (3, 1), (10, 11), (11, 10)];
+    let pts = [(22, 37), (22, 36), (23, 35), (23, 36), (23, 37), (23, 38), (24, 36), (25, 49), (25, 47), (25, 48), (25, 36),
+    (25, 37), (25, 24), (25, 21), (25, 22), (26, 47), (26, 23), (26, 49), (26, 46), (26, 37), (26, 38), (26, 39),
+    (26, 40), (26, 41), (26, 21), (26, 22), (26, 48), (26, 24), (26, 25), (26, 26), (27, 44), (27, 45), (27, 46), (27, 47),
+    (27, 48), (27, 49), (27, 50), (27, 51), (27, 36), (27, 37), (27, 38), (27, 39), (27, 40), (27, 41), (27, 20), (27, 21), (27, 22),
+    (27, 23), (27, 25), (27, 26), (27, 62), (28, 63), (28, 36), (28, 37), (28, 38), (28, 39), (28, 40), (28, 41), (28, 42),
+    (28, 43), (28, 44), (28, 45), (28, 46), (28, 47), (28, 48), (28, 49), (28, 50), (28, 51), (28, 52)];
     println!("{:?}", inner_circle(&pts[..]));
 }
 
-pub fn rect_overlap(r1 : &(usize, usize, usize, usize), r2 : &(usize, usize, usize, usize)) -> bool {
-    let tl_vdist = (r1.0 as i32 - r2.0 as i32).abs();
+/// Verifies if any rectangle is contained in the horizontal strip defined by the other
+pub fn horizontally_aligned(r1 : &(usize, usize, usize, usize), r2 : &(usize, usize, usize, usize)) -> bool {
+    let tl_1 = top_left_coordinate(r1);
+    let tl_2 = top_left_coordinate(r2);
+    let br_1 = bottom_right_coordinate(r1);
+    let br_2 = bottom_right_coordinate(r2);
+    (tl_1.0 >= tl_2.0 && tl_1.0 <= br_2.0) || (tl_2.0 >= tl_1.0 && tl_1.0 <= br_1.0)
+}
+
+/// Verifies if any rectangle is contained in the vertical strip defined by the other
+pub fn vertically_aligned(r1 : &(usize, usize, usize, usize), r2 : &(usize, usize, usize, usize)) -> bool {
+    let tl_1 = top_left_coordinate(r1);
+    let tl_2 = top_left_coordinate(r2);
+    let br_1 = bottom_right_coordinate(r1);
+    let br_2 = bottom_right_coordinate(r2);
+    (tl_1.1 >= tl_2.1 && tl_1.1 <= br_2.1) || (tl_2.1 >= tl_1.1 && tl_1.1 <= br_1.1)
+}
+
+pub fn rect_contacts(r1 : &(usize, usize, usize, usize), r2 : &(usize, usize, usize, usize)) -> bool {
+
+    // if rect_overlaps(r1, r2) {
+    //    return false;
+    // }
+
+    let tl_1 = top_left_coordinate(r1);
+    let tl_2 = top_left_coordinate(r2);
+    let br_1 = bottom_right_coordinate(r1);
+    let br_2 = bottom_right_coordinate(r2);
+
+    ((br_1.0 as i32 - br_2.0 as i32 <= 1) && vertically_aligned(r1, r2)) ||
+    ((br_1.1 as i32 - tl_2.1 as i32 <= 1) && horizontally_aligned(r1, r2)) ||
+    ((tl_1.0 as i32 - br_2.0 as i32 <= 1) && vertically_aligned(r1, r2)) ||
+    ((tl_1.1 as i32 - br_2.1 as i32 <= 1) && horizontally_aligned(r1, r2))
+}
+
+pub fn top_left_coordinate(r : &(usize, usize, usize, usize)) -> (usize, usize) {
+    (r.0, r.1)
+}
+
+pub fn bottom_right_coordinate(r : &(usize, usize, usize, usize)) -> (usize, usize) {
+    (r.0 + r.2, r.1 + r.3)
+}
+
+pub fn rect_overlaps(r1 : &(usize, usize, usize, usize), r2 : &(usize, usize, usize, usize)) -> bool {
+    /*let tl_vdist = (r1.0 as i32 - r2.0 as i32).abs();
     let tl_hdist = (r1.1 as i32 - r2.1 as i32).abs();
     let (h1, w1) = (r1.2 as i32, r1.3 as i32);
     let (h2, w2) = (r2.2 as i32, r2.3 as i32);
-    (tl_vdist < h1 || tl_vdist < h2) && (tl_hdist < w1 || tl_hdist < w2)
+    //(tl_vdist < h1 || tl_vdist < h2) && (tl_hdist < w1 || tl_hdist < w2)
+    (tl_vdist < h1 && tl_hdist < w1) || (tl_vdist < h2 && tl_hdist < w2)*/
+
+    let tl_1 = top_left_coordinate(r1);
+    let tl_2 = top_left_coordinate(r2);
+    let br_1 = bottom_right_coordinate(r1);
+    let br_2 = bottom_right_coordinate(r2);
+
+    if tl_1.1 >= br_2.1 || tl_2.1 >= br_1.1 {
+        return false;
+    }
+
+    if br_1.0 >= tl_2.0 || br_2.0 >= tl_1.0 {
+        return false;
+    }
+
+    true
 }
 
 /// A cricle has circularity of 1; Other polygons have circularity < 1.

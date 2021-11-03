@@ -2,8 +2,7 @@
 use std::cmp::{Eq, PartialEq};
 use itertools::Itertools;
 use crate::image::{Image, Window, WindowMut};
-use bayes::fit::{cluster::KMeans, cluster::KMeansSettings, Estimator};
-use crate::feature::shape::*;
+use crate::feature::shape::{self, *};
 use std::fmt;
 use std::collections::HashMap;
 use std::mem;
@@ -144,7 +143,8 @@ pub enum Strategy {
 }
 
 /// Calculates the color momentum, but if the momentum pixel is not at a valid color,
-/// position the momentum to the closest pixel that also matches it.
+/// position the momentum to the closest pixel that also matches it (eager strategy)
+/// or to the point average of the n-closest pixels that matches it (conservative strategy).
 pub fn adjusted_color_momentum(
     win : &Window<'_, u8>,
     px_spacing : usize,
@@ -867,7 +867,9 @@ impl Patch {
     // Use short-circuit to only iterate over pixels for verification when absolutely required.
     // Note: Outer rect right border should equal position of new pixel, since outer rect starts with
     // size 1.
-    pub fn pixel_is_below(&self, (r, c) : (usize, usize)) -> bool {
+
+    /// Pixel is inside rect area or near its bottom border
+    pub fn pixel_not_far_below(&self, (r, c) : (usize, usize)) -> bool {
         // println!("rect={}; r = {}", self.outer_rect.0 + self.outer_rect.2, r);
         let rect_r = self.outer_rect.0 + self.outer_rect.2;
 
@@ -876,36 +878,56 @@ impl Patch {
 
         // assert!(self.pxs.is_sorted_by(|a, b| a.0.partial_cmp(&b.0 )));
 
-        r >= 1 &&
+        (rect_r as i32 - r as i32) >= -2
+        //r >= 1 &&
             // is_below &&
-            pixel_below_rect(&self.outer_rect, (r, c)) &&
-            self.pxs.iter().rev() /*.take_while(|px| px.0 >= r-1 ).*/ .any(|px| (px.0 == r || px.0 == r-1) && px.1 == c )
+            //pixel_below_rect(&self.outer_rect, (r, c)) //&&
+            // self.pxs.iter().rev() /*.take_while(|px| px.0 >= r-1 ).*/ .any(|px| (px.0 == r || px.0 == r-1) && px.1 == c )
     }
 
-    pub fn pixel_is_right(&self, (r, c) : (usize, usize)) -> bool {
+    /// Pixel is inside rect area or near its border right
+    pub fn pixel_not_far_right(&self, (r, c) : (usize, usize)) -> bool {
         // println!("rect={}; c= {}", self.outer_rect.0 + self.outer_rect.2, c);
         let rect_c = self.outer_rect.1 + self.outer_rect.3;
 
+        (rect_c as i32 - c as i32) >= -2
+
         // First is true when first pixel at col is being inserted; second after.
         // let is_right = (rect_c == c || rect_c == c+1);
-        c >= 1 &&
+        //c >= 1 &&
             // is_right &&
-            pixel_to_right_of_rect(&self.outer_rect, (r, c)) &&
-            self.pxs.iter().rev().any(|px| px.0 == r && (px.1 == c || px.1 == c-1) )
+        //    pixel_to_right_of_rect(&self.outer_rect, (r, c)) //&&
+            // self.pxs.iter().rev().any(|px| px.0 == r && (px.1 == c || px.1 == c-1) )
     }
 
-    pub fn pixel_is_left(&self, (r, c) : (usize, usize)) -> bool {
+    /*pub fn pixel_is_left(&self, (r, c) : (usize, usize)) -> bool {
         let is_left = self.outer_rect.1 > 0 && self.outer_rect.1 - 1 == c;
         is_left &&
-            pixel_to_left_of_rect(&self.outer_rect, (r, c)) &&
-            self.pxs.iter().rev().any(|px| px.0 == r && (px.1 == c || px.1 == c+1) )
+            pixel_to_left_of_rect(&self.outer_rect, (r, c)) //&&
+            // self.pxs.iter().rev().any(|px| px.0 == r && (px.1 == c || px.1 == c+1) )
     }
 
     pub fn pixel_is_above(&self, (r, c) : (usize, usize)) -> bool {
         let is_above = self.outer_rect.0 > 0 && self.outer_rect.0 - 1 == r;
         is_above &&
-        pixel_above_rect(&self.outer_rect, (r, c)) &&
-        self.pxs.iter().rev() /*.take_while(|px| px.0 >= r-1 ).*/ .any(|px| (px.0 == r || px.0 == r+1) && px.1 == c )
+        pixel_above_rect(&self.outer_rect, (r, c)) //&&
+        // self.pxs.iter().rev() /*.take_while(|px| px.0 >= r-1 ).*/ .any(|px| (px.0 == r || px.0 == r+1) && px.1 == c )
+    }*/
+
+    pub fn add_to_right(&mut self, px : (usize, usize)) {
+        assert!(self.pixel_not_far_right(px), format!("Pixel not at right: {:?}", (self.outer_rect, &self.pxs, px)));
+        self.expand(&[px]);
+    }
+
+    pub fn add_to_bottom(&mut self, px : (usize, usize)) {
+        assert!(self.pixel_not_far_below(px), format!("Pixel not at bottom: {:?}", (self.outer_rect, &self.pxs, px)));
+        self.expand(&[px]);
+    }
+
+    pub fn merge(&mut self, other : Patch) {
+        assert!(!shape::rect_overlaps(&self.outer_rect, &other.outer_rect), format!("Rects overlap {:?}", (self.outer_rect, other.outer_rect)));
+        assert!(shape::rect_contacts(&self.outer_rect, &other.outer_rect), format!("No contact {:?}", (self.outer_rect, other.outer_rect)));
+        self.expand(&other.pxs);
     }
 
     pub fn expand(&mut self, pts : &[(usize, usize)]) {
@@ -916,17 +938,19 @@ impl Patch {
                 self.outer_rect.0 = pt.0;
 
                 // self.outer_rect.2 = (pt.0 - self.outer_rect.0)+1;
+            } else {
+                if pt.0 > self.outer_rect.0 + self.outer_rect.2 {
+                    self.outer_rect.2 = pt.0 - self.outer_rect.0;
+                }
             }
             if pt.1 < self.outer_rect.1 {
                 self.outer_rect.3 = self.outer_rect.3 + (self.outer_rect.1 - pt.1);
                 self.outer_rect.1 = pt.1;
                 // self.outer_rect.3 = (pt.1 - self.outer_rect.1)+1;
-            }
-            if pt.0 > self.outer_rect.0 + self.outer_rect.2 {
-                self.outer_rect.2 = pt.0 - self.outer_rect.0;
-            }
-            if pt.1 > self.outer_rect.1 + self.outer_rect.3 {
-                self.outer_rect.3 = pt.1 - self.outer_rect.1;
+            } else {
+                if pt.1 > self.outer_rect.1 + self.outer_rect.3 {
+                    self.outer_rect.3 = pt.1 - self.outer_rect.1;
+                }
             }
 
             /*let new_h = (pt.0 - self.outer_rect.0)+1;
@@ -944,9 +968,9 @@ impl Patch {
             // raster order insertion. Even if we are merging left patch
             // to right and left has one element, then left is guranteed
             // to be in row order to top, since they will be different.
-            if pts.len() > 1 {
-                self.pxs.sort_unstable_by(|a, b| a.0.cmp(&b.0) );
-            }
+            // if pts.len() > 1 {
+            //    self.pxs.sort_unstable_by(|a, b| a.0.cmp(&b.0) );
+            // }
 
             //println!("")
         }
@@ -956,10 +980,15 @@ impl Patch {
         self.color == other.color
     }
 
-    /// Maps rows to a (sorted) set of columns
+    /// Maps rows to a (sorted) set of columns.
     pub fn group_rows(&self) -> HashMap<usize, Vec<usize>> {
         let mut row_pxs = HashMap::new();
-        for (row, g_pxs) in self.pxs.iter().group_by(|px| px.0 ).into_iter() {
+
+        let mut row_sorted_pxs = self.pxs.clone();
+        row_sorted_pxs.sort_unstable_by(|px_a, px_b| px_a.0.cmp(&px_b.0) );
+
+        // pxs should be sorted by rows here.
+        for (row, g_pxs) in row_sorted_pxs.iter().group_by(|px| px.0 ).into_iter() {
             let mut pxs_vec = g_pxs.map(|px| px.1 ).collect::<Vec<_>>();
             pxs_vec.sort_unstable();
             row_pxs.insert(row, pxs_vec);
@@ -1415,12 +1444,13 @@ pub (crate) fn single_color_patches(
     let mut search = PatchSearch::new(win, px_spacing);
 
     // TODO also avoid reallocating this structure.
-    let mut prev_row_mask : Vec<bool> = Vec::with_capacity(win.width());
+    let mut prev_row_mask : Vec<bool> = Vec::with_capacity(win.width() / px_spacing);
 
-    for c in (0..win.width()) {
+    for c in (0..(win.width() / px_spacing)) {
         prev_row_mask.push(false);
     }
 
+    let mut last_matching_col = None;
     for (r, c, px_color) in win.labeled_pixels(px_spacing) {
         // let (r, c) = (ix / win.width(), ix % win.width());
         // let px_color = win[(r*px_spacing, c*px_spacing)];
@@ -1430,16 +1460,38 @@ pub (crate) fn single_color_patches(
             None
         };
 
-        // The search is set to the previous entry at append_or_update_patch if matched.
         if c == 0 {
-            search.left_patch_ix = None;
+            last_matching_col = None;
         }
 
-        let merges_left = search.left_patch_ix.is_some();
-        let merges_top = prev_row_mask[c];
         let color_match = mode.matches(px_color);
+        let merges_left = if let Some(last_c) = last_matching_col { c - last_c == 1 } else { false } && color_match && search.left_patch_ix.is_some();
+        let merges_top = r >= 1 && prev_row_mask[c] && color_match && search.top_patch_ix.is_some();
+        if c == 429 && r == 338 {
+            println!("{:?}", (merges_left, merges_top, color_match));
+        }
         if color_match {
             append_or_update_patch(patches, &mut search, &mut n_patches, win, merges_left, merges_top, r, c, mode.color(), px_spacing);
+            last_matching_col = Some(c);
+            /*match (merges_left, merges_top) {
+                (true, true) => {
+                    merge_left_to_top_patch(patches, &mut search, &mut n_patches);
+                    search.prev_row_patch_ixs[c] = search.top_patch_ix.unwrap();
+                    search.left_patch_ix = Some(search.top_patch_ix.unwrap());
+                },
+                (true, false) => {
+                    patches[search.left_patch_ix.unwrap()].expand(&[(r, c)]);
+                    search.prev_row_patch_ixs[c] = search.left_patch_ix.unwrap();
+                },
+                (false, true) => {
+                    patches[search.top_patch_ix.unwrap()].expand(&[(r, c)]);
+                    search.prev_row_patch_ixs[c] = search.top_patch_ix.unwrap();
+                    search.left_patch_ix = Some(search.top_patch_ix.unwrap());
+                },
+                (false, false) => {
+                    add_patch(patches, &mut search, &mut n_patches, win, r, c, mode.color(), px_spacing);
+                }
+            }*/
             prev_row_mask[c] = true;
         } else {
             prev_row_mask[c] = false;
@@ -1563,93 +1615,85 @@ fn append_or_update_patch(
             }
 
             // Push new pixel to top patch
-            patches[search.top_patch_ix.unwrap()].expand(&[(r, c)]);
-
+            patches[search.top_patch_ix.unwrap()].add_to_bottom((r, c));
             search.prev_row_patch_ixs[c] = search.top_patch_ix.unwrap();
             search.left_patch_ix = Some(search.top_patch_ix.unwrap());
         },
         (true, false) => {
-            patches[search.left_patch_ix.unwrap()].expand(&[(r, c)]);
-            //*(prev_row_patch_ixs.get_mut(&c).unwrap()) = left_patch_ix.unwrap();
+            patches[search.left_patch_ix.unwrap()].add_to_right((r, c));
             search.prev_row_patch_ixs[c] = search.left_patch_ix.unwrap();
-            // Left patch is left unchanged
-        }
+        },
         (false, true) => {
-
-            // TODO panicking here
-            patches[search.top_patch_ix.unwrap()].expand(&[(r, c)]);
-            // *(prev_row_patch_ixs.get_mut(&c).unwrap()) = top_patch_ix.unwrap();
+            patches[search.top_patch_ix.unwrap()].add_to_bottom((r, c));
             search.prev_row_patch_ixs[c] = search.top_patch_ix.unwrap();
             search.left_patch_ix = Some(search.top_patch_ix.unwrap());
         },
         (false, false) => {
-            /*let opt_pxs = match prev_pxs.len() {
-                0 => None,
-                1 => Some(prev_pxs.remove(0)),
-                _ => Some(prev_pxs.swap_remove(0))
-            };*/
-            // println!("Inserted new patch starting from {},{}", r, c);
-            //
-
-            // n_patches here still refer to the previous iteration, which is why we
-            // index with n_patches instead of n_patches-1
-            if *n_patches < patches.len() {
-                patches[*n_patches].pxs.clear();
-                patches[*n_patches].pxs.push((r, c));
-                patches[*n_patches].outer_rect = (r, c, 1, 1);
-                patches[*n_patches].color = color;
-                patches[*n_patches].scale = px_spacing;
-                patches[*n_patches].img_height = win.height();
-            } else {
-                patches.push(Patch::new((r, c), color, px_spacing, win.height()));
-            }
-            *n_patches += 1;
-
-            //*(prev_row_patch_ixs.get_mut(&c).unwrap()) = patches.len() - 1;
-            search.prev_row_patch_ixs[c] = *n_patches - 1;
-            search.left_patch_ix = Some(*n_patches - 1);
+            add_patch(patches, search, n_patches, win, r, c, color, px_spacing);
         }
     }
 }
 
+/// Since we might be recycling the patches Vec<_> from a previous iteration,
+/// either update one of the junk patches to hold the new patch, or push
+/// this new patch to the vector. In either case, n_patches (which hold the
+/// valid patch slice size) will be incremented by one.
+fn add_patch(
+    patches : &mut Vec<Patch>,
+    search : &mut PatchSearch,
+    n_patches : &mut usize,
+    win : &Window<'_, u8>,
+    r : usize,
+    c : usize,
+    color : u8,
+    px_spacing : usize
+) {
+    if *n_patches < patches.len() {
+        patches[*n_patches].pxs.clear();
+        patches[*n_patches].pxs.push((r, c));
+        patches[*n_patches].outer_rect = (r, c, 1, 1);
+        patches[*n_patches].color = color;
+        patches[*n_patches].scale = px_spacing;
+        patches[*n_patches].img_height = win.height();
+    } else {
+        patches.push(Patch::new((r, c), color, px_spacing, win.height()));
+    }
+    *n_patches += 1;
+    search.prev_row_patch_ixs[c] = *n_patches - 1;
+    search.left_patch_ix = Some(*n_patches - 1);
+}
+
 fn merge_left_to_top_patch(patches : &mut Vec<Patch>, search : &mut PatchSearch, n_patches : &mut usize) {
+    // This method can't be called when the left and top patches are the same.
+    assert!(search.left_patch_ix.unwrap() != search.top_patch_ix.unwrap());
+
     let left_patch = mem::take(&mut patches[search.left_patch_ix.unwrap()]);
-    patches[search.top_patch_ix.unwrap()].expand(&left_patch.pxs);
+    patches[search.top_patch_ix.unwrap()].merge(left_patch);
 
     // Remove old left patch (now merged with top).
-    // TODO if patches still contains data from the previous iteration, we will swap with a junk patch here.
-    // patches.swap_remove(search.left_patch_ix.unwrap());
     patches.remove(search.left_patch_ix.unwrap());
 
     if let Some(ref mut ix) = search.top_patch_ix {
         if *ix > search.left_patch_ix.unwrap() {
             *ix -= 1;
         }
+    } else {
+        panic!()
     }
 
+    // Update indices of previous row patches, since the remove(.) invalidated
+    // every index >= left patch.
     for mut ix in search.prev_row_patch_ixs.iter_mut() {
-
-        // Assign, within the previous rows patches, to the top patch everything
-        // pointing to the new old left patch
         if *ix == search.left_patch_ix.unwrap() {
             *ix = search.top_patch_ix.unwrap();
-        }
-
-        // Everything pointing to last patch index now points to
-        // the old left patch, since we did a swap remove.
-        // n_patches here still refer to the previous iteration
-        // if *ix == (*n_patches - 1) {
-        //    *ix = search.left_patch_ix.unwrap();
-        // }
-        if *ix > search.left_patch_ix.unwrap() {
-            *ix -= 1;
+        } else {
+            if *ix > search.left_patch_ix.unwrap() {
+                *ix -= 1;
+            }
         }
     }
 
-    // if search.top_patch_ix.unwrap() == (*n_patches - 1) {
-    //    search.top_patch_ix = Some(search.left_patch_ix.unwrap());
-    // }
-
+    // Account for removed patch.
     *n_patches -= 1;
 }
 
@@ -1762,49 +1806,6 @@ pub fn extract_extreme_colors(
     (0..km.means().count()).map(|ix| bayes::fit::cluster::extremes(&km, sample.clone(), ix).unwrap() )
         .map(|(low, high)| (flatten_to_8bit(&low), flatten_to_8bit(&high)) )
         .collect::<Vec<_>>()
-}
-
-/// Returns an image, with each pixel attributed to its closest K-means color pixel
-/// according to a given subsampling given by px_spacing. Also return the allocations,
-/// which are the indices of the color vector each pixel in raster order belongs to.
-/// (1) Call k-means for image 1
-/// (2) For images 2..n:
-///     (2.1). Find closest mean to each pixel
-///     (2.2). Modify pixels to have this mean value.
-pub fn segment_colors(win : &Window<'_, u8>, px_spacing : usize, n_colors : usize, hist_init : bool) -> KMeans {
-    let allocations = if hist_init {
-        let hist = DenseHistogram::calculate(win, px_spacing);
-        let modes = hist.modes(n_colors, ((256 / n_colors) / 4) );
-        if modes.len() == n_colors {
-            let mut allocs : Vec<usize> = win.pixels(px_spacing)
-                .map(|px| {
-                    modes.iter()
-                        .enumerate()
-                        .min_by(|m1, m2| (*px as i16 - m1.1.color as i16).abs().cmp(&(*px as i16 - m2.1.color as i16).abs()) ).unwrap().0
-                }).collect();
-            Some(allocs)
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-    let km = KMeans::estimate(
-        win.pixels(px_spacing).map(|d| [*d as f64] ),
-        KMeansSettings { n_cluster : n_colors, max_iter : 1000, allocations }
-    ).unwrap();
-
-    km
-}
-
-pub fn segment_colors_to_image(win : &Window<'_, u8>, px_spacing : usize, n_colors : usize) -> Image<u8> {
-    let km = segment_colors(win, px_spacing, n_colors, true);
-    let colors = extract_mean_colors(&km);
-    let ncol = win.width() / px_spacing;
-    Image::from_vec(
-        km.allocations().iter().map(|alloc| colors[*alloc] ).collect(),
-        ncol
-    )
 }
 
 /// Calculates the central point of all pixels within a given color interval.

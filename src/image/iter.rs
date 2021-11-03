@@ -10,7 +10,7 @@ where
     let n = rows.clone().count();
     rows.clone().take(n - comp_dist)
         .map(move |row| &row[col] )
-        .zip(rows.skip(comp_dist).map(move |row| &row[col] ))
+        .zip(rows.skip(comp_dist).map(move |row| unsafe { row.get_unchecked(col) } ))
         .enumerate()
 }
 
@@ -19,9 +19,11 @@ pub fn horizontal_row_iterator<'a, N>(
     row : &'a [N],
     comp_dist : usize
 ) -> impl Iterator<Item=(usize, (&'a N, &'a N))>+'a {
-    row[0..(row.len().saturating_sub(comp_dist))].iter()
-        .zip(row[comp_dist..row.len()].iter())
-        .enumerate()
+    unsafe {
+        row[0..(row.len().saturating_sub(comp_dist))].iter()
+            .zip(row.get_unchecked(comp_dist..row.len()).iter())
+            .enumerate()
+    }
 }
 
 /// Iterates over pairs of pixels, carrying row index at first position for the informed column.
@@ -37,7 +39,7 @@ where
     let upper_rows = rows.skip(comp_dist).step_by(comp_dist);
     lower_rows.zip(upper_rows)
         .enumerate()
-        .map(move |(row_ix, (lower, upper))| (comp_dist*row_ix, (&lower[col], &upper[col])) )
+        .map(move |(row_ix, (lower, upper))| unsafe { (comp_dist*row_ix, (lower.get_unchecked(col), upper.get_unchecked(col))) })
 }
 
 /// Iterates over a diagonal, starting at given (row, col) and going from top-left to bottom-right
@@ -57,10 +59,10 @@ where
     lower_rows.zip(upper_rows)
         .enumerate()
         .take(take_n)
-        .map(move |(ix, (row1, row2))| {
+        .map(move |(ix, (row1, row2))| unsafe {
             let px_ix = (start.0 + comp_dist*ix, start.1 + comp_dist*ix);
             // println!("{:?}", (start, nrows, ncols, take_n, px_ix));
-            (px_ix, (&row1[px_ix.1], &row2[px_ix.1 + comp_dist]))
+            (px_ix, (row1.get_unchecked(px_ix.1), row2.get_unchecked(px_ix.1 + comp_dist)))
          })
 }
 
@@ -81,10 +83,10 @@ where
     lower_rows.zip(upper_rows)
         .enumerate()
         .take(take_n)
-        .map(move |(ix, (row1, row2))| {
+        .map(move |(ix, (row1, row2))| unsafe {
             let px_ix = (start.0 + comp_dist*ix, start.1 - comp_dist*ix);
             // println!("{:?}", (start, nrows, ncols, take_n, ncols, px_ix));
-            (px_ix, (&row1[px_ix.1], &row2[px_ix.1 - comp_dist]))
+            (px_ix, (row1.get_unchecked(px_ix.1), row2.get_unchecked(px_ix.1 - comp_dist)))
          })
 }
 
