@@ -81,7 +81,7 @@ impl ColorClustering {
 pub fn segment_colors<'a>(pxs : impl Iterator<Item=&'a u8> + 'a + Clone, n_colors : usize, hist_init : bool) -> KMeans {
     let allocations = if hist_init {
         let hist = DenseHistogram::calculate_from_pixels(pxs.clone());
-        let modes = hist.modes(n_colors, ((256 / n_colors) / 4) );
+        let modes = hist.modes(n_colors, ((256 / n_colors) / 4), None);
         if modes.len() == n_colors {
             let mut allocs : Vec<usize> = pxs.clone()
                 .map(|px| {
@@ -177,9 +177,9 @@ impl DenseHistogram {
     /// Returns the histogram modes. The vector contains at most [required] modes,
     /// but might contain fewer than than if there is no pixel that satisfies
     /// the spacing constraints.
-    pub fn modes(&self, required : usize, min_space : usize) -> Vec<Mode> {
+    pub fn modes(&self, required : usize, min_space : usize, limits : Option<(usize, usize)>) -> Vec<Mode> {
         let mut modes = Vec::new();
-        next_mode(&mut modes, &self.0[..], required, min_space);
+        next_mode(&mut modes, &self.0[..], required, min_space, limits);
         modes.drain(..).map(|ix| Mode { n_pxs : self.0[ix], color : ix as u8 }).collect()
     }
 
@@ -209,7 +209,7 @@ fn find_mode_at_range(
     min_space : usize
 ) {
     // println!("Iteration start");
-    // println!("{:?}", (&range, &max, &found, &min_space));
+    println!("{:?}", (&range, &max, &found, &min_space));
     let range_len = range.end - range.start;
     if let Some((ix, max_val)) = vals[range.clone()].iter().enumerate().max_by(|a, b| a.1.cmp(&b.1) ) {
         // let far_from_left = ix > min_space;
@@ -232,29 +232,39 @@ fn find_mode_at_range(
     // println!("\n\n");
 }
 
-fn next_mode(modes : &mut Vec<usize>, vals : &[usize], mut required : usize, min_space : usize) {
+fn next_mode(
+    modes : &mut Vec<usize>,
+    vals : &[usize],
+    mut required : usize,
+    min_space : usize,
+    limits : Option<(usize, usize)>
+) {
     let mut max = (0, usize::MIN);
     let n = modes.len();
     let mut found_mode = false;
+    if let Some(lims) = limits {
+        assert!(lims.1 > lims.0 && lims.1 <= 255);
+    }
+    let (lim_low, lim_high) = limits.unwrap_or((0, 256));
     match n {
         0 => {
-            find_mode_at_range(&mut max, &mut found_mode, vals, &(0..256), min_space);
+            find_mode_at_range(&mut max, &mut found_mode, vals, &(lim_low..lim_high), min_space);
         },
         1 => {
-            find_mode_at_range(&mut max, &mut found_mode, vals, &(0..modes[0].saturating_sub(min_space)), min_space);
+            find_mode_at_range(&mut max, &mut found_mode, vals, &(lim_low..modes[0].saturating_sub(min_space)), min_space);
             modes.sort();
-            find_mode_at_range(&mut max, &mut found_mode, vals, &(modes[0].saturating_add(min_space+1)..256), min_space);
+            find_mode_at_range(&mut max, &mut found_mode, vals, &((modes[0]+min_space+1).min(lim_high)..lim_high), min_space);
             modes.sort();
         },
         _ => {
             // Just arrays with a single range each. Any impl Iterator here that yields
             // a single element would work, since we will chain it below.
             let fst_range_arr = [0..modes[0].saturating_sub(min_space)];
-            let last_range_arr = [modes[n-1].saturating_add(min_space+1).min(256)..256];
+            let last_range_arr = [(modes[n-1]+min_space+1).min(lim_high)..lim_high];
             let fst_range = fst_range_arr.into_iter().cloned();
             let found_pairs = modes.iter().take(n-1)
                 .zip(modes.iter().skip(1))
-                .map(|(a, b)| (a.saturating_add(min_space+1).min(b.saturating_sub(min_space))..(b.saturating_sub(min_space)) ));
+                .map(|(a, b)| ( (a+min_space+1).min(b.saturating_sub(min_space))..(b.saturating_sub(min_space)) ));
             let last_range = last_range_arr.into_iter().cloned();
 
             for range in fst_range.chain(found_pairs).chain(last_range) {
@@ -269,7 +279,7 @@ fn next_mode(modes : &mut Vec<usize>, vals : &[usize], mut required : usize, min
         required -= 1;
     }
     if modes.len() < required {
-        next_mode(modes, vals, required, min_space);
+        next_mode(modes, vals, required, min_space, limits);
     }
 }
 

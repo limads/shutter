@@ -30,10 +30,7 @@ pub fn circle_from_diameter(a : (usize, usize), b : (usize, usize)) -> ((usize, 
     (midpoint, r)
 }
 
-/// Returns center and radius of the largest circle with a pair of points
-/// in the set that forms its diameter that does not contain any of the other points.
-pub fn inner_circle(pts : &[(usize, usize)]) -> Option<((usize, usize), f32)> {
-
+pub fn point_distances(pts : &[(usize, usize)]) -> Vec<((usize, usize), (usize, usize), f32)> {
     let mut dists = Vec::new();
     for a in pts.iter() {
         for b in pts.iter() {
@@ -42,11 +39,28 @@ pub fn inner_circle(pts : &[(usize, usize)]) -> Option<((usize, usize), f32)> {
             }
         }
     }
+    dists
+}
+
+/// Returns the outer circle that encloses a set of points
+pub fn outer_circle(pts : &[(usize, usize)]) -> ((usize, usize), f32) {
+    assert!(pts.len() >= 2);
+    let dists = point_distances(pts);
+    let max_chord = dists.iter().max_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal)).unwrap();
+    circle_from_diameter(max_chord.0, max_chord.1)
+}
+
+/// Returns center and radius of the largest circle with a pair of points
+/// in the set that forms its diameter that does not contain any of the other points.
+pub fn inner_circle(pts : &[(usize, usize)]) -> Option<((usize, usize), f32)> {
+    assert!(pts.len() >= 2);
+    let mut dists = point_distances(pts);
 
     // Order from largest to smallest distance.
     dists.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal) );
 
-    // Remove repeated points.
+    // Remove points that repeat in more than one chord. This leaves us with
+    // the largest chords such that no chord starts at the same point.
     let mut base_ix = 0;
     while base_ix < dists.len() - 1 {
         let (base_a, base_b) = (dists[base_ix].0, dists[base_ix].1);
@@ -145,14 +159,13 @@ pub fn bottom_right_coordinate(r : &(usize, usize, usize, usize)) -> (usize, usi
 }
 
 pub fn rect_overlaps(r1 : &(usize, usize, usize, usize), r2 : &(usize, usize, usize, usize)) -> bool {
-    /*let tl_vdist = (r1.0 as i32 - r2.0 as i32).abs();
+    let tl_vdist = (r1.0 as i32 - r2.0 as i32).abs();
     let tl_hdist = (r1.1 as i32 - r2.1 as i32).abs();
     let (h1, w1) = (r1.2 as i32, r1.3 as i32);
     let (h2, w2) = (r2.2 as i32, r2.3 as i32);
-    //(tl_vdist < h1 || tl_vdist < h2) && (tl_hdist < w1 || tl_hdist < w2)
-    (tl_vdist < h1 && tl_hdist < w1) || (tl_vdist < h2 && tl_hdist < w2)*/
+    (tl_vdist < h1 || tl_vdist < h2) && (tl_hdist < w1 || tl_hdist < w2)
 
-    let tl_1 = top_left_coordinate(r1);
+    /*let tl_1 = top_left_coordinate(r1);
     let tl_2 = top_left_coordinate(r2);
     let br_1 = bottom_right_coordinate(r1);
     let br_2 = bottom_right_coordinate(r2);
@@ -165,10 +178,34 @@ pub fn rect_overlaps(r1 : &(usize, usize, usize, usize), r2 : &(usize, usize, us
         return false;
     }
 
-    true
+    true*/
 }
 
+/// Assuming pts represents a closed shape, calculate its perimeter.
+pub fn contour_perimeter(pts : &[(usize, usize)]) -> f32 {
+
+    if pts.len() < 1 {
+        return 0.0;
+    }
+
+    let mut perim = 0.;
+    let n = pts.len();
+    for (p1, p2) in pts[0..(n-1)].iter().zip(pts[1..n].iter()) {
+        perim += point_euclidian(*p1, *p2);
+    }
+    perim
+}
+
+/*/// Assuming pts represents a closed shape, calculate its area.
+pub fn contour_area(pts : &[(usize, usize)], outer_rect : (usize, usize, usize, usize)) -> f32 {
+    let mut area = outer_rect.2 * outer_rect.3;
+    for row in rect.0..(rect.0+rect.2) {
+
+    }
+}*/
+
 /// A cricle has circularity of 1; Other polygons have circularity < 1.
+/// A circle has the largest area among all shapes with the same circumference.
 pub fn circularity(area : f64, perim : f64) -> f64 {
     (4. * std::f64::consts::PI * area) / perim.powf(2.)
 }
@@ -604,6 +641,11 @@ impl Ellipse {
         // small_axis * angle.to_radians().cos()
         unimplemented!()
     }
+}
+
+pub fn outer_square_for_circle(center : (usize, usize), radius : usize) -> Option<(usize, usize, usize, usize)> {
+    let tl = (center.0.checked_sub(radius)?, center.1.checked_sub(radius)?);
+    Some((tl.0, tl.1, 2*radius, 2*radius))
 }
 
 /// Returns the square the circle encloses.

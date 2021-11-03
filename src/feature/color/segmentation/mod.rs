@@ -42,7 +42,10 @@ pub struct Patch {
     pub outer_rect : (usize, usize, usize, usize),
     pub color : u8,
     pub scale : usize,
-    pub img_height : usize
+    pub img_height : usize,
+
+    // Number of pixels inside it.
+    area : usize
 }
 
 fn patch_from_grouped_rows(
@@ -388,9 +391,11 @@ fn expand_patch(
         match mode {
             ExpansionMode::Rect => {
                 ext.past.clear();
+                patch.area = outer_rect.2 * outer_rect.3;
                 mem::swap(&mut ext.curr, &mut ext.past);
             },
             ExpansionMode::Dense => {
+                patch.area += ext.past.len();
                 patch.pxs.extend(ext.past.drain(..));
                 mem::swap(&mut ext.curr, &mut ext.past);
             },
@@ -417,8 +422,23 @@ fn expand_patch(
                         patch.pxs.push(ext.past[0]);
                     }
 
-                    if ext.past.len() > 1 && !*snd_corner {
-                        patch.pxs.push(ext.past[ext.past.len()-1]);
+                    let n = ext.past.len();
+                    if n > 1 && !*snd_corner {
+                        patch.pxs.push(ext.past[n-1]);
+                    }
+
+                    // Expand area
+                    if n == 1 {
+                        patch.area += 1;
+                    } else {
+                        if n > 1 {
+                            let is_row_front = ext.past[n-1].0 == ext.past[0].0;
+                            if is_row_front {
+                                patch.area += ext.past[n-1].1 - ext.past[0].1;
+                            } else {
+                                patch.area += ext.past[n-1].0 - ext.past[0].0;
+                            }
+                        }
                     }
 
                     // Stop swapping at the last empty border so eventually we reach the final
@@ -426,6 +446,7 @@ fn expand_patch(
                     ext.past.clear();
                 } else {
                     // The last patch iteration will take all remaining contour values.
+                    patch.area += ext.past.len();
                     patch.pxs.extend(ext.past.drain(..));
                 }
                 mem::swap(&mut ext.curr, &mut ext.past);
@@ -538,6 +559,11 @@ fn expand_rect(rect : &mut (usize, usize, usize, usize), exp : &ExpandingPatch) 
 }
 
 impl Patch {
+
+    /// Number of pixels contained in the patch.
+    pub fn area(&self) -> usize {
+        self.area
+    }
 
     /// Grows a patch from a pixel seed.
     /// cf. Connected Components (Szeliski, 2011, p. 131)
@@ -707,7 +733,8 @@ impl Patch {
             outer_rect : (pt.0, pt.1, 1, 1),
             color,
             scale,
-            img_height
+            img_height,
+            area : 1
         }
     }
 
@@ -952,6 +979,7 @@ impl Patch {
                     self.outer_rect.3 = pt.1 - self.outer_rect.1;
                 }
             }
+            self.area += 1;
 
             /*let new_h = (pt.0 - self.outer_rect.0)+1;
             let new_w = (pt.1 - self.outer_rect.1)+1;
