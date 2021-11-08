@@ -8,6 +8,18 @@ pub fn point_euclidian(a : (usize, usize), b : (usize, usize)) -> f32 {
     ((a.0 as f32 - b.0 as f32).powf(2.) + (a.1 as f32 - b.1 as f32).powf(2.)).sqrt()
 }
 
+/// Calculate the angle formed by side_a and side_b given the opposite side using the law of cosines.
+pub fn angle(side_a : f64, side_b : f64, opp_side : f64) -> f64 {
+	let angle_cos = (side_a.powf(2.) + side_b.powf(2.) - opp_side.powf(2.)) / (2. * side_a * side_b);
+	angle_cos.acos()
+}
+
+// The convex polygon of a contour is calculated by:
+// (1) Iterate over all triplets of points
+// (2) Remove points with angle > 180.
+// (3) Repeat for triplets with a larger step far apart + 1
+// Until there are no closed trianglges left.
+
 /// Verifies if point is inside the circle.
 pub fn circle_contains(circle : &((usize, usize), f32), pt : (usize, usize)) -> bool {
     point_euclidian(circle.0, pt) < circle.1
@@ -764,11 +776,14 @@ pub mod cvellipse {
             let center = (center_pt.y as usize, center_pt.x as usize);
             let angle = rotated_rect.angle();
             let size = rotated_rect.size();
-            let angle = rotated_rect.angle();
+            let w = rotated_rect.size().width as f64;
+            let h = rotated_rect.size().height as f64;
+            let large_axis = w.max(h);
+            let small_axis = w.min(h);
             Ok(Ellipse {
                 center,
-                large_axis : rotated_rect.size().width as f64,
-                small_axis : rotated_rect.size().height as f64,
+                large_axis,
+                small_axis,
                 angle : angle as f64
             })
         }

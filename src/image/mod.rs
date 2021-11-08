@@ -6,7 +6,7 @@ use std::fmt;
 use std::fmt::Debug;
 use simba::simd::{AutoSimd};
 use std::convert::TryFrom;
-use crate::feature::color::{self, Patch, BinaryPatch, Neighborhood};
+use crate::feature::color::{self, Patch, /*BinaryPatch, Neighborhood*/ };
 use itertools::Itertools;
 use crate::feature::color::ColorMode;
 use num_traits::Zero;
@@ -703,8 +703,9 @@ where
         seed : (usize, usize),
         px_spacing : usize
     ) -> impl Iterator<Item=((usize, usize), &N)> + Clone {
+        assert!(seed.0 < self.height() && seed.1 < self.width());
         let min_dist = seed.0.min(self.height() - seed.0).min(seed.1).min(self.width() - seed.1);
-        (1..min_dist).map(move |abs_dist| {
+        (px_spacing..min_dist).map(move |abs_dist| {
             let left_col = seed.1 - abs_dist;
             let top_row = seed.0 - abs_dist;
             let right_col = seed.1 + abs_dist;
@@ -816,16 +817,16 @@ impl<'a> Window<'a, u8> {
     /// Extract contiguous image regions of homogeneous color.
     pub fn patches(&self, px_spacing : usize) -> Vec<Patch> {
         let mut patches = Vec::new();
-        color::color_patches(&mut patches, self, px_spacing, ColorMode::Exact(0));
+        color::full_color_patches(&mut patches, self, px_spacing, ColorMode::Exact(0), color::ExpansionMode::Dense);
         patches
     }
 
-    pub fn binary_patches(&self, px_spacing : usize) -> Vec<BinaryPatch> {
+    /*pub fn binary_patches(&self, px_spacing : usize) -> Vec<BinaryPatch> {
         // TODO if we have a binary or a bit image with just a few classes,
         // there is no need for KMeans. Just use the allocations.
         // let label_img = segmentation::segment_colors_to_image(self, px_spacing, n_colors);
         color::binary_patches(self, px_spacing)
-    }
+    }*/
 
     /// If higher, returns binary image with all pixels > thresh set to 255 and others set to 0;
     /// If !higher, returns binary image with pixels < thresh set to 255 and others set to 0.
@@ -1141,7 +1142,7 @@ impl WindowMut<'_, u8> {
             }
         };
         let mut patches = Vec::new();
-        color::color_patches(&mut patches, &src_win, px_spacing, ColorMode::Exact(0));
+        color::full_color_patches(&mut patches, &src_win, px_spacing, ColorMode::Exact(0), color::ExpansionMode::Dense);
         patches
     }
 
@@ -1239,7 +1240,10 @@ impl WindowMut<'_, u8> {
                 for (p1, p2) in pts.iter().take(n-1).zip(pts.iter().skip(1)) {
                     self.draw(Mark::Line(*p1, *p2, col));
                 }
-                self.draw(Mark::Line(pts[0], pts[pts.len()-1], col));
+
+                if crate::feature::shape::point_euclidian(pts[0], pts[pts.len()-1]) < 32.0 {
+                    self.draw(Mark::Line(pts[0], pts[pts.len()-1], col));
+                }
             }
         }
     }

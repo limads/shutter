@@ -29,14 +29,16 @@ impl ColorCluster {
 
 }
 
+#[derive(Clone, Debug)]
 pub struct ColorClustering {
-    pub colors : Vec<ColorCluster>
+    pub colors : Vec<ColorCluster>,
+    pub hist : Option<DenseHistogram>
 }
 
 impl ColorClustering {
 
     pub fn calculate_from_pixels<'a>(pxs : impl Iterator<Item=&'a u8> + 'a + Clone, n_colors : usize, hist_init : bool) -> Self {
-        let km = segment_colors(pxs.clone(), n_colors, hist_init);
+        let (km, hist) = segment_colors(pxs.clone(), n_colors, hist_init);
         let means = segmentation::extract_mean_colors(&km);
         //let px_iter = win.pixels(px_spacing).map(|d| [*d as f64] );
         let px_iter = pxs.map(|d| [*d as f64] );
@@ -46,7 +48,7 @@ impl ColorClustering {
             .map(|(color, ((min, max), n_px))| ColorCluster { color : *color, min : *min, max : *max, n_px : *n_px })
             .collect::<Vec<_>>();
         colors.sort_by(|c1, c2| c1.color.cmp(&c2.color) );
-        Self { colors }
+        Self { colors, hist }
     }
 
     pub fn calculate(win : &Window<'_, u8>, px_spacing : usize, n_colors : usize, hist_init : bool) -> Self {
@@ -78,9 +80,13 @@ impl ColorClustering {
 /// (2) For images 2..n:
 ///     (2.1). Find closest mean to each pixel
 ///     (2.2). Modify pixels to have this mean value.
-pub fn segment_colors<'a>(pxs : impl Iterator<Item=&'a u8> + 'a + Clone, n_colors : usize, hist_init : bool) -> KMeans {
-    let allocations = if hist_init {
-        let hist = DenseHistogram::calculate_from_pixels(pxs.clone());
+pub fn segment_colors<'a>(pxs : impl Iterator<Item=&'a u8> + 'a + Clone, n_colors : usize, hist_init : bool) -> (KMeans, Option<DenseHistogram>) {
+    let hist = if hist_init {
+        Some(DenseHistogram::calculate_from_pixels(pxs.clone()))
+    } else {
+        None
+    };
+    let allocations = if let Some(hist) = hist.as_ref() {
         let modes = hist.modes(n_colors, ((256 / n_colors) / 4), None);
         if modes.len() == n_colors {
             let mut allocs : Vec<usize> = pxs.clone()
@@ -102,7 +108,7 @@ pub fn segment_colors<'a>(pxs : impl Iterator<Item=&'a u8> + 'a + Clone, n_color
         KMeansSettings { n_cluster : n_colors, max_iter : 1000, allocations }
     ).unwrap();
 
-    km
+    (km, hist)
 }
 
 /*pub fn segment_colors_to_image(win : &Window<'_, u8>, px_spacing : usize, n_colors : usize) -> Image<u8> {
@@ -183,6 +189,16 @@ impl DenseHistogram {
         modes.drain(..).map(|ix| Mode { n_pxs : self.0[ix], color : ix as u8 }).collect()
     }
 
+    /// Returns vec of modes and their discriminants.
+    pub fn unsupervised_modes(&self, win_sz : usize, min_width : usize, min_rel : f32) -> (Vec<Mode>, Vec<(usize, usize)>) {
+        let mut modes = Vec::new();
+        let mut discrs = Vec::new();
+        let n_pxs = self.0.iter().sum::<usize>();
+        println!("{}", n_pxs);
+        bump_modes(&mut modes, &mut discrs, &self.0[..], 0..256, win_sz, min_width, min_rel, n_pxs);
+        (modes, discrs)
+    }
+
     /// Finds the k-1 smallest values between each pair of the k modes. Might contain
     /// fewer discriminants if fewer modes are found.
     pub fn discriminants(&self, modes : &[Mode]) -> Vec<usize> {
@@ -201,15 +217,101 @@ impl DenseHistogram {
     }
 }
 
+fn bump_modes(
+    modes : &mut Vec<Mode>,
+    discrs : &mut Vec<(usize, usize)>,
+    vals : &[usize],
+    range : Range<usize>,
+    win_sz : usize,
+    min_width : usize,
+    min_rel : f32,
+    n_pxs : usize
+) {
+    if range.end <= range.start {
+        return;
+    }
+    let mut max = (0, usize::MIN);
+    let mut found_mode = false;
+    find_mode_at_range(&mut max, &mut found_mode, &vals[..], &range);
+    if found_mode {
+        let mode = max.0;
+        if (vals[mode] as f32 / n_pxs as f32) < min_rel {
+            return;
+        }
+        match bump_limits(vals, mode, win_sz, min_width, range.clone()) {
+            (Some(low), Some(high)) => {
+                modes.push(Mode { color : mode as u8, n_pxs : vals[mode] });
+                discrs.push((low, high));
+                bump_modes(modes, discrs, vals, range.start..(low.saturating_sub(min_width/2)), win_sz, min_width, min_rel, n_pxs);
+                bump_modes(modes, discrs, vals, (high + min_width/2)..range.end, win_sz, min_width, min_rel, n_pxs);
+            },
+            (Some(low), None) => {
+                modes.push(Mode { color : mode as u8, n_pxs : vals[mode] });
+                discrs.push((low, range.end));
+                let new_range = range.start..(low.saturating_sub(min_width/2));
+                if new_range.end - new_range.start > min_width {
+                    bump_modes(modes, discrs, vals, new_range, win_sz, min_width, min_rel, n_pxs);
+                }
+            },
+            (None, Some(high)) => {
+                modes.push(Mode { color : mode as u8, n_pxs : vals[mode] });
+                discrs.push((range.start, high));
+                let new_range = (high + min_width/2)..range.end;
+                if new_range.end - new_range.start > min_width {
+                    bump_modes(modes, discrs, vals, new_range, win_sz, min_width, min_rel, n_pxs);
+                }
+            }
+            (None, None) => {
+                modes.push(Mode { color : mode as u8, n_pxs : vals[mode] });
+                discrs.push((range.start, range.end));
+            }
+        }
+    }
+}
+
+fn bump_min_limit(vals : &[usize], mode : usize, win_sz : usize, min_width : usize, range : &Range<usize>) -> Option<usize> {
+    let mut min_val = mode.checked_sub(min_width / 2)?;
+    if min_val <= range.start {
+        return None;
+    }
+    while min_val > range.start + win_sz {
+        if vals[(min_val-win_sz)..min_val].iter().sum::<usize>() as f32 / win_sz as f32 >= vals[min_val] as f32 /* * 0.95*/ {
+            break;
+        }
+        min_val -= 1;
+    }
+    Some(min_val)
+}
+
+fn bump_max_limit(vals : &[usize], mode : usize, win_sz : usize, min_width : usize, range : &Range<usize>) -> Option<usize> {
+    let mut max_val = mode + min_width / 2;
+    if max_val >= range.end {
+        return None;
+    }
+    while max_val < range.end.checked_sub(win_sz)? {
+        if vals[max_val..(max_val+win_sz)].iter().sum::<usize>() as f32 / win_sz as f32 >= vals[max_val] as f32 /* * 0.95*/ {
+            break;
+        }
+        max_val += 1;
+    }
+    Some(max_val)
+}
+
+fn bump_limits(vals : &[usize], mode : usize, win_sz : usize, min_width : usize, range : Range<usize>) -> (Option<usize>, Option<usize>) {
+    let min_val = bump_min_limit(vals, mode, win_sz, min_width, &range);
+    let max_val = bump_max_limit(vals, mode, win_sz, min_width, &range);
+    (min_val, max_val)
+}
+
 fn find_mode_at_range(
     max : &mut (usize, usize),
     found : &mut bool,
     vals : &[usize],
     range : &Range<usize>,
-    min_space : usize
+    // min_space : usize
 ) {
     // println!("Iteration start");
-    println!("{:?}", (&range, &max, &found, &min_space));
+    // println!("{:?}", (&range, &max, &found, &min_space));
     let range_len = range.end - range.start;
     if let Some((ix, max_val)) = vals[range.clone()].iter().enumerate().max_by(|a, b| a.1.cmp(&b.1) ) {
         // let far_from_left = ix > min_space;
@@ -248,12 +350,12 @@ fn next_mode(
     let (lim_low, lim_high) = limits.unwrap_or((0, 256));
     match n {
         0 => {
-            find_mode_at_range(&mut max, &mut found_mode, vals, &(lim_low..lim_high), min_space);
+            find_mode_at_range(&mut max, &mut found_mode, vals, &(lim_low..lim_high), /*min_space*/);
         },
         1 => {
-            find_mode_at_range(&mut max, &mut found_mode, vals, &(lim_low..modes[0].saturating_sub(min_space)), min_space);
+            find_mode_at_range(&mut max, &mut found_mode, vals, &(lim_low..modes[0].saturating_sub(min_space)), /*min_space*/);
             modes.sort();
-            find_mode_at_range(&mut max, &mut found_mode, vals, &((modes[0]+min_space+1).min(lim_high)..lim_high), min_space);
+            find_mode_at_range(&mut max, &mut found_mode, vals, &((modes[0]+min_space+1).min(lim_high)..lim_high), /*min_space*/);
             modes.sort();
         },
         _ => {
@@ -268,7 +370,7 @@ fn next_mode(
             let last_range = last_range_arr.into_iter().cloned();
 
             for range in fst_range.chain(found_pairs).chain(last_range) {
-                find_mode_at_range(&mut max, &mut found_mode, vals, &range, min_space);
+                find_mode_at_range(&mut max, &mut found_mode, vals, &range, /*min_space*/ );
             }
         }
     }
