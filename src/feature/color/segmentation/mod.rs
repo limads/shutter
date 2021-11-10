@@ -87,18 +87,18 @@ fn split_vertically() {
     for r in (0..8) {
         for c in (0..16) {
             if (r, c) != (0, 0) {
-                patch.expand(&[(r, c)]);
+                // patch.expand(&[(r, c)]);
             }
         }
     }
 
     for r in (8..16) {
         for c in (4..8) {
-            patch.expand(&[(r, c)]);
+            // patch.expand(&[(r, c)]);
         }
     }
 
-    println!("{:?}", patch.try_split_vertically(4, (4, 4)));
+    // println!("{:?}", patch.try_split_vertically(4, (4, 4)));
 }
 
 /*pub fn color_limit(win : &Window<'_, u8>, row : usize, center : usize, px_spacing : usize, max_diff : u8) -> (usize, usize) {
@@ -113,27 +113,53 @@ fn split_vertically() {
         )
 }*/
 
-/// Returns the pixel that centralizes the given color. If this color is distributed
-/// in a homogeneous region, the center can be used as a seed for the patch.
-/// If pixels matches mode not exactly, pixels are weighted in the inverse proportion of the target color.
-pub fn color_momentum(win : &Window<'_, u8>, px_spacing : usize, mode : ColorMode) -> Option<(usize, usize)> {
+/// Approximate color momentum, which might work for nearly symmetrical objects and is faster.
+pub fn approx_color_momentum(win : &Window<'_, u8>, px_spacing : usize, mode : ColorMode) -> Option<(usize, usize)> {
     let (mut sum_r, mut sum_c) = (0.0, 0.0);
     let mut n_matches = 0;
     for (r, c, color) in win.labeled_pixels(px_spacing) {
         if mode.matches(color) {
-            // let dist = (color as i16 mode.color() as i16).abs() as u8;
-            /*let weight = if dist == 0 {
-                1.0
-            } else {
-                1. / dist as f64 - (mode.absolute_tolerance() as f64 / 2.)
-            };*/
             sum_r += r as f32; //* weight;
             sum_c += c as f32; //* weight;
             n_matches += 1;
         }
     }
     if n_matches >= 1 {
-        Some(((sum_r / n_matches as f32) as usize, (sum_c / n_matches as f32) as usize))
+        Some(((sum_r / n_matches as f32) as usize * px_spacing, (sum_c / n_matches as f32) as usize * px_spacing))
+    } else {
+        None
+    }
+}
+
+/// Returns the pixel that centralizes the given color. If this color is distributed
+/// in a homogeneous region, the center can be used as a seed for the patch.
+/// If pixels matches mode not exactly, pixels are weighted in the inverse proportion of the target color.
+pub fn color_momentum(win : &Window<'_, u8>, px_spacing : usize, mode : ColorMode) -> Option<(usize, usize)> {
+    let mut n_matches = 0;
+    let mut rows = HashMap::<usize, (usize, usize)>::new();
+    let mut cols = HashMap::<usize, (usize, usize)>::new();
+    for (r, c, color) in win.labeled_pixels(px_spacing) {
+        if mode.matches(color) {
+            if let Some(mut r) = rows.get_mut(&r) {
+                r.0 += c;
+                r.1 += 1;
+            } else {
+                rows.insert(r, (c as usize, 1));
+            }
+            if let Some(mut c) = cols.get_mut(&c) {
+                c.0 += r;
+                c.1 += 1;
+            } else {
+                cols.insert(c, (r as usize, 1));
+            }
+            n_matches += 1;
+        }
+    }
+
+    if n_matches >= 1 {
+        let avg_rows : usize = (cols.iter().map(|(_, rs)| rs.0 / rs.1 ).sum::<usize>() as f32 / cols.iter().count() as f32) as usize;
+        let avg_cols : usize = (rows.iter().map(|(_, cs)| cs.0 / cs.1 ).sum::<usize>() as f32 / rows.iter().count() as f32) as usize;
+        Some((avg_rows * px_spacing, avg_cols * px_spacing))
     } else {
         None
     }
@@ -578,8 +604,15 @@ impl Patch {
         max_area : Option<usize>,
         exp_mode : ExpansionMode
     ) -> Option<Self> {
+
+        // if !mode.matches(win[seed]) {
+        //    println!("Seed does not match desired color");
+        //    return None;
+        // }
+        // mode.set_reference_color(win[seed]);
+
         let mut patch = Patch::new(seed, win[seed], 1, win.height());
-        mode.set_reference_color(win[seed]);
+
 
         let (mut grows_left, mut grows_top, mut grows_right, mut grows_bottom) = (true, true, true, true);
 

@@ -390,9 +390,9 @@ fn find_modes() {
     use crate::image::Image;
     let a = Image::new_checkerboard(8, 2);
     let hist = DenseHistogram::calculate(&a.full_window(), 1);
-    println!("{:?}", a);
-    println!("{:?}", hist);
-    println!("{:?}", hist.modes(2, 2));
+    //println!("{:?}", a);
+    //println!("{:?}", hist);
+    //println!("{:?}", hist.modes(2, 2));
 }
 
 pub struct ColorStats {

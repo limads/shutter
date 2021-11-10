@@ -421,6 +421,17 @@ where
     // transposed : bool
 }
 
+pub struct Neighborhood<'a, N>
+where
+    N : Scalar
+{
+    pub center : Window<'a, N>,
+    pub left : Window<'a, N>,
+    pub top : Window<'a, N>,
+    pub right : Window<'a, N>,
+    pub bottom : Window<'a, N>,
+}
+
 impl<'a, N> Window<'a, N>
 where
     N : Scalar
@@ -429,6 +440,7 @@ where
         self.orig_sz == self.win_sz
     }
     
+
     /*pub fn shape(&self) -> (usize, usize) {
         self.win_sz
     }
@@ -470,6 +482,40 @@ impl<'a, N> Window<'a, N>
 where
     N : Scalar + Mul<Output=N> + MulAssign + Copy
 {
+
+    pub fn far_thin_neighborhood(&'a self, center_tl : (usize, usize), win_sz : (usize, usize), dist : usize) -> Option<Neighborhood<'a, N>> {
+        let outside_bounds = center_tl.0 < win_sz.0 + dist ||
+            center_tl.0 > self.height().checked_sub(win_sz.0 + dist)? ||
+            center_tl.1 > self.width().checked_sub(win_sz.1 + dist)? ||
+            center_tl.1 < win_sz.1 + dist;
+        if outside_bounds {
+            return None;
+        }
+        Some(Neighborhood {
+            center : self.sub_window(center_tl, win_sz)?,
+            left : self.sub_window((center_tl.0, center_tl.1 - win_sz.1 - dist), win_sz)?,
+            top : self.sub_window((center_tl.0 - win_sz.0 - dist, center_tl.1), win_sz)?,
+            right : self.sub_window((center_tl.0, center_tl.1 + win_sz.1 + dist), win_sz)?,
+            bottom : self.sub_window((center_tl.0 + win_sz.0 + dist, center_tl.1), win_sz)?
+        })
+    }
+
+    pub fn thin_neighborhood(&'a self, center_tl : (usize, usize), win_sz : (usize, usize)) -> Option<Neighborhood<'a, N>> {
+        let outside_bounds = center_tl.0 < win_sz.0 ||
+            center_tl.0 > self.height().checked_sub(win_sz.0)? ||
+            center_tl.1 > self.width().checked_sub(win_sz.1)? ||
+            center_tl.1 < win_sz.1;
+        if outside_bounds {
+            return None;
+        }
+        Some(Neighborhood {
+            center : self.sub_window(center_tl, win_sz)?,
+            left : self.sub_window((center_tl.0, center_tl.1 - win_sz.1), win_sz)?,
+            top : self.sub_window((center_tl.0 - win_sz.0, center_tl.1), win_sz)?,
+            right : self.sub_window((center_tl.0, center_tl.1 + win_sz.1), win_sz)?,
+            bottom : self.sub_window((center_tl.0 + win_sz.0, center_tl.1), win_sz)?
+        })
+    }
 
     pub fn sub_from_slice(
         src : &'a [N],
@@ -808,7 +854,7 @@ impl<'a> Window<'a, u8> {
         self.pixels(px_spacing)
             .enumerate()
             .map(move |(ix, px)| {
-                let (r, c) = (ix / self.width(), ix % self.width());
+                let (r, c) = (ix / self.width(), ix % self.width()); // TODO verify if width/height should be divided by px_spacing
                 // win[(r*px_spacing, c*px_spacing)]) )
                 (r, c, *px)
             })
@@ -827,6 +873,10 @@ impl<'a> Window<'a, u8> {
         // let label_img = segmentation::segment_colors_to_image(self, px_spacing, n_colors);
         color::binary_patches(self, px_spacing)
     }*/
+
+    pub fn mean(&self, n_pxs : usize) -> u8 {
+        (self.shrink_to_subsample(n_pxs).unwrap().pixels(n_pxs).map(|px| *px as u64 ).sum::<u64>() / (self.width() * self.height()) as u64) as u8
+    }
 
     /// If higher, returns binary image with all pixels > thresh set to 255 and others set to 0;
     /// If !higher, returns binary image with pixels < thresh set to 255 and others set to 0.
@@ -984,7 +1034,34 @@ where
 
 /// TODO mark as unsafe impl
 #[cfg(feature="opencvlib")]
-impl<N> Into<core::Mat> for Window<'_, N> 
+impl<N> Into<core::Mat> for &Image<N>
+where
+    N : Scalar + Copy + Default + Zero
+{
+
+    fn into(self) -> core::Mat {
+        let sub_slice = None;
+        let stride = self.ncols;
+        unsafe{ cvutils::slice_to_mat(&self.buf[..], stride, sub_slice) }
+    }
+}
+
+#[cfg(feature="opencvlib")]
+impl<N> Into<core::Mat> for &mut Image<N>
+where
+    N : Scalar + Copy + Default + Zero
+{
+
+    fn into(self) -> core::Mat {
+        let sub_slice = None;
+        let stride = self.ncols;
+        unsafe{ cvutils::slice_to_mat(&self.buf[..], stride, sub_slice) }
+    }
+}
+
+/// TODO mark as unsafe impl
+#[cfg(feature="opencvlib")]
+impl<N> Into<core::Mat> for Window<'_, N>
 where
     N : Scalar + Copy + Default
 {
@@ -1496,7 +1573,39 @@ where
     }
 }*/
 
-impl<N> AsRef<[N]> for Image<N> 
+impl<N> ripple::filter::Convolve for Image<N>
+where
+    N : Scalar + Copy + Default + Zero
+{
+
+    fn convolve_mut(&self, filter : &Self, out : &mut Self) {
+
+        #[cfg(feature="opencvlib")]
+        {
+            use opencv;
+            let input : opencv::core::Mat = self.into();
+            let kernel : opencv::core::Mat = filter.into();
+            let mut flip_kernel = kernel.clone();
+            opencv::core::flip(&kernel, &mut flip_kernel, -1).unwrap();
+            let delta = 0.0;
+            let mut output : opencv::core::Mat = out.into();
+            opencv::imgproc::filter_2d(
+                &input,
+                &mut output,
+                cvutils::get_cv_type::<N>(),
+                &flip_kernel,
+                opencv::core::Point2i::new(0, 0),
+                delta,
+                opencv::core::BORDER_DEFAULT
+            ).unwrap();
+            return;
+        }
+
+        unimplemented!()
+    }
+}
+
+impl<N> AsRef<[N]> for Image<N>
 where
     N : Scalar
 {
