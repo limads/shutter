@@ -1031,7 +1031,7 @@ impl Patch {
             shape::rect_contacts(&self.outer_rect, &other.outer_rect),
             format!("Rects not close {:?}", (self.outer_rect, other.outer_rect))
         );*/
-        assert!(shape::rect_contacts(&self.outer_rect, &other.outer_rect), format!("No contact {:?}", (self.outer_rect, other.outer_rect)));
+        // assert!(shape::rect_contacts(&self.outer_rect, &other.outer_rect), format!("No contact {:?}", (self.outer_rect, other.outer_rect)));
 
         for pt in other.pxs.iter() {
             self.pxs.push(*pt);
@@ -1485,13 +1485,13 @@ impl PatchSegmentation {
     }
 
     /// Returns only segments matching the given color.
-    pub fn segment_single_color<'a>(&'a mut self, win : &WindowMut<'_, u8>, mode : ColorMode, exp_mode : ExpansionMode) -> &'a [Patch] {
-        let src_win = unsafe { crate::image::create_immutable(&win) };
+    pub fn segment_single_color<'a>(&'a mut self, win : &Window<'_, u8>, mode : ColorMode, exp_mode : ExpansionMode) -> &'a [Patch] {
+        // let src_win = unsafe { crate::image::create_immutable(&win) };
 
         // TODO remove this to avoid reallocating pixel vectors.
         // self.patches.clear();
 
-        let n_patches = single_color_patches(&mut self.patches, &src_win, self.px_spacing, mode, exp_mode);
+        let n_patches = single_color_patches(&mut self.patches, &win, self.px_spacing, mode, exp_mode);
         self.n_patches = n_patches;
         assert!(self.patches[0..self.n_patches].iter().all(|patch| patch.color == mode.color() ));
         &self.patches[0..self.n_patches]

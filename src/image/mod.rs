@@ -471,11 +471,15 @@ where
 
 }
 
-fn shrink_to_divisor(mut n : usize, by : usize) -> usize {
-    while n % by != 0 {
-        n -= 1;
+fn shrink_to_divisor(mut n : usize, by : usize) -> Option<usize> {
+    if n > by {
+        while n % by != 0 {
+            n -= 1;
+        }
+        Some(n)
+    } else {
+        None
     }
-    n
 }
 
 impl<'a, N> Window<'a, N>
@@ -537,13 +541,13 @@ where
     }
 
     pub fn shrink_to_subsample(&'a self, by : usize) -> Option<Window<'a, N>> {
-        let height = shrink_to_divisor(self.height(), by);
-        let width = shrink_to_divisor(self.width(), by);
+        let height = shrink_to_divisor(self.height(), by)?;
+        let width = shrink_to_divisor(self.width(), by)?;
         self.sub_window((0, 0), (height, width))
     }
 
     /// Creates a window that cover the whole slice src, assuming it represents a square image.
-    pub fn from_square_slice(src : &'a [N]) -> Self {
+    pub fn from_square_slice(src : &'a [N]) -> Option<Self> {
         Self::from_slice(src, (src.len() as f64).sqrt() as usize)
     }
     
@@ -559,9 +563,12 @@ where
     
     /// Creates a window that cover the whole slice src. The slice is assumed to be in
     /// row-major order, but matrices are assumed to be 
-    pub fn from_slice(src : &'a [N], ncols : usize) -> Self {
+    pub fn from_slice(src : &'a [N], ncols : usize) -> Option<Self> {
+        if src.len() % ncols != 0 {
+            return None;
+        }
         let nrows = src.len() / ncols;
-        Self{ 
+        Some(Self{
             // win : DMatrixSlice::from_slice_generic(src, Dynamic::new(nrows),
             // Dynamic::new(ncols)),
             win : src,
@@ -569,7 +576,7 @@ where
             orig_sz : (nrows, ncols),
             win_sz : (nrows, ncols),
             // transposed : true
-        }
+        })
     }
     
     pub fn shape(&self) -> (usize, usize) {
@@ -854,7 +861,7 @@ impl<'a> Window<'a, u8> {
         self.pixels(px_spacing)
             .enumerate()
             .map(move |(ix, px)| {
-                let (r, c) = (ix / self.width(), ix % self.width()); // TODO verify if width/height should be divided by px_spacing
+                let (r, c) = (ix / (self.width() / px_spacing ), ix % (self.width() / px_spacing )); // TODO verify if width/height should be divided by px_spacing
                 // win[(r*px_spacing, c*px_spacing)]) )
                 (r, c, *px)
             })
@@ -874,8 +881,8 @@ impl<'a> Window<'a, u8> {
         color::binary_patches(self, px_spacing)
     }*/
 
-    pub fn mean(&self, n_pxs : usize) -> u8 {
-        (self.shrink_to_subsample(n_pxs).unwrap().pixels(n_pxs).map(|px| *px as u64 ).sum::<u64>() / (self.width() * self.height()) as u64) as u8
+    pub fn mean(&self, n_pxs : usize) -> Option<u8> {
+        Some((self.shrink_to_subsample(n_pxs)?.pixels(n_pxs).map(|px| *px as u64 ).sum::<u64>() / (self.width() * self.height()) as u64) as u8)
     }
 
     /// If higher, returns binary image with all pixels > thresh set to 255 and others set to 0;
@@ -1111,7 +1118,9 @@ pub enum Mark {
     Rect((usize, usize), (usize, usize), u8),
 
     /// Arbitrary shape
-    Shape(Vec<(usize, usize)>, u8)
+    Shape(Vec<(usize, usize)>, u8),
+
+    Text((usize, usize), String, u8)
     
 }
 
@@ -1138,7 +1147,10 @@ where
     N : Scalar + Copy + Debug
 {
 
-    pub fn from_slice(src : &'a mut [N], ncols : usize) -> Self {
+    pub fn from_slice(src : &'a mut [N], ncols : usize) -> Option<Self> {
+        if src.len() % ncols != 0 {
+            return None;
+        }
         /*let nrows = src.len() / ncols;
         Self {
             win : DMatrixSliceMut::from_slice_generic(src, Dynamic::new(nrows),
@@ -1147,14 +1159,14 @@ where
             orig_sz : (nrows, ncols)
         }*/
         let nrows = src.len() / ncols;
-        Self{
+        Some(Self{
             // win : DMatrixSlice::from_slice_generic(src, Dynamic::new(nrows),
             // Dynamic::new(ncols)),
             win : src,
             offset : (0, 0),
             orig_sz : (nrows, ncols),
             win_sz : (nrows, ncols),
-        }
+        })
     }
 
     pub fn sub_from_slice(
@@ -1193,7 +1205,7 @@ where
     }
 
     /// Creates a window that cover the whole slice src, assuming it represents a square image.
-    pub fn from_square_slice(src : &'a mut [N]) -> Self {
+    pub fn from_square_slice(src : &'a mut [N]) -> Option<Self> {
         Self::from_slice(src, (src.len() as f64).sqrt() as usize)
     }
 
@@ -1321,6 +1333,24 @@ impl WindowMut<'_, u8> {
                 if crate::feature::shape::point_euclidian(pts[0], pts[pts.len()-1]) < 32.0 {
                     self.draw(Mark::Line(pts[0], pts[pts.len()-1], col));
                 }
+            },
+            Mark::Text(tl_pos, txt, color) => {
+
+                #[cfg(feature="opencvlib")]
+                {
+                    unsafe { 
+                        cvutils::write_text(
+                            self.win, 
+                            self.orig_sz.1, 
+                            (self.offset.0 + tl_pos.0, self.offset.1 + tl_pos.1), 
+                            &txt[..], 
+                            color
+                        ); 
+                    }
+                    return;
+                }
+
+                println!("Warning: Text drawing require opencv feature");
             }
         }
     }

@@ -135,17 +135,25 @@ where
 
 pub unsafe fn write_text(dst : &mut [u8], ncol : usize, tl_pos : (usize, usize), text : &str, color : u8) {
     let mut dst_mat = slice_to_mat(&dst, ncol, None);
-    imgproc::put_text(
-        &mut dst_mat, 
-        text,
-        core::Point{ x : tl_pos.1 as i32, y : tl_pos.0 as i32 },
-        imgproc::FONT_HERSHEY_SIMPLEX,
-        1.0, 
-        core::Scalar::all(color.into()), 
-        1, 
-        imgproc::LINE_8, 
-        false
-    ).unwrap()
+    let scale = 0.5;
+    let weight = 1;
+    let face = imgproc::FONT_HERSHEY_SIMPLEX; //imgproc::FONT_HERSHEY_PLAIN,
+    let thickness = imgproc::LINE_8;
+    // Gets size if text were to fit inside single line
+    let sz = imgproc::get_text_size(text, face, scale, thickness, &mut 0).unwrap();
+    for (line_ix, line) in text.split("\n").enumerate() {
+        imgproc::put_text(
+            &mut dst_mat,
+            line,
+            core::Point{ x : tl_pos.1 as i32, y : tl_pos.0 as i32 + (line_ix as i32 * sz.height) },
+            face,
+            scale,
+            core::Scalar::all(color.into()),
+            weight,
+            thickness,
+            false
+        ).unwrap()
+    }
 }
 
 pub unsafe fn draw_line(dst : &mut [u8], ncol : usize, from : (usize, usize), to : (usize, usize), color : u8) {

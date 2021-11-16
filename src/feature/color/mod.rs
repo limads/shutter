@@ -194,7 +194,7 @@ impl DenseHistogram {
         let mut modes = Vec::new();
         let mut discrs = Vec::new();
         let n_pxs = self.0.iter().sum::<usize>();
-        println!("{}", n_pxs);
+        // println!("{}", n_pxs);
         bump_modes(&mut modes, &mut discrs, &self.0[..], 0..256, win_sz, min_width, min_rel, n_pxs);
         (modes, discrs)
     }

@@ -1,6 +1,8 @@
 use std::ops::Range;
 use std::cmp::Ordering;
 
+pub mod dbscan;
+
 pub fn bounding_rect(pts : &[(usize, usize)]) -> (usize, usize, usize, usize) {
     let (mut min_y, mut max_y) = (usize::MAX, 0);
     let (mut min_x, mut max_x) = (usize::MAX, 0);
@@ -281,9 +283,9 @@ fn update_groups_vector<F>(
 
 #[derive(Clone, Copy, Debug)]
 pub enum PointError {
-    FoundFewPoints,
-    FoundManyPoints,
-    FilteredFewPoints
+    FoundFewPoints(usize),
+    FoundManyPoints(usize),
+    FilteredFewPoints(usize)
 }
 
 pub fn filter_raster_diffs(
@@ -293,18 +295,19 @@ pub fn filter_raster_diffs(
     found_type : &FoundType,
     frame : usize,
     min_points : usize,
-    max_points : usize
+    max_points : usize,
+    group_len : (usize, usize)
 ) -> Result<usize, PointError> {
 
     filtered.clear();
 
     if found.len() < min_points / 2 {
-        return Err(PointError::FoundFewPoints);
+        return Err(PointError::FoundFewPoints(found.len()));
     }
 
     match found_type {
-        FoundType::Both => filter_pairs(filtered, groups, found),
-        FoundType::Left | FoundType::Right => filter_single(filtered, groups, found)
+        FoundType::Both => filter_pairs(filtered, groups, found, group_len),
+        FoundType::Left | FoundType::Right => filter_single(filtered, groups, found, group_len)
     }
 
     // filter_by_hemisphere_closeness(filtered, found);
@@ -316,10 +319,10 @@ pub fn filter_raster_diffs(
         if n <= max_points {
             Ok(n)
         } else {
-            Err(PointError::FoundManyPoints)
+            Err(PointError::FoundManyPoints(n))
         }
     } else {
-        Err(PointError::FilteredFewPoints)
+        Err(PointError::FilteredFewPoints(n))
     }
 }
 
@@ -327,6 +330,7 @@ fn filter_single(
     filtered : &mut Vec<(usize, usize)>,
     groups : &mut Vec<std::ops::Range<usize>>,
     found : &[(usize, usize)],
+    group_len : (usize, usize)
 ) {
     filtered.clear();
     groups.clear();
@@ -335,7 +339,7 @@ fn filter_single(
 
     while i <= n-2 {
         // if let Ok(group_sz) = define_if_sequence_close(found, i, 8, 16, check_single_closeness) {
-        if let Ok(group_sz) = define_if_sequence_close(found, i, 4, 36, check_single_closeness) {
+        if let Ok(group_sz) = define_if_sequence_close(found, i, group_len.0, group_len.1, check_single_closeness) {
             update_groups_vector(found, groups, i..i+group_sz, are_single_groups_aligned);
             i += group_sz;
         } else {
@@ -358,7 +362,8 @@ fn filter_single(
 fn filter_pairs(
     filtered : &mut Vec<(usize, usize)>,
     groups : &mut Vec<std::ops::Range<usize>>,
-    found : &[(usize, usize)]
+    found : &[(usize, usize)],
+    group_len : (usize, usize)
 ) {
     filtered.clear();
     groups.clear();
@@ -367,7 +372,7 @@ fn filter_pairs(
     let n = found.len();
 
     while i <= n-4 {
-        if let Ok(group_sz) = define_if_sequence_close(found, i, 8, 16, check_pair_closeness) {
+        if let Ok(group_sz) = define_if_sequence_close(found, i, group_len.0, group_len.1, check_pair_closeness) {
             let new_group = i..i+group_sz;
             if is_equidistant(&stats, &found[new_group.clone()]) {
                 update_groups_vector(found, groups, new_group, are_paired_groups_aligned);
