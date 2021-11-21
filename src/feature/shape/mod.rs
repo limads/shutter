@@ -1,8 +1,8 @@
 use crate::image::*;
 use crate::feature::edge::*;
-use away::Metric;
 use std::cmp::{PartialEq, Ordering};
 use nalgebra::*;
+use away::{Manhattan, Metric};
 
 pub fn point_euclidian(a : (usize, usize), b : (usize, usize)) -> f32 {
     ((a.0 as f32 - b.0 as f32).powf(2.) + (a.1 as f32 - b.1 as f32).powf(2.)).sqrt()
@@ -171,18 +171,25 @@ pub fn bottom_right_coordinate(r : &(usize, usize, usize, usize)) -> (usize, usi
 }
 
 pub fn rect_overlaps(r1 : &(usize, usize, usize, usize), r2 : &(usize, usize, usize, usize)) -> bool {
-    let tl_vdist = (r1.0 as i32 - r2.0 as i32).abs();
+    /*let tl_vdist = (r1.0 as i32 - r2.0 as i32).abs();
     let tl_hdist = (r1.1 as i32 - r2.1 as i32).abs();
     let (h1, w1) = (r1.2 as i32, r1.3 as i32);
     let (h2, w2) = (r2.2 as i32, r2.3 as i32);
-    (tl_vdist < h1 || tl_vdist < h2) && (tl_hdist < w1 || tl_hdist < w2)
+    (tl_vdist < h1 || tl_vdist < h2) && (tl_hdist < w1 || tl_hdist < w2)*/
 
-    /*let tl_1 = top_left_coordinate(r1);
+    let tl_1 = top_left_coordinate(r1);
     let tl_2 = top_left_coordinate(r2);
     let br_1 = bottom_right_coordinate(r1);
     let br_2 = bottom_right_coordinate(r2);
 
-    if tl_1.1 >= br_2.1 || tl_2.1 >= br_1.1 {
+    let to_left = br_2.1 < tl_1.1;
+    let to_right = tl_2.1 > br_1.1;
+    let to_top = br_2.0 < tl_1.0;
+    let to_bottom = tl_2.0 > br_1.0;
+
+    !(to_left || to_top || to_right || to_bottom)
+
+    /*if tl_1.1 >= br_2.1 || tl_2.1 >= br_1.1 {
         return false;
     }
 
@@ -390,7 +397,7 @@ pub fn join_single_col_ordered(pts : &[(usize, usize)], max_dist : f64) -> Vec<[
     for (p1, p2) in pts[0..pts.len()-1].iter().zip(pts[1..pts.len()].iter()) {
         // assert ordering
         assert!(p2.1 as i32 - p1.1 as i32 >= 0);
-        if (p1.0 as f64, p1.1 as f64).manhattan(&(p2.0 as f64, p2.1 as f64)) < max_dist {
+        if Manhattan::metric(&(p1.0 as f64, p1.1 as f64), &(p2.0 as f64, p2.1 as f64)) < max_dist {
             clusters.push([*p1, *p2]);
         }
     }
@@ -406,7 +413,7 @@ pub fn join_pairs_col_ordered(pairs : &[[(usize, usize); 2]], max_dist : f64) ->
 
         // assert ordering between extreme elements.
         assert!(c2[0].1 as i32 - c1[1].1 as i32 >= 0);
-        if (c2[0].0 as f64, c2[0].1 as f64).manhattan(&(c1[1].0 as f64, c1[1].1 as f64)) < max_dist {
+        if Manhattan::metric(&(c2[0].0 as f64, c2[0].1 as f64), &(c1[1].0 as f64, c1[1].1 as f64)) < max_dist {
             clusters.push([c1[0], c1[1], c2[0], c2[1]]);
         }
     }
@@ -674,6 +681,48 @@ pub fn inner_square_for_circle(center : (usize, usize), radius : usize) -> Optio
         2*half_height,
         2*half_width
     ))
+}
+
+pub fn win_contains_circle(win_sz : &(usize, usize), circ : ((usize, usize), f32)) -> bool {
+    (circ.0.0 + circ.1 as usize) < win_sz.0 && (circ.0.1 + circ.1 as usize) < win_sz.1
+}
+
+pub fn outer_circle_for_square(sq : &(usize, usize, usize, usize), win_sz : (usize, usize)) -> Option<((usize, usize), f32)> {
+    if sq.2 < win_sz.0 || sq.3 < win_sz.1 {
+        return None;
+    }
+    let tl = top_left_coordinate(sq);
+    let br = bottom_right_coordinate(sq);
+    let circ = outer_circle(&[tl, br]);
+    if win_contains_circle(&win_sz, circ) {
+        Some(circ)
+    } else {
+        None
+    }
+}
+
+pub fn inner_circle_for_square(sq : &(usize, usize, usize, usize)) -> ((usize, usize), f32) {
+    let center = (sq.0 + sq.2 / 2, sq.1 + sq.3 / 2);
+    let radius = sq.2.min(sq.3) as f32 / 2.;
+    (center, radius)
+}
+
+pub fn circumference_iter(circ : ((usize, usize), f32), step_rad : f32) -> impl Iterator<Item=(usize, usize)> {
+    use std::f32::consts::PI;
+    assert!(step_rad < 2. * PI);
+    let n_steps = (2. * PI / step_rad) as usize;
+    (0..n_steps).filter_map(move |step| {
+        let (mut y, mut x) = ((step as f32 * step_rad).sin(), (step as f32 * step_rad).cos());
+        y *= circ.1;
+        x *= circ.1;
+        y += circ.0.0 as f32;
+        x += circ.0.1 as f32;
+        if y > 0.0 && x > 0.0 {
+            Some((y as usize, x as usize))
+        } else {
+            None
+        }
+    })
 }
 
 #[cfg(feature="opencvlib")]

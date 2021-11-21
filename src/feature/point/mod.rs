@@ -1,6 +1,10 @@
 use std::ops::Range;
 use std::cmp::Ordering;
 
+// #[repr(C)]
+// pub struct Point([usize; 2]);
+// impl AsRef<usizex4> for [Point; 2];
+
 pub mod dbscan;
 
 pub fn bounding_rect(pts : &[(usize, usize)]) -> (usize, usize, usize, usize) {

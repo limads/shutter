@@ -101,9 +101,10 @@ where
     }
 
     #[cfg(feature="opencvlib")]
-    pub fn equalize_mut(&mut self) {
-        let src : core::Mat = self.full_window_mut().into();
-        let mut dst : core::Mat = self.full_window_mut().into();
+    pub fn equalize_mut(&mut self, dst : &mut Image<N>) {
+        assert!(self.shape() == dst.shape());
+        let src : core::Mat = self.full_window().into();
+        let mut dst : core::Mat = dst.full_window_mut().into();
         imgproc::equalize_hist(&src, &mut dst);
     }
 
@@ -838,6 +839,10 @@ impl<'a> Iterator for PackedIterator<'a, u8> {
 }*/
 
 impl<'a> Window<'a, u8> {
+
+    pub fn color_at_labels(&'a self, ixs : impl Iterator<Item=(usize, usize)> + 'a) -> impl Iterator<Item=u8> + 'a {
+        ixs.map(move |ix| self[ix] )
+    }
 
     pub fn nonzero_pixels(&'a self, px_spacing : usize) -> impl Iterator<Item=&'a u8> +'a + Clone {
         self.pixels(px_spacing).filter(|px| **px > 0 )

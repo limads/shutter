@@ -5,6 +5,8 @@ use std::ops::Range;
 use crate::image::WindowMut;
 // use crate::segmentation;
 use bayes::fit::{cluster::KMeans, cluster::KMeansSettings, Estimator};
+use away::space::SpatialClustering;
+use std::cmp::Ordering;
 
 /*IppStatus ippiHistogram_<mod>(const Ipp<dataType>* pSrc, int srcStep, IppiSize roiSize,
 Ipp32u* pHist, const IppiHistogramSpec* pSpec, Ipp8u* pBuffer );*/
@@ -212,9 +214,24 @@ impl DenseHistogram {
             }).collect()
     }
 
-    pub fn bins<'a>(&'a self) -> impl Iterator<Item=(u8, usize)> + 'a {
+    pub fn bins<'a>(&'a self) -> impl Iterator<Item=(u8, usize)> + Clone + 'a {
         self.0.iter().enumerate().map(|(ix, n)| (ix as u8, *n) )
     }
+
+    pub fn dense_regions(&self, min_count_per_px : usize, min_dist : f64, min_cluster_sz : usize) -> Vec<(u8, u8)> {
+        let pts : Vec<[f64; 1]> = self.0.iter()
+            .enumerate()
+            .filter(|(_, n)| **n > min_count_per_px )
+            .map(|(ix, n)| vec![ix, *n] ).flatten().map(|pt| [pt as f64] ).collect::<Vec<_>>();
+        let mut clusts = SpatialClustering::cluster_linear(&pts[..], min_dist, min_cluster_sz);
+        let mut limits = Vec::new();
+        for (_, mut clust) in clusts.clusters.iter_mut() {
+            clust.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap_or(Ordering::Equal) );
+            limits.push((clust[0][0] as u8, clust[clust.len()-1][0] as u8));
+        }
+        limits
+    }
+
 }
 
 fn bump_modes(

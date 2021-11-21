@@ -16,6 +16,7 @@ use crate::feature::point;
 use crate::feature::edge::euclidian;
 use crate::image::index::index_distance;
 use super::*;
+use away::space::SpatialClustering;
 
 // #[cfg(feature="opencvlib")]
 // pub mod fgmm;
@@ -266,6 +267,51 @@ impl RowPair {
         Self { curr, past }
     }
 
+}
+
+/// Extracts patches from image based on dense, homogeneous regions.
+/// Searches the 3d space or (row, col, color) for regions that are
+/// very clustered together, therefore mostly ignoring regions that are
+/// close but have non-homogeneous color, depending on the min_dist
+/// and min_cluster_sz parameters chosen.
+pub fn patches_from_dense_regions(
+    win : &Window<'_, u8>,
+    scale : usize,
+    min_dist : f64,
+    min_cluster_sz : usize,
+    mode : ColorMode
+) -> Vec<Patch> {
+    let pxs : Vec<[f64; 3]> = win.labeled_pixels(scale)
+        .filter(|(_, _, px)| mode.matches(*px) )
+        .map(|(r, c, color)| [r as f64, c as f64, color as f64] )
+        .collect::<Vec<_>>();
+    let clust = SpatialClustering::cluster_linear(&pxs, min_dist, min_cluster_sz);
+    let mut patches = Vec::new();
+    for (_, clust) in clust.clusters.iter() {
+        let mut color = (clust.iter().map(|[_, _, c]| c ).sum::<f64>() / clust.len() as f64) as u8;
+        let outer_rect = (0, 0, 0, 0);
+        let pxs : Vec<_> = clust.iter().map(|[r, c, _]| (*r as usize, *c as usize) ).collect();
+        let mut patch = Patch {
+            outer_rect,
+            color,
+            scale,
+            img_height : win.height(),
+            area : clust.len(),
+            pxs
+        };
+        let mut row_pxs = patch.group_rows();
+        let min_row = row_pxs.keys().min().unwrap();
+        let max_row = row_pxs.keys().max().unwrap();
+
+        let mut col_pxs = patch.group_cols();
+        let min_col = col_pxs.keys().min().unwrap();
+        let max_col = col_pxs.keys().max().unwrap();
+
+        patch.outer_rect = (*min_row, *min_col, *max_row - *min_row, *max_col - *min_col);
+        patches.push(patch);
+    }
+
+    patches
 }
 
 #[derive(Default)]
@@ -584,8 +630,18 @@ fn expand_rect(rect : &mut (usize, usize, usize, usize), exp : &ExpansionFront) 
 
 impl Patch {
 
+    /*pub fn average_color(&self, win : &Window<'_, u8>, exp : ExpansionMode) -> u8 {
+        match exp {
+            ExpansionMode::Contour => {
+
+            },
+            _ => unimplemented!()
+        }
+    }*/
+
     pub fn center(&self) -> (usize, usize) {
-        (self.outer_rect.0 + self.outer_rect.2, self.outer_rect.1 + self.outer_rect.3)
+        let rect = self.outer_rect();
+        (rect.0 + rect.2 / 2, rect.1 + rect.3 / 2)
     }
 
     /// Number of pixels contained in the patch.
@@ -1568,25 +1624,6 @@ pub (crate) fn single_color_patches(
         if color_match {
             append_or_update_patch(patches, &mut search, &mut n_patches, win, merges_left, merges_top, r, c, mode.color(), px_spacing, exp_mode);
             last_matching_col = Some(c);
-            /*match (merges_left, merges_top) {
-                (true, true) => {
-                    merge_left_to_top_patch(patches, &mut search, &mut n_patches);
-                    search.prev_row_patch_ixs[c] = search.top_patch_ix.unwrap();
-                    search.left_patch_ix = Some(search.top_patch_ix.unwrap());
-                },
-                (true, false) => {
-                    patches[search.left_patch_ix.unwrap()].expand(&[(r, c)]);
-                    search.prev_row_patch_ixs[c] = search.left_patch_ix.unwrap();
-                },
-                (false, true) => {
-                    patches[search.top_patch_ix.unwrap()].expand(&[(r, c)]);
-                    search.prev_row_patch_ixs[c] = search.top_patch_ix.unwrap();
-                    search.left_patch_ix = Some(search.top_patch_ix.unwrap());
-                },
-                (false, false) => {
-                    add_patch(patches, &mut search, &mut n_patches, win, r, c, mode.color(), px_spacing);
-                }
-            }*/
             prev_row_mask[c] = true;
         } else {
             prev_row_mask[c] = false;
@@ -1704,6 +1741,10 @@ pub(crate) fn full_color_patches(
     n_patches
 }
 
+// TODO review patch color strategy. For now, the patch color
+// is the color that inaugurated the patch via its top-left pixel
+// at the raster search strategy. This contrasts with the growth
+// strategy where the patch color is the seed position color.
 fn append_or_update_patch(
     patches : &mut Vec<Patch>,
     search : &mut PatchSearch,
