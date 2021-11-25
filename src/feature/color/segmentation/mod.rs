@@ -550,6 +550,13 @@ fn close_contour(patch : &mut Patch, win : &Window<'_, u8>) {
                     .unwrap_or(Ordering::Equal)
             } ).unwrap();
         patch.pxs.swap(closest_ix, ix);
+
+        /*let curr = patch.pxs[i-1];
+        patch.pxs[i+1..].sort_by(|(_, px1), (_, px2)| {
+        index_distance(**px1, curr, win.height()).0
+            .partial_cmp(&index_distance(**px2, curr, win.height()).0)
+            .unwrap_or(Ordering::Equal)
+        });*/
     }
 
     // Last element will not be close to neighborhood, just remove it.

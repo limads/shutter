@@ -688,7 +688,7 @@ pub fn win_contains_circle(win_sz : &(usize, usize), circ : ((usize, usize), f32
 }
 
 pub fn outer_circle_for_square(sq : &(usize, usize, usize, usize), win_sz : (usize, usize)) -> Option<((usize, usize), f32)> {
-    if sq.2 < win_sz.0 || sq.3 < win_sz.1 {
+    if sq.2 > win_sz.0 || sq.3 > win_sz.1 {
         return None;
     }
     let tl = top_left_coordinate(sq);

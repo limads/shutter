@@ -327,6 +327,10 @@ impl<N> Image<N>
 
 impl Image<u8> {
 
+    pub fn do_thing(self : &Box<Self>) {
+
+    }
+
     pub fn new_checkerboard(sz : usize, sq_sz : usize) -> Self {
         assert!(sz % sq_sz == 0);
         let mut img = Self::new_constant(sz, sz, 255);
