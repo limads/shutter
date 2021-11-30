@@ -1,5 +1,8 @@
 // use nalgebra::*;
 
+use std::ops::Sub;
+use num_traits::ToPrimitive;
+
 /// Returns position relative to the current linear index in the image with the given number of columns.
 pub fn coordinate_index(lin_ix : usize, ncol : usize) -> (usize, usize) {
     (lin_ix / ncol, lin_ix % ncol)
@@ -11,9 +14,12 @@ pub fn linear_index(coord_ix : (usize, usize), ncol : usize) -> usize {
 
 /// Translate a matrix index (row, col) into planar coordinates (x, y),
 /// keeping the x value but flipping the y value.
-pub fn index_to_plane_coord(ix : (usize, usize), nrow : usize) -> (f64, f64) {
-    let x = ix.1 as f64;
-    let y = (nrow - ix.0) as f64; 
+pub fn index_to_plane_coord<N>(ix : (N, N), nrow : N) -> (f64, f64)
+where
+    N : Sub<Output=N> + Copy + ToPrimitive
+{
+    let x : f64 = (ix.1).to_f64().unwrap();
+    let y : f64 = (nrow - ix.0).to_f64().unwrap();
     (x, y)
 }
 
@@ -23,7 +29,10 @@ pub fn index_to_plane_coord(ix : (usize, usize), nrow : usize) -> (f64, f64) {
 /// count positive from 0º-180º (0 rad - 3.14 rad) and negative from 180º-360º (3.14 rad - 0 rad).
 /// This is as if the positive radian value has been "reflected" over the lower half of the trig circle. 
 /// TODO create version with just the distance calculation, which will just reflect the y coordinate.
-pub fn index_distance(src : (usize, usize), dst : (usize, usize), nrow : usize) -> (f64, f64) {
+pub fn index_distance<N>(src : (N, N), dst : (N, N), nrow : N) -> (f64, f64)
+where
+    N : Sub<Output=N> + Copy + ToPrimitive
+{
     let (src_x, src_y) = index_to_plane_coord(src, nrow);
     let (dst_x, dst_y) = index_to_plane_coord(dst, nrow);
     

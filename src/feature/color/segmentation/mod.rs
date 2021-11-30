@@ -17,12 +17,21 @@ use crate::feature::edge::euclidian;
 use crate::image::index::index_distance;
 use super::*;
 use away::space::SpatialClustering;
+use std::ops::Range;
+use std::convert::TryInto;
+use std::convert::TryFrom;
+use std::ops::Div;
+use std::ops::Add;
+// use crate::feature::shape;
 
 // #[cfg(feature="opencvlib")]
 // pub mod fgmm;
 
 // #[cfg(feature="opencvlib")]
 // pub mod mser;
+
+// TODO categorize into raster-based segmentation, seed-based segmentation
+// and cluster-based segmentation.
 
 /// The most general patch is a set of pixel positions with a homogeneous color
 /// and a scale that was used for extraction. The patch is assumed to be
@@ -37,12 +46,12 @@ pub struct Patch {
     // corner and an extension. The rect extension is increased
     // any time we have a set of inserted pixels that comptetely border
     // either its bottom or right borders.
-    pub pxs : Vec<(usize, usize)>,
+    pub pxs : Vec<(u16, u16)>,
 
     // Outer rect, at patch scale
-    pub outer_rect : (usize, usize, usize, usize),
+    pub outer_rect : (u16, u16, u16, u16),
     pub color : u8,
-    pub scale : usize,
+    pub scale : u16,
     pub img_height : usize,
 
     // Number of pixels inside it.
@@ -115,10 +124,10 @@ fn split_vertically() {
 }*/
 
 /// Approximate color momentum, which might work for nearly symmetrical objects and is faster.
-pub fn approx_color_momentum(win : &Window<'_, u8>, px_spacing : usize, mode : ColorMode) -> Option<(usize, usize)> {
+pub fn approx_color_momentum(win : &Window<'_, u8>, px_spacing : usize, mut mode : ColorMode) -> Option<(usize, usize)> {
     let (mut sum_r, mut sum_c) = (0.0, 0.0);
     let mut n_matches = 0;
-    for (r, c, color) in win.labeled_pixels(px_spacing) {
+    for (r, c, color) in win.labeled_pixels::<usize, _>(px_spacing) {
         if mode.matches(color) {
             sum_r += r as f32; //* weight;
             sum_c += c as f32; //* weight;
@@ -135,7 +144,7 @@ pub fn approx_color_momentum(win : &Window<'_, u8>, px_spacing : usize, mode : C
 /// Returns the pixel that centralizes the given color. If this color is distributed
 /// in a homogeneous region, the center can be used as a seed for the patch.
 /// If pixels matches mode not exactly, pixels are weighted in the inverse proportion of the target color.
-pub fn color_momentum(win : &Window<'_, u8>, px_spacing : usize, mode : ColorMode) -> Option<(usize, usize)> {
+pub fn hashmap_color_momentum(win : &Window<'_, u8>, px_spacing : usize, mut mode : ColorMode) -> Option<(usize, usize)> {
     let mut n_matches = 0;
     let mut rows = HashMap::<usize, (usize, usize)>::new();
     let mut cols = HashMap::<usize, (usize, usize)>::new();
@@ -166,6 +175,82 @@ pub fn color_momentum(win : &Window<'_, u8>, px_spacing : usize, mode : ColorMod
     }
 }
 
+pub fn color_momentum(win : &Window<'_, u8>, px_spacing : usize, mut mode : ColorMode) -> Option<(usize, usize)> {
+
+    let mut n_matches = 0;
+
+    // Which rows of the image matched color at least once
+    let mut row_ixs : Vec<usize> = Vec::new();
+
+    // Stores the columns of all pixels that matched color
+    let mut col_ixs : Vec<usize> = Vec::new();
+
+    // Defines a contiguous index range over col_ixs linked to the same row.
+    let mut row_ranges : Vec<Range<usize>> = Vec::new();
+
+    for (r, c, color) in win.labeled_pixels(px_spacing) {
+        if mode.matches(color) {
+            if row_ixs.last().cloned() == Some(r) {
+                col_ixs.push(c);
+                row_ranges.last_mut().unwrap().end += 1;
+            } else {
+                row_ixs.push(r);
+                col_ixs.push(c);
+                let n = col_ixs.len();
+                row_ranges.push(Range { start : n - 1, end : n });
+            }
+        }
+    }
+    assert!(row_ixs.len() == row_ranges.len());
+    let nrows = row_ixs.len() as f32;
+
+    let mut avg_col = 0.;
+    let mut avg_row = 0.;
+    for (row_ix, row_range) in row_ixs.drain(..).zip(row_ranges.drain(..)) {
+        avg_row += row_ix as f32;
+        let ncols = row_range.end - row_range.start;
+        let sum_col_this_row = col_ixs[row_range]
+            .iter()
+            .fold(0, |sum_c, c| sum_c + c );
+        avg_col += sum_col_this_row as f32 / ncols as f32;
+    }
+    avg_col /= nrows;
+    avg_row /= nrows;
+
+    Some((avg_row as usize, avg_col as usize))
+}
+
+/*/// If any pixels in the neighborhood of the contour do not differ by the neighboring
+/// pixel by more than the diff threshold, aggregate the pixel into the contour. ext_step
+/// is the angle tau used to extend the convex triplets of edge pixels.
+fn smooth_contour(contour : &mut Patch, win : &Window<'_, u8>, max_diff : u8, max_extension : usize, tau_step : f64) {
+    let n = contour.pxs.len();
+    let triplet_iter = contour.pxs.iter().take(n-2)
+        .zip(contour.pxs.iter().skip(1).take(n-1).iter().zip(contour.pxs.iter().skip(2)));
+    assert!(tau_step > 0.0 && tau_step < 2. * f64::consts::PI);
+    for (ext1, (center, ext2)) in triplet_iter {
+        let theta_1 = shape::vertex_angle(ext1, center);
+        let theta_2 = shape::vertex_angle(ext2, center);
+        let theta_3 = f64::consts::PI - (theta_1 + theta_2);
+
+        // This guarantees the extended point will be at the same normal away from the ext_1, ext_2 points
+        // passing through the center.
+        let new_theta_1 = theta_1 + tau_step;
+        let new_theta_2 = theta_2 + tau_step;
+        let new_theta_3 = theta_3 - 2.*tau_step;
+
+        // This is the angle at the point center formed by the new triangle
+        // between the old center point, the new center point
+        // and one of the extremities (the angle will be the same for both sides).
+        // This new triangle will have angles tau at the extremity, half_theta3_compl
+        // at the corner, and new_theta_3 / 2.
+        let half_theta3_compl = (2. * PI - theta_3) / 2.;
+
+        // If extened point does not differ from color by more than max_diff,
+        // substitute the inner point by the extended point.
+    }
+}*/
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub enum Strategy {
     Eager,
@@ -178,10 +263,10 @@ pub enum Strategy {
 pub fn adjusted_color_momentum(
     win : &Window<'_, u8>,
     px_spacing : usize,
-    mode : ColorMode,
+    mut mode : ColorMode,
     strategy : Strategy
 ) -> Option<(usize, usize)> {
-    let mom = color_momentum(win, px_spacing, mode)?;
+    let mom = hashmap_color_momentum(win, px_spacing, mode)?;
 
     let mut found = Vec::new();
 
@@ -225,6 +310,7 @@ fn momentum() {
             img[(r, c)] = 1;
         }
     }
+    println!("{:?}", hashmap_color_momentum(&img.full_window(), 1, ColorMode::Exact(1)));
     println!("{:?}", color_momentum(&img.full_window(), 1, ColorMode::Exact(1)));
 }
 
@@ -247,22 +333,22 @@ fn patch_growth() {
     println!("{:?}", Patch::grow(&img.full_window(), (11, 11), 1, ColorMode::Exact(1), ReferenceMode::Constant, None, ExpansionMode::Contour));
 }
 
-/// Extract a single patch, using the color momentum as seed.
-pub fn extract_main_patch(win : &Window<'_, u8>, px_spacing : usize, mode : ColorMode) -> Option<Patch> {
-    let seed = color_momentum(win, px_spacing, mode)?;
-    Some(Patch::grow(win, seed, 1, mode, ReferenceMode::Constant, None, ExpansionMode::Dense)).unwrap()
-}
+// Extract a single patch, using the color momentum as seed.
+// pub fn extract_main_patch(win : &Window<'_, u8>, px_spacing : u16, mode : ColorMode) -> Option<Patch> {
+//    let seed = hashmap_color_momentum(win, px_spacing, mode)?;
+//    Some(Patch::grow(win, seed, 1, mode, ReferenceMode::Constant, None, ExpansionMode::Dense)).unwrap()
+// }
 
 #[derive(Default, Clone)]
 struct RowPair {
-    curr : Vec<(usize, usize)>,
-    past : Vec<(usize, usize)>
+    curr : Vec<(u16, u16)>,
+    past : Vec<(u16, u16)>
 }
 
 impl RowPair {
 
-    fn new(px : (usize, usize)) -> Self {
-        let (curr, mut past) = (Vec::with_capacity(64), Vec::with_capacity(64));
+    fn new(px : (u16, u16)) -> Self {
+        let (curr, mut past) = (Vec::with_capacity(32), Vec::with_capacity(32));
         past.push(px);
         Self { curr, past }
     }
@@ -279,9 +365,9 @@ pub fn patches_from_dense_regions(
     scale : usize,
     min_dist : f64,
     min_cluster_sz : usize,
-    mode : ColorMode
+    mut mode : ColorMode
 ) -> Vec<Patch> {
-    let pxs : Vec<[f64; 3]> = win.labeled_pixels(scale)
+    let pxs : Vec<[f64; 3]> = win.labeled_pixels::<usize, _>(scale)
         .filter(|(_, _, px)| mode.matches(*px) )
         .map(|(r, c, color)| [r as f64, c as f64, color as f64] )
         .collect::<Vec<_>>();
@@ -290,11 +376,11 @@ pub fn patches_from_dense_regions(
     for (_, clust) in clust.clusters.iter() {
         let mut color = (clust.iter().map(|[_, _, c]| c ).sum::<f64>() / clust.len() as f64) as u8;
         let outer_rect = (0, 0, 0, 0);
-        let pxs : Vec<_> = clust.iter().map(|[r, c, _]| (*r as usize, *c as usize) ).collect();
+        let pxs : Vec<_> = clust.iter().map(|[r, c, _]| (*r as u16, *c as u16) ).collect();
         let mut patch = Patch {
             outer_rect,
             color,
-            scale,
+            scale : scale.try_into().unwrap(),
             img_height : win.height(),
             area : clust.len(),
             pxs
@@ -324,7 +410,7 @@ struct ExpansionFront {
 
 impl ExpansionFront {
 
-    fn new(px : (usize, usize)) -> Self {
+    fn new(px : (u16, u16)) -> Self {
         let pair = RowPair::new(px);
         Self {
             top : pair.clone(),
@@ -336,33 +422,33 @@ impl ExpansionFront {
 
 }
 
-fn pixel_horizontally_aligned_to_rect(outer_rect : &(usize, usize, usize, usize), (r, c) : (usize, usize)) -> bool {
+fn pixel_horizontally_aligned_to_rect(outer_rect : &(u16, u16, u16, u16), (r, c) : (u16, u16)) -> bool {
     r >= outer_rect.0 /*.saturating_sub(1)*/ &&
         r <= (outer_rect.0 + outer_rect.2) /*.saturating_add(1)*/
 }
 
-fn pixel_vertically_aligned_to_rect(outer_rect : &(usize, usize, usize, usize), (r, c) : (usize, usize)) -> bool {
+fn pixel_vertically_aligned_to_rect(outer_rect : &(u16, u16, u16, u16), (r, c) : (u16, u16)) -> bool {
     c >= outer_rect.1 /*.saturating_sub(1)*/  &&
         c <= (outer_rect.1 + outer_rect.3) /*.saturating_add(1)*/
 }
 
-fn pixel_to_right_of_rect(outer_rect : &(usize, usize, usize, usize), (r, c) : (usize, usize)) -> bool {
+fn pixel_to_right_of_rect(outer_rect : &(u16, u16, u16, u16), (r, c) : (u16, u16)) -> bool {
     pixel_horizontally_aligned_to_rect(outer_rect, (r, c))
 }
 
-fn pixel_to_left_of_rect(outer_rect : &(usize, usize, usize, usize), (r, c) : (usize, usize)) -> bool {
+fn pixel_to_left_of_rect(outer_rect : &(u16, u16, u16, u16), (r, c) : (u16, u16)) -> bool {
     pixel_horizontally_aligned_to_rect(outer_rect, (r, c))
 }
 
-fn pixel_above_rect(outer_rect : &(usize, usize, usize, usize), (r, c) : (usize, usize)) -> bool {
+fn pixel_above_rect(outer_rect : &(u16, u16, u16, u16), (r, c) : (u16, u16)) -> bool {
     pixel_vertically_aligned_to_rect(outer_rect, (r, c))
 }
 
-fn pixel_below_rect(outer_rect : &(usize, usize, usize, usize), (r, c) : (usize, usize)) -> bool {
+fn pixel_below_rect(outer_rect : &(u16, u16, u16, u16), (r, c) : (u16, u16)) -> bool {
     pixel_horizontally_aligned_to_rect(outer_rect, (r, c))
 }
 
-fn pixel_neighbors_row(row : &[(usize, usize)], px : (usize, usize)) -> bool {
+fn pixel_neighbors_row(row : &[(u16, u16)], px : (u16, u16)) -> bool {
     row.binary_search_by(|row_px|
         if (row_px.1 as i16 - px.1 as i16).abs() <= 1 {
             Ordering::Equal
@@ -372,7 +458,7 @@ fn pixel_neighbors_row(row : &[(usize, usize)], px : (usize, usize)) -> bool {
     ).is_ok()
 }
 
-fn pixel_neighbors_col(col : &[(usize, usize)], px : (usize, usize)) -> bool {
+fn pixel_neighbors_col(col : &[(u16, u16)], px : (u16, u16)) -> bool {
     col.binary_search_by(|col_px|
         // if (col_px.0 as i16 - px.0 as i16).abs() <= 1 {
         //    Ordering::Equal
@@ -382,30 +468,30 @@ fn pixel_neighbors_col(col : &[(usize, usize)], px : (usize, usize)) -> bool {
     ).is_ok()
 }
 
-fn pixel_neighbors_last_at_row(row : &[(usize, usize)], px : (usize, usize)) -> bool {
+fn pixel_neighbors_last_at_row(row : &[(u16, u16)], px : (u16, u16)) -> bool {
     row.last().map(|last| (last.1 as i16 - px.1 as i16).abs() <= 1 ).unwrap_or(false)
 }
 
-fn pixel_neighbors_last_at_col(col : &[(usize, usize)], px : (usize, usize)) -> bool {
+fn pixel_neighbors_last_at_col(col : &[(u16, u16)], px : (u16, u16)) -> bool {
     col.last().map(|last| (last.0 as i16 - px.0 as i16).abs() <= 1 ).unwrap_or(false)
 }
 
-fn pixel_neighbors_top(exp_patch : &ExpansionFront, px : (usize, usize)) -> bool {
+fn pixel_neighbors_top(exp_patch : &ExpansionFront, px : (u16, u16)) -> bool {
     pixel_neighbors_last_at_row(&exp_patch.top.curr[..], px) ||
         pixel_neighbors_row(&exp_patch.top.past[..], px)
 }
 
-fn pixel_neighbors_left(exp_patch : &ExpansionFront, px : (usize, usize)) -> bool {
+fn pixel_neighbors_left(exp_patch : &ExpansionFront, px : (u16, u16)) -> bool {
     pixel_neighbors_last_at_col(&exp_patch.left.curr[..], px) ||
         pixel_neighbors_col(&exp_patch.left.past[..], px)
 }
 
-fn pixel_neighbors_bottom(exp_patch : &ExpansionFront, px : (usize, usize)) -> bool {
+fn pixel_neighbors_bottom(exp_patch : &ExpansionFront, px : (u16, u16)) -> bool {
     pixel_neighbors_last_at_row(&exp_patch.bottom.curr[..], px) ||
         pixel_neighbors_row(&exp_patch.bottom.past[..], px)
 }
 
-fn pixel_neighbors_right(exp_patch : &ExpansionFront, px : (usize, usize)) -> bool {
+fn pixel_neighbors_right(exp_patch : &ExpansionFront, px : (u16, u16)) -> bool {
     pixel_neighbors_last_at_col(&exp_patch.right.curr[..], px) ||
         pixel_neighbors_col(&exp_patch.right.past[..], px)
 }
@@ -426,7 +512,7 @@ pub enum ExpansionMode {
 fn expand_patch(
     exp_patch : &mut ExpansionFront,
     patch : &mut Patch,
-    outer_rect : (usize, usize, usize, usize),
+    outer_rect : (u16, u16, u16, u16),
     mode : ExpansionMode,
     win : &Window<'_, u8>
 ) {
@@ -463,7 +549,7 @@ fn expand_patch(
         match mode {
             ExpansionMode::Rect => {
                 ext.past.clear();
-                patch.area = outer_rect.2 * outer_rect.3;
+                patch.area = (outer_rect.2 * outer_rect.3) as usize;
                 mem::swap(&mut ext.curr, &mut ext.past);
             },
             ExpansionMode::Dense => {
@@ -506,9 +592,9 @@ fn expand_patch(
                         if n > 1 {
                             let is_row_front = ext.past[n-1].0 == ext.past[0].0;
                             if is_row_front {
-                                patch.area += ext.past[n-1].1 - ext.past[0].1;
+                                patch.area += (ext.past[n-1].1 - ext.past[0].1) as usize;
                             } else {
-                                patch.area += ext.past[n-1].0 - ext.past[0].0;
+                                patch.area += (ext.past[n-1].0 - ext.past[0].0) as usize;
                             }
                         }
                     }
@@ -541,12 +627,15 @@ fn expand_patch(
 
 fn close_contour(patch : &mut Patch, win : &Window<'_, u8>) {
 
+    assert!(patch.pxs.len() >= 3);
+
     // Order by pairwise closeness.
+    let h = u16::try_from(win.height()).unwrap();
     for ix in 1..patch.pxs.len() {
         let (closest_ix, _) = patch.pxs.iter().enumerate().skip(ix)
             .min_by(|(_, px1), (_, px2)| {
-                index_distance(**px1, patch.pxs[ix-1], win.height()).0
-                    .partial_cmp(&index_distance(**px2, patch.pxs[ix-1], win.height()).0)
+                index_distance(**px1, patch.pxs[ix-1], h).0
+                    .partial_cmp(&index_distance(**px2, patch.pxs[ix-1], h).0)
                     .unwrap_or(Ordering::Equal)
             } ).unwrap();
         patch.pxs.swap(closest_ix, ix);
@@ -569,7 +658,7 @@ pub enum ReferenceMode {
     Adaptive
 }
 
-fn update_stats(mode : &mut ColorMode, n_px : &mut usize, sum : &mut u64, sum_abs_dev : &mut u64, ref_mode : ReferenceMode, new : u8) {
+fn update_stats(mode : &mut ColorMode, n_px : &mut u16, sum : &mut u64, sum_abs_dev : &mut u64, ref_mode : ReferenceMode, new : u8) {
     if ref_mode == ReferenceMode::Adaptive {
         *sum += new as u64;
         *n_px += 1;
@@ -580,7 +669,7 @@ fn update_stats(mode : &mut ColorMode, n_px : &mut usize, sum : &mut u64, sum_ab
     }
 }
 
-fn expand_rect(rect : &mut (usize, usize, usize, usize), exp : &ExpansionFront) {
+fn expand_rect_with_front(rect : &mut (u16, u16, u16, u16), exp : &ExpansionFront) {
     let mut max_right = rect.1 + rect.3;
     let mut max_bottom = rect.0 + rect.2;
     if exp.top.curr.len() >= 1 {
@@ -637,6 +726,18 @@ fn expand_rect(rect : &mut (usize, usize, usize, usize), exp : &ExpansionFront) 
 
 impl Patch {
 
+    pub fn unscaled_area(&self) -> f32 {
+        self.area as f32
+    }
+
+    pub fn unscaled_perimeter(&self) -> f32 {
+        shape::contour_perimeter(&self.pxs[..])
+    }
+
+    pub fn circularity(&self) -> f32 {
+        shape::circularity(self.unscaled_area() as f64, self.unscaled_perimeter() as f64) as f32
+    }
+
     /*pub fn average_color(&self, win : &Window<'_, u8>, exp : ExpansionMode) -> u8 {
         match exp {
             ExpansionMode::Contour => {
@@ -646,9 +747,12 @@ impl Patch {
         }
     }*/
 
-    pub fn center(&self) -> (usize, usize) {
-        let rect = self.outer_rect();
-        (rect.0 + rect.2 / 2, rect.1 + rect.3 / 2)
+    pub fn center<N>(&self) -> (N, N)
+    where
+        N : From<u16> + Copy + Div<Output=N> + Add<Output=N> + 'static
+    {
+        let rect = self.outer_rect::<N>();
+        (rect.0 + rect.2 / N::from(2u16), rect.1 + rect.3 / N::from(2u16))
     }
 
     /// Number of pixels contained in the patch.
@@ -674,8 +778,8 @@ impl Patch {
         // }
         // mode.set_reference_color(win[seed]);
 
-        let mut patch = Patch::new(seed, win[seed], 1, win.height());
-
+        let mut patch = Patch::new((seed.0 as u16, seed.1 as u16), win[seed], 1, win.height());
+        let seed = (seed.0 as u16, seed.1 as u16);
 
         let (mut grows_left, mut grows_top, mut grows_right, mut grows_bottom) = (true, true, true, true);
 
@@ -683,7 +787,7 @@ impl Patch {
         // Will check the absolute difference is <= px_spacing there.
         assert!(px_spacing == 1);
 
-        let mut abs_dist = px_spacing;
+        let mut abs_dist = px_spacing as u16;
         let mut exp_patch = ExpansionFront::new(seed);
         let mut outer_rect = (seed.0, seed.1, 1, 1);
 
@@ -691,31 +795,32 @@ impl Patch {
         let mut sum_abs_dev : u64 = 0;
         let mut sum : u64 = win[seed] as u64;
 
+        let (h, w) = (win.height() as u16, win.width() as u16);
         loop {
             assert!(exp_patch.top.curr.is_empty() && exp_patch.left.curr.is_empty() && exp_patch.right.curr.is_empty() && exp_patch.bottom.curr.is_empty());
             let left_col = if grows_left { seed.1.checked_sub(abs_dist) } else { None };
             let top_row = if grows_top { seed.0.checked_sub(abs_dist) } else { None };
             let right_col = if grows_right {
-                if seed.1 + abs_dist < win.width() { Some(seed.1 + abs_dist) } else { None }
+                if seed.1 + abs_dist < w { Some(seed.1 + abs_dist) } else { None }
             } else {
                 None
             };
             let bottom_row = if grows_bottom {
-                if seed.0 + abs_dist < win.height() { Some(seed.0 + abs_dist) } else { None }
+                if seed.0 + abs_dist < h { Some(seed.0 + abs_dist) } else { None }
             } else {
                 None
             };
 
-            let row_end = (seed.0+abs_dist+1).min(win.height());
-            let col_end = (seed.1+abs_dist+1).min(win.width());
-            let row_range = (seed.0.saturating_sub(abs_dist)..( row_end )).step_by(px_spacing);
-            let col_range = (seed.1.saturating_sub(abs_dist)..( col_end )).step_by(px_spacing);
+            let row_end = (seed.0+abs_dist+1).min(h);
+            let col_end = (seed.1+abs_dist+1).min(w);
+            let row_range = (seed.0.saturating_sub(abs_dist)..( row_end )).step_by(px_spacing as usize);
+            let col_range = (seed.1.saturating_sub(abs_dist)..( col_end )).step_by(px_spacing as usize);
 
             // TODO when pixel is not in rect range, we can break the loop.
 
             let mut grows_top = false;
             if exp_patch.top.past.len() >= 1 {
-                let top_range = (exp_patch.top.past[0].1.saturating_sub(1))..((exp_patch.top.past[exp_patch.top.past.len()-1].1 + 2).min(win.width()));
+                let top_range = (exp_patch.top.past[0].1.saturating_sub(1))..((exp_patch.top.past[exp_patch.top.past.len()-1].1 + 2).min(w));
                 if let Some(r) = top_row {
                     for c in /*col_range.clone()*/ top_range.clone() {
                         let px = (r, c);
@@ -735,7 +840,7 @@ impl Patch {
 
             let mut grows_left = false;
             if exp_patch.left.past.len() >= 1 {
-                let left_range = (exp_patch.left.past[0].0.saturating_sub(1))..((exp_patch.left.past[exp_patch.left.past.len()-1].0 + 2).min(win.height()));
+                let left_range = (exp_patch.left.past[0].0.saturating_sub(1))..((exp_patch.left.past[exp_patch.left.past.len()-1].0 + 2).min(h));
                 if let Some(c) = left_col {
                     for r in /*row_range.clone().skip(1).take(row_end-1)*/ left_range.clone() {
                         let px = (r, c);
@@ -755,7 +860,7 @@ impl Patch {
 
             let mut grows_bottom = false;
             if exp_patch.bottom.past.len() >= 1 {
-                let bottom_range = (exp_patch.bottom.past[0].1.saturating_sub(1))..((exp_patch.bottom.past[exp_patch.bottom.past.len()-1].1 + 2).min(win.width()));
+                let bottom_range = (exp_patch.bottom.past[0].1.saturating_sub(1))..((exp_patch.bottom.past[exp_patch.bottom.past.len()-1].1 + 2).min(w));
                 if let Some(r) = bottom_row {
                     for c in /*col_range*/ bottom_range.clone() {
                         let px = (r, c);
@@ -774,7 +879,7 @@ impl Patch {
 
             let mut grows_right = false;
             if exp_patch.right.past.len() >= 1 {
-                let right_range = (exp_patch.right.past[0].0.saturating_sub(1))..((exp_patch.right.past[exp_patch.right.past.len()-1].0 + 2).min(win.height()));
+                let right_range = (exp_patch.right.past[0].0.saturating_sub(1))..((exp_patch.right.past[exp_patch.right.past.len()-1].0 + 2).min(h));
                 if let Some(c) = right_col {
                     for r in /*row_range.skip(1).take(row_end-1)*/ right_range.clone() {
                         let px = (r, c);
@@ -792,12 +897,12 @@ impl Patch {
             }
 
             let grows_any = grows_left || grows_right || grows_bottom || grows_top;
-            expand_rect(&mut outer_rect, &exp_patch);
+            expand_rect_with_front(&mut outer_rect, &exp_patch);
             patch.outer_rect = outer_rect;
             expand_patch(&mut exp_patch, &mut patch, outer_rect, exp_mode, win);
 
             if let Some(area) = max_area {
-                if /*patch.pxs.len()*/ outer_rect.2 * outer_rect.3 > area {
+                if /*patch.pxs.len()*/ outer_rect.2 * outer_rect.3 > area as u16 {
                     return None;
                 }
             }
@@ -808,19 +913,26 @@ impl Patch {
                     // Remove seed before closing patch
                     patch.pxs.swap_remove(0);
 
+                    // A contour should have at least three pixel points. A dense
+                    // patch can have any number of points >= 1.
+                    if patch.pxs.len() < 3 {
+                        return None;
+                    }
+
                     close_contour(&mut patch, win);
                 }
                 return Some(patch);
             }
 
-            abs_dist += px_spacing;
+            abs_dist += px_spacing as u16;
         }
 
+        assert!(patch.pxs.len() > 0);
         Some(patch)
     }
 
     /// Starts a new patch.
-    pub fn new(pt : (usize, usize), color : u8, scale : usize, img_height : usize ) -> Self {
+    pub fn new(pt : (u16, u16), color : u8, scale : u16, img_height : usize ) -> Self {
         /*let pxs = if let Some(mut pxs) = pxs {
             pxs.clear();
             pxs.push(pt);
@@ -841,12 +953,15 @@ impl Patch {
     }
 
     /// Outer rect, at image scale
-    pub fn outer_rect(&self) -> (usize, usize, usize, usize) {
+    pub fn outer_rect<N>(&self) -> (N, N, N, N)
+    where
+        N : Clone + Copy + From<u16> + 'static
+    {
         (
-            self.outer_rect.0 * self.scale,
-            self.outer_rect.1 * self.scale,
-            self.outer_rect.2 * self.scale,
-            self.outer_rect.3 * self.scale
+            N::from(self.outer_rect.0 * self.scale),
+            N::from(self.outer_rect.1 * self.scale),
+            N::from(self.outer_rect.2 * self.scale),
+            N::from(self.outer_rect.3 * self.scale)
         )
     }
 
@@ -998,7 +1113,7 @@ impl Patch {
     // size 1.
 
     /// Pixel is inside rect area or near its bottom border
-    pub fn pixel_not_far_below(&self, (r, c) : (usize, usize)) -> bool {
+    pub fn pixel_not_far_below(&self, (r, c) : (u16, u16)) -> bool {
         // println!("rect={}; r = {}", self.outer_rect.0 + self.outer_rect.2, r);
         let rect_r = self.outer_rect.0 + self.outer_rect.2;
 
@@ -1015,7 +1130,7 @@ impl Patch {
     }
 
     /// Pixel is inside rect area or near its border right
-    pub fn pixel_not_far_right(&self, (r, c) : (usize, usize)) -> bool {
+    pub fn pixel_not_far_right(&self, (r, c) : (u16, u16)) -> bool {
         // println!("rect={}; c= {}", self.outer_rect.0 + self.outer_rect.2, c);
         let rect_c = self.outer_rect.1 + self.outer_rect.3;
 
@@ -1043,7 +1158,7 @@ impl Patch {
         // self.pxs.iter().rev() /*.take_while(|px| px.0 >= r-1 ).*/ .any(|px| (px.0 == r || px.0 == r+1) && px.1 == c )
     }*/
 
-    pub fn add_to_right(&mut self, px : (usize, usize), exp_mode : ExpansionMode) {
+    pub fn add_to_right(&mut self, px : (u16, u16), exp_mode : ExpansionMode) {
         assert!(self.pixel_not_far_right(px), format!("Pixel not at right: {:?}", (self.outer_rect, &self.pxs, px)));
 
         match exp_mode {
@@ -1062,10 +1177,11 @@ impl Patch {
             }
         }
 
+        self.area += 1;
         self.expand_rect(&[px]);
     }
 
-    pub fn add_to_bottom(&mut self, px : (usize, usize), exp_mode : ExpansionMode) {
+    pub fn add_to_bottom(&mut self, px : (u16, u16), exp_mode : ExpansionMode) {
         assert!(self.pixel_not_far_below(px), format!("Pixel not at bottom: {:?}", (self.outer_rect, &self.pxs, px)));
         match exp_mode {
             ExpansionMode::Rect => { },
@@ -1085,6 +1201,7 @@ impl Patch {
             }
         }
 
+        self.area += 1;
         self.expand_rect(&[px]);
     }
 
@@ -1100,10 +1217,11 @@ impl Patch {
             self.pxs.push(*pt);
         }
 
+        self.area += other.area;
         self.expand_rect(&other.pxs);
     }
 
-    pub fn expand_rect(&mut self, pts : &[(usize, usize)]) {
+    pub fn expand_rect(&mut self, pts : &[(u16, u16)]) {
         for pt in pts.iter() {
             // self.pxs.push(*pt);
             if pt.0 < self.outer_rect.0 {
@@ -1122,7 +1240,6 @@ impl Patch {
                     self.outer_rect.3 = pt.1 - self.outer_rect.1;
                 }
             }
-            self.area += 1;
         }
     }
 
@@ -1131,7 +1248,7 @@ impl Patch {
     }
 
     /// Maps rows to a (sorted) set of columns.
-    pub fn group_rows(&self) -> HashMap<usize, Vec<usize>> {
+    pub fn group_rows(&self) -> HashMap<u16, Vec<u16>> {
         let mut row_pxs = HashMap::new();
 
         let mut row_sorted_pxs = self.pxs.clone();
@@ -1147,7 +1264,7 @@ impl Patch {
     }
 
     /// Maps columns to a (sorted) set of rows
-    pub fn group_cols(&self) -> HashMap<usize, Vec<usize>> {
+    pub fn group_cols(&self) -> HashMap<u16, Vec<u16>> {
         let mut col_sorted_pxs = self.pxs.clone();
         col_sorted_pxs.sort_unstable_by(|px_a, px_b| px_a.1.cmp(&px_b.1) );
         let mut col_pxs = HashMap::new();
@@ -1172,7 +1289,10 @@ impl Patch {
     //    self.num_regions() * self.scale.pow(2)
     // }
 
-    pub fn outer_points(&self, mode : ExpansionMode) -> Vec<(usize, usize)> {
+    pub fn outer_points<N>(&self, mode : ExpansionMode) -> Vec<(N, N)>
+    where
+        N : Clone + Copy + From<u16> + 'static
+    {
         match mode {
             ExpansionMode::Dense => {
                 let mut row_pxs = self.group_rows();
@@ -1182,33 +1302,33 @@ impl Patch {
                 }
                 sorted_keys.sort();
                 let n = sorted_keys.len();
-                let mut pts : Vec<(usize, usize)> = Vec::new();
+                let mut pts : Vec<(N, N)> = Vec::new();
 
                 // Points with "top" part of the patch
                 let fst_row = sorted_keys[0];
                 for col in row_pxs[fst_row].iter() {
-                    pts.push((*fst_row * self.scale, *col * self.scale));
+                    pts.push((N::from(*fst_row * self.scale), N::from(*col * self.scale)));
                 }
 
                 // Points with "right" part of the patch
                 for row in sorted_keys[1..n-1].iter() {
-                    pts.push((**row * self.scale, *row_pxs[row].last().unwrap() * self.scale));
+                    pts.push((N::from(**row * self.scale), N::from(*row_pxs[row].last().unwrap() * self.scale)));
                 }
 
                 // Points with "bottom" part of the patch
                 let last_row = sorted_keys.last().unwrap();
                 for col in row_pxs[last_row].iter().rev() {
-                    pts.push((**last_row * self.scale, *col * self.scale));
+                    pts.push((N::from(**last_row * self.scale), N::from(*col * self.scale)));
                 }
 
                 // Points with "left" part of the patch
                 for row in sorted_keys[1..n-1].iter().rev() {
-                    pts.push((**row * self.scale, *row_pxs[row].first().unwrap() * self.scale));
+                    pts.push((N::from(**row * self.scale), N::from(*row_pxs[row].first().unwrap() * self.scale)));
                 }
                 pts
             },
             ExpansionMode::Contour => {
-                self.pxs.iter().map(|px| (self.scale * px.0, self.scale * px.1) ).collect()
+                self.pxs.iter().map(|px| (N::from(self.scale * px.0), N::from(self.scale * px.1)) ).collect()
             },
             ExpansionMode::Rect => {
                 unimplemented!()
@@ -1217,7 +1337,7 @@ impl Patch {
     }
 
     pub fn polygon(&self) -> Option<ConvexPolygon> {
-        let pts = self.outer_points(ExpansionMode::Dense);
+        let pts = self.outer_points::<usize>(ExpansionMode::Dense);
 
         // Some(Polygon::from(pts))
 
@@ -1485,7 +1605,14 @@ pub enum ColorMode {
     Within(u8, u8),
 
     // Carries a value, an lower absolute tolerance and an upper absolute tolerance around it.
-    Between(u8, u8, u8)
+    Between(u8, u8, u8),
+
+    /// The first color is the seed color; the second color is the current color; The third
+    /// color is the difference threshold. At each comparison, the current color is updated
+    /// with the comparison value IF it matches. Further comparisons are done relative to the
+    /// current color. Might also carry a seed weight, specifying how much the seed impacts
+    /// in a linear combination with the seed with any matching colors.
+    Adaptive(u8, u8, u8)
 }
 
 impl ColorMode {
@@ -1497,6 +1624,7 @@ impl ColorMode {
             ColorMode::Below(c) => *c,
             ColorMode::Within(c, tol) => c.saturating_add(*tol) - c.saturating_sub(*tol),
             ColorMode::Between(c, low_tol, high_tol) => c.saturating_add(*high_tol) - c.saturating_sub(*low_tol),
+            ColorMode::Adaptive(_, _, diff) => *diff,
         }
     }
 
@@ -1507,6 +1635,7 @@ impl ColorMode {
             ColorMode::Below(c) => *c,
             ColorMode::Within(c, _) => *c,
             ColorMode::Between(c, _, _) => *c,
+            ColorMode::Adaptive(seed, curr, _) => *curr,
         }
     }
 
@@ -1516,11 +1645,12 @@ impl ColorMode {
             ColorMode::Exact(ref mut c) => *c = color,
             ColorMode::Above(ref mut c) => *c = color,
             ColorMode::Below(ref mut c) => *c = color,
-            ColorMode::Between(ref mut c, _, _) => *c = color
+            ColorMode::Between(ref mut c, _, _) => *c = color,
+            ColorMode::Adaptive(ref mut c, _, _) => *c = color
         }
     }
 
-    fn matches(&self, px_color : u8) -> bool {
+    fn matches(&mut self, px_color : u8) -> bool {
         match self {
             ColorMode::Within(color, tol) => ((px_color as i16 - *color as i16).abs() as u8) < *tol,
             ColorMode::Exact(color) => px_color == *color,
@@ -1528,6 +1658,17 @@ impl ColorMode {
             ColorMode::Below(color) => px_color <= *color,
             ColorMode::Between(color, low_tol, high_tol) => {
                 px_color >= color.saturating_sub(*low_tol) && px_color <= color.saturating_add(*high_tol)
+            },
+            ColorMode::Adaptive(seed, ref mut current, _diff) => {
+
+                // if ((px_color as i16 - *current as i16).abs() as u8) < *diff {
+                if px_color < *current {
+                    *current = *seed / 2 as u8 + px_color / 2 as u8;
+                    true
+                } else {
+                    // *current = *seed;
+                    false
+                }
             }
         }
     }
@@ -1542,7 +1683,7 @@ impl PatchSegmentation {
 
     pub fn segment_all<'a>(&'a mut self, win : &WindowMut<'_, u8>, mode : ColorMode, exp_mode : ExpansionMode) -> &'a [Patch] {
         let src_win = unsafe { crate::image::create_immutable(&win) };
-        let n_patches = full_color_patches(&mut self.patches, &src_win, self.px_spacing, mode, exp_mode);
+        let n_patches = full_color_patches(&mut self.patches, &src_win, self.px_spacing.try_into().unwrap(), mode, exp_mode);
         self.n_patches = n_patches;
         &self.patches[0..self.n_patches]
     }
@@ -1554,9 +1695,13 @@ impl PatchSegmentation {
         // TODO remove this to avoid reallocating pixel vectors.
         // self.patches.clear();
 
-        let n_patches = single_color_patches(&mut self.patches, &win, self.px_spacing, mode, exp_mode);
+        let n_patches = single_color_patches(&mut self.patches, &win, self.px_spacing.try_into().unwrap(), mode, exp_mode);
         self.n_patches = n_patches;
-        assert!(self.patches[0..self.n_patches].iter().all(|patch| patch.color == mode.color() ));
+
+        // This will fail at adaptive mode
+        // assert!(self.patches[0..self.n_patches].iter().all(|patch| patch.color == mode.color() ));
+
+        assert!(self.patches[0..self.n_patches].iter().all(|patch| patch.pxs.len() > 0 ));
         &self.patches[0..self.n_patches]
     }
 
@@ -1595,28 +1740,29 @@ impl PatchSearch {
 pub (crate) fn single_color_patches(
     patches : &mut Vec<Patch>,
     win : &Window<'_, u8>,
-    px_spacing : usize,
-    mode : ColorMode,
+    px_spacing : u16,
+    mut mode : ColorMode,
     exp_mode : ExpansionMode
 ) -> usize {
     let mut n_patches = 0;
 
     /// TODO avoid reallocating this structure, which has Vec<usize>.
-    let mut search = PatchSearch::new(win, px_spacing);
+    let mut search = PatchSearch::new(win, px_spacing as usize);
 
     // TODO also avoid reallocating this structure.
-    let mut prev_row_mask : Vec<bool> = Vec::with_capacity(win.width() / px_spacing);
+    let mut prev_row_mask : Vec<bool> = Vec::with_capacity(win.width() / px_spacing as usize);
 
-    for c in (0..(win.width() / px_spacing)) {
+    for c in (0..(win.width() / px_spacing as usize)) {
         prev_row_mask.push(false);
     }
 
     let mut last_matching_col = None;
-    for (r, c, px_color) in win.labeled_pixels(px_spacing) {
+    for (r, c, px_color) in win.labeled_pixels::<u16, _>(px_spacing as usize) {
+        let col_ix = c as usize;
         // let (r, c) = (ix / win.width(), ix % win.width());
         // let px_color = win[(r*px_spacing, c*px_spacing)];
-        search.top_patch_ix = if r >= 1 && prev_row_mask[c] {
-            Some(search.prev_row_patch_ixs[c])
+        search.top_patch_ix = if r >= 1 && prev_row_mask[col_ix] {
+            Some(search.prev_row_patch_ixs[col_ix])
         } else {
             None
         };
@@ -1627,18 +1773,31 @@ pub (crate) fn single_color_patches(
 
         let color_match = mode.matches(px_color);
         let merges_left = if let Some(last_c) = last_matching_col { c - last_c == 1 } else { false } && color_match && search.left_patch_ix.is_some();
-        let merges_top = r >= 1 && prev_row_mask[c] && color_match && search.top_patch_ix.is_some();
+        let merges_top = r >= 1 && prev_row_mask[col_ix] && color_match && search.top_patch_ix.is_some();
         if color_match {
             append_or_update_patch(patches, &mut search, &mut n_patches, win, merges_left, merges_top, r, c, mode.color(), px_spacing, exp_mode);
             last_matching_col = Some(c);
-            prev_row_mask[c] = true;
+            prev_row_mask[col_ix] = true;
         } else {
-            prev_row_mask[c] = false;
+            prev_row_mask[col_ix] = false;
             search.left_patch_ix = None;
         }
     }
 
     if exp_mode == ExpansionMode::Contour {
+
+        // A contour should have at least three pixel points. Remove the ones
+        // without this many points.
+        let mut ix = 0;
+        while ix < n_patches {
+            if patches[ix].pxs.len() < 3 {
+                patches.swap(ix, n_patches-1);
+                n_patches -= 1;
+            } else {
+                ix += 1;
+            }
+        }
+
         for mut patch in patches[0..n_patches].iter_mut() {
             close_contour(patch, win);
         }
@@ -1654,7 +1813,7 @@ pub (crate) fn single_color_patches(
 pub(crate) fn full_color_patches(
     patches : &mut Vec<Patch>,
     win : &Window<'_, u8>,
-    px_spacing : usize,
+    px_spacing : u16,
     mut mode : ColorMode,
     exp_mode : ExpansionMode
 ) -> usize {
@@ -1680,9 +1839,9 @@ pub(crate) fn full_color_patches(
     // }
 
     /// TODO avoid reallocating this structure, which has Vec<usize>.
-    let mut search = PatchSearch::new(win, px_spacing);
+    let mut search = PatchSearch::new(win, px_spacing as usize);
 
-    for (r, c, color) in win.labeled_pixels(px_spacing) {
+    for (r, c, color) in win.labeled_pixels(px_spacing as usize) {
         // let (r, c) = (ix / win.width(), ix % win.width());
         // let color = win[(r*px_spacing, c*px_spacing)];
 
@@ -1711,7 +1870,7 @@ pub(crate) fn full_color_patches(
         let top_patch_ix = patches.iter().rev()
             .position(|patch| patch.pixel_is_below((r, c)) )
             .map(|inv_pos| patches.len() - 1 - inv_pos);*/
-        search.top_patch_ix = if r >= 1 { Some(search.prev_row_patch_ixs[c]) } else { None };
+        search.top_patch_ix = if r >= 1 { Some(search.prev_row_patch_ixs[c as usize]) } else { None };
         // println!("{},{}", r, c);
         // Get patch that contains the pixel to the left of current pixel
         // let left_patch_ix = patches.iter().position(|patch| patch.pxs.iter().any(|px| c >= 1 && px.0 == r && px.1 == c-1 ) );
@@ -1759,10 +1918,10 @@ fn append_or_update_patch(
     win : &Window<'_, u8>,
     merges_left : bool,
     merges_top : bool,
-    r : usize,
-    c : usize,
+    r : u16,
+    c : u16,
     color : u8,
-    px_spacing : usize,
+    px_spacing : u16,
     exp_mode : ExpansionMode
 ) {
     match (merges_left, merges_top) {
@@ -1775,22 +1934,26 @@ fn append_or_update_patch(
 
             // Push new pixel to top patch
             patches[search.top_patch_ix.unwrap()].add_to_bottom((r, c), exp_mode);
-            search.prev_row_patch_ixs[c] = search.top_patch_ix.unwrap();
+            search.prev_row_patch_ixs[c as usize] = search.top_patch_ix.unwrap();
             search.left_patch_ix = Some(search.top_patch_ix.unwrap());
         },
         (true, false) => {
             patches[search.left_patch_ix.unwrap()].add_to_right((r, c), exp_mode);
-            search.prev_row_patch_ixs[c] = search.left_patch_ix.unwrap();
+            search.prev_row_patch_ixs[c as usize] = search.left_patch_ix.unwrap();
         },
         (false, true) => {
             patches[search.top_patch_ix.unwrap()].add_to_bottom((r, c), exp_mode);
-            search.prev_row_patch_ixs[c] = search.top_patch_ix.unwrap();
+            search.prev_row_patch_ixs[c as usize] = search.top_patch_ix.unwrap();
             search.left_patch_ix = Some(search.top_patch_ix.unwrap());
         },
         (false, false) => {
             add_patch(patches, search, n_patches, win, r, c, color, px_spacing);
         }
     }
+
+    // Irrespective of whether a patch was added or updated, it should have
+    // at least one pixel at the last valid position of n_patches.
+    assert!(patches[*n_patches-1].pxs.len() > 0);
 }
 
 /// Since we might be recycling the patches Vec<_> from a previous iteration,
@@ -1802,10 +1965,10 @@ fn add_patch(
     search : &mut PatchSearch,
     n_patches : &mut usize,
     win : &Window<'_, u8>,
-    r : usize,
-    c : usize,
+    r : u16,
+    c : u16,
     color : u8,
-    px_spacing : usize
+    px_spacing : u16
 ) {
     if *n_patches < patches.len() {
         patches[*n_patches].pxs.clear();
@@ -1814,11 +1977,12 @@ fn add_patch(
         patches[*n_patches].color = color;
         patches[*n_patches].scale = px_spacing;
         patches[*n_patches].img_height = win.height();
+        patches[*n_patches].area = 1;
     } else {
         patches.push(Patch::new((r, c), color, px_spacing, win.height()));
     }
     *n_patches += 1;
-    search.prev_row_patch_ixs[c] = *n_patches - 1;
+    search.prev_row_patch_ixs[c as usize] = *n_patches - 1;
     search.left_patch_ix = Some(*n_patches - 1);
 }
 

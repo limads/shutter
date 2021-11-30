@@ -201,7 +201,11 @@ pub fn rect_overlaps(r1 : &(usize, usize, usize, usize), r2 : &(usize, usize, us
 }
 
 /// Assuming pts represents a closed shape, calculate its perimeter.
-pub fn contour_perimeter(pts : &[(usize, usize)]) -> f32 {
+pub fn contour_perimeter<N>(pts : &[(N, N)]) -> f32
+where
+    usize : From<N>,
+    N : Copy
+{
 
     if pts.len() < 1 {
         return 0.0;
@@ -210,7 +214,7 @@ pub fn contour_perimeter(pts : &[(usize, usize)]) -> f32 {
     let mut perim = 0.;
     let n = pts.len();
     for (p1, p2) in pts[0..(n-1)].iter().zip(pts[1..n].iter()) {
-        perim += point_euclidian(*p1, *p2);
+        perim += point_euclidian((usize::from(p1.0), usize::from(p1.1)), (usize::from(p2.0), usize::from(p2.1)));
     }
     perim
 }
@@ -226,7 +230,9 @@ pub fn contour_area(pts : &[(usize, usize)], outer_rect : (usize, usize, usize, 
 /// A cricle has circularity of 1; Other polygons have circularity < 1.
 /// A circle has the largest area among all shapes with the same circumference.
 pub fn circularity(area : f64, perim : f64) -> f64 {
-    (4. * std::f64::consts::PI * area) / perim.powf(2.)
+    let circ = (4. * std::f64::consts::PI * area) / perim.powf(2.);
+    // assert!(circ <= 1.0);
+    circ
 }
 
 // Measures how close to a closed shape a blob is.
@@ -422,11 +428,17 @@ pub fn join_pairs_col_ordered(pairs : &[[(usize, usize); 2]], max_dist : f64) ->
 
 /// Returns the angle at the vertex p1 in the triangle [p1, p2, p3] using the law of cosines.
 /// Reference https://stackoverflow.com/questions/1211212/how-to-calculate-an-angle-from-three-points
-fn vertex_angle(pt1 : (usize, usize), pt2 : (usize, usize), pt3 : (usize, usize)) -> f64 {
+pub fn vertex_angle(pt1 : (usize, usize), pt2 : (usize, usize), pt3 : (usize, usize)) -> f64 {
     let dist_12 = euclidian(&[pt1.0 as f64, pt1.1 as f64], &[pt2.0 as f64, pt2.1 as f64]);
     let dist_13 = euclidian(&[pt1.0 as f64, pt1.1 as f64], &[pt3.0 as f64, pt3.1 as f64]);
     let dist_23 = euclidian(&[pt2.0 as f64, pt2.1 as f64], &[pt3.0 as f64, pt3.1 as f64]);
     ((dist_12.powf(2.) + dist_13.powf(2.) - dist_23.powf(2.)) / 2.*dist_12*dist_13).acos()
+}
+
+/// Returns the side ab given vertex angles theta1 (ab), and the remaining sides b and c using the law of sines.
+/// Reference https://en.wikipedia.org/wiki/Triangle#Sine,_cosine_and_tangent_rules
+pub fn vertex_side(theta1 : f64, b : f64, c : f64) -> f64 {
+    b.powf(2.) - c.powf(2.) - 2. * b * c * theta1.cos()
 }
 
 #[test]
@@ -810,11 +822,12 @@ pub mod cvellipse {
                         .map_err(|e| format!("Ellipse fitting error ({})", e))?
                 },
                 Method::Direct => {
+                    // Requires minimum of 5 points.
                     imgproc::fit_ellipse_direct(&self.pt_vec)
                         .map_err(|e| format!("Ellipse fitting error ({})", e))?
                 },
                 Method::ApproxMeanSquare => {
-                    imgproc::fit_ellipse_direct(&self.pt_vec)
+                    imgproc::fit_ellipse_ams(&self.pt_vec)
                         .map_err(|e| format!("Ellipse fitting error ({})", e))?
                 }
             };
@@ -825,10 +838,14 @@ pub mod cvellipse {
             let center = (center_pt.y as usize, center_pt.x as usize);
             let angle = rotated_rect.angle();
             let size = rotated_rect.size();
+            if rotated_rect.size().width as i32 <= 0 || rotated_rect.size().height as i32 <= 0 {
+                return Err(format!("Invalid ellipse dimension"));
+            }
             let w = rotated_rect.size().width as f64;
             let h = rotated_rect.size().height as f64;
             let large_axis = w.max(h);
             let small_axis = w.min(h);
+            assert!(large_axis >= small_axis);
             Ok(Ellipse {
                 center,
                 large_axis,

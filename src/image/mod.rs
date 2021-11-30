@@ -1,6 +1,6 @@
 use nalgebra::*;
 use ripple::signal::sampling::{self};
-use std::ops::{Index, IndexMut, Mul, Add, AddAssign, MulAssign, SubAssign, Range};
+use std::ops::{Index, IndexMut, Mul, Add, AddAssign, MulAssign, SubAssign, Range, Div, Rem};
 use simba::scalar::SubsetOf;
 use std::fmt;
 use std::fmt::Debug;
@@ -866,11 +866,22 @@ impl<'a> Window<'a, u8> {
     }
 
     /// Returns iterator over (subsampled row index, subsampled col index, pixel color).
-    pub fn labeled_pixels(&'a self, px_spacing : usize) -> impl Iterator<Item=(usize, usize, u8)> +'a + Clone {
-        self.pixels(px_spacing)
-            .enumerate()
+    /// Panics if L is an unsigend integer type that cannot represent one of the dimensions
+    /// of the image precisely.
+    pub fn labeled_pixels<L, E>(&'a self, px_spacing : usize) -> impl Iterator<Item=(L, L, u8)> +'a + Clone
+    where
+        L : TryFrom<usize, Error=E> + Div<Output=L> + Mul<Output=L> + Rem<Output=L> + Clone + Copy + 'static,
+        E : Debug,
+        Range<L> : Iterator<Item=L>
+    {
+        let spacing = L::try_from(px_spacing).unwrap();
+        let w = (L::try_from(self.width()).unwrap() / spacing );
+        let h = (L::try_from(self.height()).unwrap() / spacing );
+        let range = Range { start : L::try_from(0usize).unwrap(), end : (w*h) };
+        range
+            .zip(self.pixels(px_spacing))
             .map(move |(ix, px)| {
-                let (r, c) = (ix / (self.width() / px_spacing ), ix % (self.width() / px_spacing )); // TODO verify if width/height should be divided by px_spacing
+                let (r, c) = (ix / w, ix % w); // TODO verify if width/height should be divided by px_spacing
                 // win[(r*px_spacing, c*px_spacing)]) )
                 (r, c, *px)
             })
@@ -879,7 +890,7 @@ impl<'a> Window<'a, u8> {
     /// Extract contiguous image regions of homogeneous color.
     pub fn patches(&self, px_spacing : usize) -> Vec<Patch> {
         let mut patches = Vec::new();
-        color::full_color_patches(&mut patches, self, px_spacing, ColorMode::Exact(0), color::ExpansionMode::Dense);
+        color::full_color_patches(&mut patches, self, px_spacing as u16, ColorMode::Exact(0), color::ExpansionMode::Dense);
         patches
     }
 
@@ -941,7 +952,7 @@ fn window_iter() {
         0, 0, 0, 0, 1, 1, 1, 1,
         0, 0, 0, 0, 1, 1, 1, 1,
         0, 0, 0, 0, 1, 1, 1, 1,
-    ]);
+    ]).unwrap();
 
     for win in img.windows((4,4)) {
         println!("Outer: {:?}", win);
@@ -968,6 +979,19 @@ where
             panic!("Invalid window index: {:?}", index);
         }
     }
+}
+
+impl<N> Index<(u16, u16)> for Window<'_, N>
+where
+    N : Scalar
+{
+
+    type Output = N;
+
+    fn index(&self, index: (u16, u16)) -> &Self::Output {
+        self.index((index.0 as usize, index.1 as usize))
+    }
+
 }
 
 /*impl<N> Index<(Range<usize>, usize)> for Window<'_, N>
@@ -1240,7 +1264,7 @@ impl WindowMut<'_, u8> {
             }
         };
         let mut patches = Vec::new();
-        color::full_color_patches(&mut patches, &src_win, px_spacing, ColorMode::Exact(0), color::ExpansionMode::Dense);
+        color::full_color_patches(&mut patches, &src_win, px_spacing as u16, ColorMode::Exact(0), color::ExpansionMode::Dense);
         patches
     }
 
