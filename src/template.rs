@@ -9,7 +9,7 @@ use num_traits::Zero;
 
 pub struct TemplateSearch<T>
 where
-    T : Scalar + Debug + Copy + Default
+    T : Scalar + Debug + Copy + Default + Serialize + DeserializeOwned + Any
 {
     map : Image<f32>,
     template : Image<T>,
@@ -18,7 +18,7 @@ where
 
 impl<T> TemplateSearch<T>
 where
-    T : Scalar + Debug + Copy + Default + Zero
+    T : Scalar + Debug + Copy + Default + Zero + Serialize + DeserializeOwned + Any
 {
 
     /// Returns local maxima over regions with the given size.

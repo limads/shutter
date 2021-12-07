@@ -22,6 +22,24 @@ use std::convert::TryInto;
 use std::convert::TryFrom;
 use std::ops::Div;
 use std::ops::Add;
+use bayes;
+
+/*IppStatus ippiMarkSpeckles_<mod>(Ipp<datatype>* pSrcDst, int srcDstStep, IppiSize
+roiSize, Ipp<datatype> speckleVal, int maxSpeckleSize, Ipp<datatype> maxPixDiff,
+IppiNorm norm, Ipp8u* pBuffer );*/
+
+/*IppStatus ippiSegmentWatershed_8u_C1IR(const Ipp8u* pSrc, int srcStep, Ipp8u* pMarker,
+int markerStep, IppiSize roiSize, IppiNorm norm, int flag, Ipp8u* pBuffer );*/
+
+/*IppStatus ippiSegmentGradient_8u_C1IR(const Ipp8u* pSrc, int srcStep, Ipp8u* pMarker,
+int markerStep, IppiSize roiSize, IppiNorm norm, int flags, Ipp8u* pBuffer );*/
+
+pub mod seed;
+
+pub mod raster;
+
+// use nohash-hasher;
+
 // use crate::feature::shape;
 
 // #[cfg(feature="opencvlib")]
@@ -32,6 +50,14 @@ use std::ops::Add;
 
 // TODO categorize into raster-based segmentation, seed-based segmentation
 // and cluster-based segmentation.
+
+pub fn intensity_below<const P : u8>(px : u8) -> bool {
+    px <= P
+}
+
+pub fn intensity_above<const P : u8>(px : u8) -> bool {
+    px >= P
+}
 
 /// The most general patch is a set of pixel positions with a homogeneous color
 /// and a scale that was used for extraction. The patch is assumed to be
@@ -339,89 +365,6 @@ fn patch_growth() {
 //    Some(Patch::grow(win, seed, 1, mode, ReferenceMode::Constant, None, ExpansionMode::Dense)).unwrap()
 // }
 
-#[derive(Default, Clone)]
-struct RowPair {
-    curr : Vec<(u16, u16)>,
-    past : Vec<(u16, u16)>
-}
-
-impl RowPair {
-
-    fn new(px : (u16, u16)) -> Self {
-        let (curr, mut past) = (Vec::with_capacity(32), Vec::with_capacity(32));
-        past.push(px);
-        Self { curr, past }
-    }
-
-}
-
-/// Extracts patches from image based on dense, homogeneous regions.
-/// Searches the 3d space or (row, col, color) for regions that are
-/// very clustered together, therefore mostly ignoring regions that are
-/// close but have non-homogeneous color, depending on the min_dist
-/// and min_cluster_sz parameters chosen.
-pub fn patches_from_dense_regions(
-    win : &Window<'_, u8>,
-    scale : usize,
-    min_dist : f64,
-    min_cluster_sz : usize,
-    mut mode : ColorMode
-) -> Vec<Patch> {
-    let pxs : Vec<[f64; 3]> = win.labeled_pixels::<usize, _>(scale)
-        .filter(|(_, _, px)| mode.matches(*px) )
-        .map(|(r, c, color)| [r as f64, c as f64, color as f64] )
-        .collect::<Vec<_>>();
-    let clust = SpatialClustering::cluster_linear(&pxs, min_dist, min_cluster_sz);
-    let mut patches = Vec::new();
-    for (_, clust) in clust.clusters.iter() {
-        let mut color = (clust.iter().map(|[_, _, c]| c ).sum::<f64>() / clust.len() as f64) as u8;
-        let outer_rect = (0, 0, 0, 0);
-        let pxs : Vec<_> = clust.iter().map(|[r, c, _]| (*r as u16, *c as u16) ).collect();
-        let mut patch = Patch {
-            outer_rect,
-            color,
-            scale : scale.try_into().unwrap(),
-            img_height : win.height(),
-            area : clust.len(),
-            pxs
-        };
-        let mut row_pxs = patch.group_rows();
-        let min_row = row_pxs.keys().min().unwrap();
-        let max_row = row_pxs.keys().max().unwrap();
-
-        let mut col_pxs = patch.group_cols();
-        let min_col = col_pxs.keys().min().unwrap();
-        let max_col = col_pxs.keys().max().unwrap();
-
-        patch.outer_rect = (*min_row, *min_col, *max_row - *min_row, *max_col - *min_col);
-        patches.push(patch);
-    }
-
-    patches
-}
-
-#[derive(Default)]
-struct ExpansionFront {
-    top : RowPair,
-    left : RowPair,
-    bottom : RowPair,
-    right : RowPair
-}
-
-impl ExpansionFront {
-
-    fn new(px : (u16, u16)) -> Self {
-        let pair = RowPair::new(px);
-        Self {
-            top : pair.clone(),
-            left : pair.clone(),
-            bottom : pair.clone(),
-            right : pair
-        }
-    }
-
-}
-
 fn pixel_horizontally_aligned_to_rect(outer_rect : &(u16, u16, u16, u16), (r, c) : (u16, u16)) -> bool {
     r >= outer_rect.0 /*.saturating_sub(1)*/ &&
         r <= (outer_rect.0 + outer_rect.2) /*.saturating_add(1)*/
@@ -476,26 +419,6 @@ fn pixel_neighbors_last_at_col(col : &[(u16, u16)], px : (u16, u16)) -> bool {
     col.last().map(|last| (last.0 as i16 - px.0 as i16).abs() <= 1 ).unwrap_or(false)
 }
 
-fn pixel_neighbors_top(exp_patch : &ExpansionFront, px : (u16, u16)) -> bool {
-    pixel_neighbors_last_at_row(&exp_patch.top.curr[..], px) ||
-        pixel_neighbors_row(&exp_patch.top.past[..], px)
-}
-
-fn pixel_neighbors_left(exp_patch : &ExpansionFront, px : (u16, u16)) -> bool {
-    pixel_neighbors_last_at_col(&exp_patch.left.curr[..], px) ||
-        pixel_neighbors_col(&exp_patch.left.past[..], px)
-}
-
-fn pixel_neighbors_bottom(exp_patch : &ExpansionFront, px : (u16, u16)) -> bool {
-    pixel_neighbors_last_at_row(&exp_patch.bottom.curr[..], px) ||
-        pixel_neighbors_row(&exp_patch.bottom.past[..], px)
-}
-
-fn pixel_neighbors_right(exp_patch : &ExpansionFront, px : (u16, u16)) -> bool {
-    pixel_neighbors_last_at_col(&exp_patch.right.curr[..], px) ||
-        pixel_neighbors_col(&exp_patch.right.past[..], px)
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExpansionMode {
     Rect,
@@ -503,117 +426,6 @@ pub enum ExpansionMode {
     Dense
 }
 
-// Dense strategy here.
-// TODO to build patch with only the external contour, verify which elements
-// past_row and curr_row have in common. Drop all elements of past_row that also
-// are present in current row, and push current_row and all remaining elements of
-// past_row that were not dropped. Perhaps we can make this function generic over which
-// allocation strategy to self.pxs we use here.
-fn expand_patch(
-    exp_patch : &mut ExpansionFront,
-    patch : &mut Patch,
-    outer_rect : (u16, u16, u16, u16),
-    mode : ExpansionMode,
-    win : &Window<'_, u8>
-) {
-
-    // Only push corner when those conditions are not met for the desired pair.
-    let tl_joined = match (exp_patch.left.curr.first(), exp_patch.top.curr.first()) {
-        (Some(left), Some(top)) => (left.0 as i32 - top.0 as i32).abs() <= 1 && (left.1 as i32 - top.1 as i32).abs() <= 1,
-        _ => false
-    };
-    let tr_joined = match (exp_patch.top.curr.last(), exp_patch.right.curr.first()) {
-        (Some(top), Some(right)) => (top.0 as i32 - right.0 as i32).abs() as i32 <= 1 && (top.1 as i32 - right.1 as i32).abs() <= 1,
-        _ => false
-    };
-    let bl_joined = match (exp_patch.left.curr.last(), exp_patch.bottom.curr.first()) {
-        (Some(left), Some(bottom)) => (left.0 as i32 - bottom.0 as i32).abs() <= 1 && (left.1 as i32 - bottom.1 as i32).abs() as i32 <= 1,
-        _ => false
-    };
-    let br_joined = match (exp_patch.right.curr.last(), exp_patch.bottom.curr.last()) {
-        (Some(right), Some(bottom)) => (right.0 as i32 - bottom.0 as i32).abs() <= 1 && (right.1 as i32 - bottom.1 as i32).abs() <= 1,
-        _ => false
-    };
-
-    // Also iterate over this: if corners_joined[ix] push corner.
-    let mut exp_fronts = [&mut exp_patch.top, &mut exp_patch.left, &mut exp_patch.bottom, &mut exp_patch.right];
-    let corners_joined = [(tl_joined, tr_joined), (tl_joined, bl_joined), (bl_joined, br_joined), (tr_joined, br_joined)];
-
-    for (mut ext, (fst_corner, snd_corner)) in exp_fronts.iter_mut().zip(corners_joined.iter()) {
-        let is_seed = ext.past.len() == 1 && ext.past.get(0).cloned() == Some((patch.pxs[0]));
-        if is_seed {
-            ext.past.clear();
-            mem::swap(&mut ext.curr, &mut ext.past);
-            continue;
-        }
-        match mode {
-            ExpansionMode::Rect => {
-                ext.past.clear();
-                patch.area = (outer_rect.2 * outer_rect.3) as usize;
-                mem::swap(&mut ext.curr, &mut ext.past);
-            },
-            ExpansionMode::Dense => {
-                patch.area += ext.past.len();
-                patch.pxs.extend(ext.past.drain(..));
-                mem::swap(&mut ext.curr, &mut ext.past);
-            },
-            ExpansionMode::Contour => {
-                if ext.curr.len() > 0 {
-                    /*match ext.past.len() {
-                        0 => { },
-                        1 => {
-                            patch.pxs.push(ext.past[0]);
-                        },
-                        _ => {
-                            // Just push past border extreme pixels for non-final iterations.
-                            patch.pxs.push(ext.past[0]);
-                            patch.pxs.push(ext.past[ext.past.len()-1]);
-                        }
-                    }*/
-
-                    // TODO Remove old corner pixels
-                    // ext.past.remove(4 - ix);
-
-                    // Only push corners when the distance between corners of edge limits
-                    // are not sufficient to represent the shape in its current state.
-                    if !*fst_corner {
-                        patch.pxs.push(ext.past[0]);
-                    }
-
-                    let n = ext.past.len();
-                    if n > 1 && !*snd_corner {
-                        patch.pxs.push(ext.past[n-1]);
-                    }
-
-                    // Expand area
-                    if n == 1 {
-                        patch.area += 1;
-                    } else {
-                        if n > 1 {
-                            let is_row_front = ext.past[n-1].0 == ext.past[0].0;
-                            if is_row_front {
-                                patch.area += (ext.past[n-1].1 - ext.past[0].1) as usize;
-                            } else {
-                                patch.area += (ext.past[n-1].0 - ext.past[0].0) as usize;
-                            }
-                        }
-                    }
-
-                    // Stop swapping at the last empty border so eventually we reach the final
-                    // branch with the last past pixels that were found.
-                    ext.past.clear();
-                } else {
-                    // The last patch iteration will take all remaining contour values.
-                    patch.area += ext.past.len();
-                    patch.pxs.extend(ext.past.drain(..));
-                }
-                mem::swap(&mut ext.curr, &mut ext.past);
-            }
-        }
-    }
-    // }
-
-}
 
 /*pub fn expand_contour_patch(exp_patch : &mut ExpansionFront, patch : &mut Patch, outer_rect : (usize, usize, usize, usize)) {
     for ext in [&mut exp_patch.top, &mut exp_patch.left, &mut exp_patch.bottom, &mut exp_patch.right] {
@@ -658,73 +470,42 @@ pub enum ReferenceMode {
     Adaptive
 }
 
-fn update_stats(mode : &mut ColorMode, n_px : &mut u16, sum : &mut u64, sum_abs_dev : &mut u64, ref_mode : ReferenceMode, new : u8) {
-    if ref_mode == ReferenceMode::Adaptive {
-        *sum += new as u64;
-        *n_px += 1;
-        let mean = *sum / *n_px as u64;
-        // let abs_dev = (mean as i64 - new as i64).abs() as u64;
-        // *sum_abs_dev += abs_dev;
-        mode.set_reference_color(mean as u8);
-    }
-}
-
-fn expand_rect_with_front(rect : &mut (u16, u16, u16, u16), exp : &ExpansionFront) {
-    let mut max_right = rect.1 + rect.3;
-    let mut max_bottom = rect.0 + rect.2;
-    if exp.top.curr.len() >= 1 {
-        if exp.top.curr[0].0 < rect.0 {
-            rect.0 = exp.top.curr[0].0;
-        }
-        if exp.top.curr[0].1 < rect.1 {
-            rect.1 = exp.top.curr[0].1;
-        }
-        if exp.top.curr[exp.top.curr.len()-1].1 > max_right {
-            max_right = exp.top.curr[exp.top.curr.len()-1].1;
-        }
-    }
-
-    if exp.left.curr.len() >= 1 {
-        if exp.left.curr[0].1 < rect.1 {
-            rect.1 = exp.left.curr[0].1;
-        }
-        if exp.left.curr[0].0 < rect.0 {
-            rect.0 = exp.left.curr[0].0;
-        }
-        if exp.left.curr[exp.left.curr.len()-1].0 > max_bottom {
-            max_bottom = exp.left.curr[exp.left.curr.len()-1].0;
-        }
-    }
-
-    if exp.bottom.curr.len() >= 1 {
-        if exp.bottom.curr[0].0 > max_bottom {
-            max_bottom = exp.bottom.curr[0].0;
-        }
-        if exp.bottom.curr[0].1 < rect.1 {
-            rect.1 = exp.bottom.curr[0].1;
-        }
-        if exp.bottom.curr[exp.bottom.curr.len()-1].1 > max_right {
-            max_right = exp.bottom.curr[exp.bottom.curr.len()-1].1;
-        }
-    }
-
-    if exp.right.curr.len() >= 1 {
-        if exp.right.curr[0].1 > max_right {
-            max_right = exp.right.curr[0].1;
-        }
-        if exp.right.curr[0].0 < rect.0 {
-            rect.0 = exp.right.curr[0].0;
-        }
-        if exp.right.curr[exp.right.curr.len()-1].0 > max_bottom {
-            max_bottom = exp.right.curr[exp.right.curr.len()-1].0;
-        }
-    }
-
-    rect.2 = max_bottom - rect.0;
-    rect.3 = max_right - rect.1;
-}
-
 impl Patch {
+
+    pub fn new_empty() -> Self {
+        Self {
+            pxs : Vec::with_capacity(32),
+            outer_rect : (0, 0, 0, 0),
+            color : 0,
+            scale : 1,
+            img_height : 0,
+            area : 0
+        }
+    }
+
+    /// Returns all inner angles.
+    pub fn inner_angles<'a>(&'a self) -> impl Iterator<Item=f64> +'a {
+        let n = self.pxs.len();
+        let triplet_iter = self.pxs.iter().take(n-2)
+            .zip(self.pxs.iter().skip(1).take(n-1).zip(self.pxs.iter().skip(2)));
+        triplet_iter.map(|(ext1, (center, ext2))| {
+
+            let opt_angle = shape::vertex_angle(
+                (center.0 as usize, center.1 as usize),
+                (ext1.0 as usize, ext1.1 as usize),
+                (ext2.0 as usize, ext2.1 as usize)
+            );
+
+            // In the case the triplets are colinear, opt_angle will be None, and
+            // since they are collinear their angle is PI.
+            opt_angle.unwrap_or(std::f64::consts::PI)
+        })
+    }
+
+    pub fn inner_angle_stats(&self) -> (f64, f64) {
+        let angles = self.inner_angles().collect::<Vec<_>>();
+        bayes::calc::running::mean_variance(&angles[..], true)
+    }
 
     pub fn unscaled_area(&self) -> f32 {
         self.area as f32
@@ -734,8 +515,11 @@ impl Patch {
         shape::contour_perimeter(&self.pxs[..])
     }
 
-    pub fn circularity(&self) -> f32 {
-        shape::circularity(self.unscaled_area() as f64, self.unscaled_perimeter() as f64) as f32
+    pub fn circularity(&self) -> Option<f32> {
+        // let poly = self.polygon()?;
+        // let (area, _) = parry2d::mass_properties::details::convex_polygon_area_and_center_of_mass(&poly.points());
+        // shape::circularity(self.unscaled_area() as f64, self.unscaled_perimeter() as f64) as f32
+        unimplemented!()
     }
 
     /*pub fn average_color(&self, win : &Window<'_, u8>, exp : ExpansionMode) -> u8 {
@@ -758,177 +542,6 @@ impl Patch {
     /// Number of pixels contained in the patch.
     pub fn area(&self) -> usize {
         self.area
-    }
-
-    /// Grows a patch from a pixel seed.
-    /// cf. Connected Components (Szeliski, 2011, p. 131)
-    pub fn grow(
-        win : &Window<'_, u8>,
-        seed : (usize, usize),
-        px_spacing : usize,
-        mut mode : ColorMode,
-        ref_mode : ReferenceMode,
-        max_area : Option<usize>,
-        exp_mode : ExpansionMode
-    ) -> Option<Self> {
-
-        // if !mode.matches(win[seed]) {
-        //    println!("Seed does not match desired color");
-        //    return None;
-        // }
-        // mode.set_reference_color(win[seed]);
-
-        let mut patch = Patch::new((seed.0 as u16, seed.1 as u16), win[seed], 1, win.height());
-        let seed = (seed.0 as u16, seed.1 as u16);
-
-        let (mut grows_left, mut grows_top, mut grows_right, mut grows_bottom) = (true, true, true, true);
-
-        // Still need to alter pixel_neighbors_row and pixel_below_rect, etc to account for differing px_spacings.
-        // Will check the absolute difference is <= px_spacing there.
-        assert!(px_spacing == 1);
-
-        let mut abs_dist = px_spacing as u16;
-        let mut exp_patch = ExpansionFront::new(seed);
-        let mut outer_rect = (seed.0, seed.1, 1, 1);
-
-        let mut n_px = 0;
-        let mut sum_abs_dev : u64 = 0;
-        let mut sum : u64 = win[seed] as u64;
-
-        let (h, w) = (win.height() as u16, win.width() as u16);
-        loop {
-            assert!(exp_patch.top.curr.is_empty() && exp_patch.left.curr.is_empty() && exp_patch.right.curr.is_empty() && exp_patch.bottom.curr.is_empty());
-            let left_col = if grows_left { seed.1.checked_sub(abs_dist) } else { None };
-            let top_row = if grows_top { seed.0.checked_sub(abs_dist) } else { None };
-            let right_col = if grows_right {
-                if seed.1 + abs_dist < w { Some(seed.1 + abs_dist) } else { None }
-            } else {
-                None
-            };
-            let bottom_row = if grows_bottom {
-                if seed.0 + abs_dist < h { Some(seed.0 + abs_dist) } else { None }
-            } else {
-                None
-            };
-
-            let row_end = (seed.0+abs_dist+1).min(h);
-            let col_end = (seed.1+abs_dist+1).min(w);
-            let row_range = (seed.0.saturating_sub(abs_dist)..( row_end )).step_by(px_spacing as usize);
-            let col_range = (seed.1.saturating_sub(abs_dist)..( col_end )).step_by(px_spacing as usize);
-
-            // TODO when pixel is not in rect range, we can break the loop.
-
-            let mut grows_top = false;
-            if exp_patch.top.past.len() >= 1 {
-                let top_range = (exp_patch.top.past[0].1.saturating_sub(1))..((exp_patch.top.past[exp_patch.top.past.len()-1].1 + 2).min(w));
-                if let Some(r) = top_row {
-                    for c in /*col_range.clone()*/ top_range.clone() {
-                        let px = (r, c);
-                        let is_corner = (c == top_range.start || c == top_range.end-1);
-                        if mode.matches(win[px]) && (is_corner || ( /*pixel_above_rect(&outer_rect, px) &&*/ pixel_neighbors_top(&exp_patch, px))) {
-                            if !grows_top {
-                                // outer_rect.0 = r;
-                                // outer_rect.2 += px_spacing;
-                                grows_top = true;
-                            }
-                            exp_patch.top.curr.push(px);
-                            update_stats(&mut mode, &mut n_px, &mut sum, &mut sum_abs_dev, ref_mode, win[px]);
-                        }
-                    }
-                }
-            }
-
-            let mut grows_left = false;
-            if exp_patch.left.past.len() >= 1 {
-                let left_range = (exp_patch.left.past[0].0.saturating_sub(1))..((exp_patch.left.past[exp_patch.left.past.len()-1].0 + 2).min(h));
-                if let Some(c) = left_col {
-                    for r in /*row_range.clone().skip(1).take(row_end-1)*/ left_range.clone() {
-                        let px = (r, c);
-                        let is_corner = (r == left_range.start || r == left_range.end-1);
-                        if mode.matches(win[px]) && ( is_corner || ( /*pixel_to_left_of_rect(&outer_rect, px) &&*/ pixel_neighbors_left(&exp_patch, px))) {
-                            if !grows_left {
-                                // outer_rect.1 = c;
-                                // outer_rect.3 += px_spacing;
-                                grows_left = true;
-                            }
-                            exp_patch.left.curr.push(px);
-                            update_stats(&mut mode, &mut n_px, &mut sum, &mut sum_abs_dev, ref_mode, win[px]);
-                        }
-                    }
-                }
-            }
-
-            let mut grows_bottom = false;
-            if exp_patch.bottom.past.len() >= 1 {
-                let bottom_range = (exp_patch.bottom.past[0].1.saturating_sub(1))..((exp_patch.bottom.past[exp_patch.bottom.past.len()-1].1 + 2).min(w));
-                if let Some(r) = bottom_row {
-                    for c in /*col_range*/ bottom_range.clone() {
-                        let px = (r, c);
-                        let is_corner = (r == bottom_range.start || r == bottom_range.end-1);
-                        if mode.matches(win[px]) && (is_corner || ( /*pixel_below_rect(&outer_rect, px) &&*/ pixel_neighbors_bottom(&exp_patch, px))) {
-                            if !grows_bottom {
-                                // outer_rect.2 += px_spacing;
-                                grows_bottom = true;
-                            }
-                            exp_patch.bottom.curr.push(px);
-                            update_stats(&mut mode, &mut n_px, &mut sum, &mut sum_abs_dev, ref_mode, win[px]);
-                        }
-                    }
-                }
-            }
-
-            let mut grows_right = false;
-            if exp_patch.right.past.len() >= 1 {
-                let right_range = (exp_patch.right.past[0].0.saturating_sub(1))..((exp_patch.right.past[exp_patch.right.past.len()-1].0 + 2).min(h));
-                if let Some(c) = right_col {
-                    for r in /*row_range.skip(1).take(row_end-1)*/ right_range.clone() {
-                        let px = (r, c);
-                        let is_corner = (c == right_range.start || c == right_range.end-1);
-                        if mode.matches(win[px]) && (is_corner || ( /*pixel_to_right_of_rect(&outer_rect, px) &&*/ pixel_neighbors_right(&exp_patch, px))) {
-                            if !grows_right {
-                                // outer_rect.3 += px_spacing;
-                                grows_right = true;
-                            }
-                            exp_patch.right.curr.push(px);
-                            update_stats(&mut mode, &mut n_px, &mut sum, &mut sum_abs_dev, ref_mode, win[px]);
-                        }
-                    }
-                }
-            }
-
-            let grows_any = grows_left || grows_right || grows_bottom || grows_top;
-            expand_rect_with_front(&mut outer_rect, &exp_patch);
-            patch.outer_rect = outer_rect;
-            expand_patch(&mut exp_patch, &mut patch, outer_rect, exp_mode, win);
-
-            if let Some(area) = max_area {
-                if /*patch.pxs.len()*/ outer_rect.2 * outer_rect.3 > area as u16 {
-                    return None;
-                }
-            }
-
-            if !grows_any {
-                if exp_mode == ExpansionMode::Contour {
-
-                    // Remove seed before closing patch
-                    patch.pxs.swap_remove(0);
-
-                    // A contour should have at least three pixel points. A dense
-                    // patch can have any number of points >= 1.
-                    if patch.pxs.len() < 3 {
-                        return None;
-                    }
-
-                    close_contour(&mut patch, win);
-                }
-                return Some(patch);
-            }
-
-            abs_dist += px_spacing as u16;
-        }
-
-        assert!(patch.pxs.len() > 0);
-        Some(patch)
     }
 
     /// Starts a new patch.
@@ -1159,7 +772,7 @@ impl Patch {
     }*/
 
     pub fn add_to_right(&mut self, px : (u16, u16), exp_mode : ExpansionMode) {
-        assert!(self.pixel_not_far_right(px), format!("Pixel not at right: {:?}", (self.outer_rect, &self.pxs, px)));
+        // assert!(self.pixel_not_far_right(px), format!("Pixel not at right: {:?}", (self.outer_rect, &self.pxs, px)));
 
         match exp_mode {
             ExpansionMode::Rect => { },
@@ -1167,8 +780,9 @@ impl Patch {
                 self.pxs.push(px);
             },
             ExpansionMode::Contour => {
-                let mut row_iter = self.pxs.iter().rev().take_while(|(r, _)| *r == px.0 );
-                let has_2_this_row = row_iter.next().is_some() && row_iter.next().is_some();
+                // TODO replace by counter of pixels within the current row.
+                let mut this_row = self.pxs.iter().rev().take_while(|(r, _)| *r == px.0 ).take(2);
+                let has_2_this_row = this_row.next().is_some() && this_row.next().is_some();
                 if has_2_this_row {
                     *(self.pxs.last_mut().unwrap()) = px;
                 } else  {
@@ -1182,22 +796,62 @@ impl Patch {
     }
 
     pub fn add_to_bottom(&mut self, px : (u16, u16), exp_mode : ExpansionMode) {
-        assert!(self.pixel_not_far_below(px), format!("Pixel not at bottom: {:?}", (self.outer_rect, &self.pxs, px)));
+        // assert!(self.pixel_not_far_below(px), format!("Pixel not at bottom: {:?}", (self.outer_rect, &self.pxs, px)));
         match exp_mode {
             ExpansionMode::Rect => { },
             ExpansionMode::Dense => {
                 self.pxs.push(px);
             },
             ExpansionMode::Contour => {
-                let mut col_iter = self.pxs.iter().rev().filter(|(_, c)| *c == px.1 );
-                let has_2_this_col = col_iter.next().is_some() && col_iter.next().is_some();
-                if has_2_this_col {
-                    let mut col_iter_mut = self.pxs.iter_mut().rev().filter(|(_, c)| *c == px.1 );
-                    // *(self.pxs.last_mut().unwrap()) = px;
-                    *(col_iter_mut.next().unwrap()) = px;
-                } else {
+
+                if self.outer_rect.2 <= 1 {
+                    // Always add bottom pixels when the patch is still thin.
                     self.pxs.push(px);
+                } else {
+                    // If patch is not thin, we verify if there are any pixels representing the
+                    // bottom patch border with the same col. If there are, we substitute it. If
+                    // there are not (the top row is represented only by the left and right pixels),
+                    // we add this pixel.
+
+                    // We iterate at least 2 rows because insertion of bottom pixels will leave the last row unsorted
+                    // (might have a few pixels of the row below it).
+                    let prev_row = self.pxs.iter_mut().rev()
+                        .enumerate()
+                        .take_while(|(_, (r, _))| *r >= px.0.saturating_sub(2) )
+                        .filter(|(_, (r, _))| *r == px.0 - 1 );
+
+                    let mut substituted = false;
+                    for (rev_ix, mut prev_px) in prev_row {
+                        if prev_px.1 == px.1 {
+                            *prev_px = px;
+
+                            // Keep last elements at the last row
+                            let n = self.pxs.len();
+                            self.pxs.swap(n - rev_ix - 1, n-1);
+
+                            substituted = true;
+                            break;
+                        }
+                    }
+
+                    // In this case, the color matched but the contour only represented
+                    // the previous row by their left and right border pixels. We push
+                    // the new pixel in this case, effectively expanding the row by one.
+                    if !substituted {
+                        self.pxs.push(px);
+                    }
+
+                    // let has_2_this_col = found_cols == 2;
+                    // if let Some(subs_px) = subs_col_px {
+                    // let mut col_iter_mut = self.pxs.iter_mut().rev().filter(|(_, c)| *c == px.1 );
+                    // *(col_iter_mut.next().unwrap()) = px;
+                    // *subs_px = px;
+                    // }
                 }
+
+                // } else {
+                //    self.pxs.push(px);
+                // }
             }
         }
 
@@ -1216,6 +870,16 @@ impl Patch {
         for pt in other.pxs.iter() {
             self.pxs.push(*pt);
         }
+
+        // This is required because self.add_to_bottom assumes row ordering. But col ordering
+        // within rows is unimportant. If the vertical extension of the top patch is not larger than
+        // the vertical extension of the left patch, however, we do not need to worry about sorting,
+        // since the pixels at the bottom will already be the most advanced ones.
+        // if self.outer_rect.0 + self.outer_rect.2 > other.outer_rect.0 + other.outer_rect.2 {
+        //    self.pxs.sort_by(|a, b| a.0.cmp(&b.0) );
+        // }
+        // assert!(self.outer_rect.0 + self.outer_rect.2 <= other.outer_rect.0 + other.outer_rect.2);
+        // assert!()
 
         self.area += other.area;
         self.expand_rect(&other.pxs);
@@ -1336,7 +1000,7 @@ impl Patch {
         }
     }
 
-    pub fn polygon(&self) -> Option<ConvexPolygon> {
+    pub fn unscaled_polygon(&self) -> Option<ConvexPolygon> {
         let pts = self.outer_points::<usize>(ExpansionMode::Dense);
 
         // Some(Polygon::from(pts))
@@ -1348,9 +1012,10 @@ impl Patch {
     }
 
     pub fn contains(&self, other : &Self) -> Option<bool> {
-        let this_poly = self.polygon()?;
+        /*let this_poly = self.polygon()?;
         let other_poly = other.polygon()?;
-        Some(other_poly.points().iter().all(|pt| this_poly.contains_local_point(pt)))
+        Some(other_poly.points().iter().all(|pt| this_poly.contains_local_point(pt)))*/
+        unimplemented!()
     }
 
     /// Order all pixels in this patch, first by row, then by column within rows.
@@ -1586,12 +1251,6 @@ impl Pattern {
 
 }
 
-pub struct PatchSegmentation {
-    px_spacing : usize,
-    patches : Vec<Patch>,
-    n_patches : usize
-}
-
 #[derive(Debug, Clone, Copy)]
 pub enum ColorMode {
 
@@ -1675,360 +1334,78 @@ impl ColorMode {
 
 }
 
-impl PatchSegmentation {
-
-    pub fn new(px_spacing : usize) -> Self {
-        Self { patches : Vec::with_capacity(16), px_spacing, n_patches : 0 }
-    }
-
-    pub fn segment_all<'a>(&'a mut self, win : &WindowMut<'_, u8>, mode : ColorMode, exp_mode : ExpansionMode) -> &'a [Patch] {
-        let src_win = unsafe { crate::image::create_immutable(&win) };
-        let n_patches = full_color_patches(&mut self.patches, &src_win, self.px_spacing.try_into().unwrap(), mode, exp_mode);
-        self.n_patches = n_patches;
-        &self.patches[0..self.n_patches]
-    }
-
-    /// Returns only segments matching the given color.
-    pub fn segment_single_color<'a>(&'a mut self, win : &Window<'_, u8>, mode : ColorMode, exp_mode : ExpansionMode) -> &'a [Patch] {
-        // let src_win = unsafe { crate::image::create_immutable(&win) };
-
-        // TODO remove this to avoid reallocating pixel vectors.
-        // self.patches.clear();
-
-        let n_patches = single_color_patches(&mut self.patches, &win, self.px_spacing.try_into().unwrap(), mode, exp_mode);
-        self.n_patches = n_patches;
-
-        // This will fail at adaptive mode
-        // assert!(self.patches[0..self.n_patches].iter().all(|patch| patch.color == mode.color() ));
-
-        assert!(self.patches[0..self.n_patches].iter().all(|patch| patch.pxs.len() > 0 ));
-        &self.patches[0..self.n_patches]
-    }
-
-    pub fn patches(&self) -> &[Patch] {
-        &self.patches[0..self.n_patches]
-    }
-
-}
-
-/// Keeps state of a patch search
-struct PatchSearch {
-    prev_row_patch_ixs : Vec<usize>,
-    left_patch_ix : Option<usize>,
-    top_patch_ix : Option<usize>,
-    nrow : usize,
-    ncol : usize
-}
-
-impl PatchSearch {
-
-    fn new(win : &Window<'_, u8>, px_spacing : usize) -> Self {
-        let (ncol, nrow) = (win.width() / px_spacing, win.height() / px_spacing);
-        let mut prev_row_patch_ixs : Vec<usize> = Vec::with_capacity(ncol);
-        for c in (0..ncol) {
-            prev_row_patch_ixs.push(0);
-        }
-        let (left_patch_ix, top_patch_ix) : (Option<usize>, Option<usize>) = (None, None);
-        Self { prev_row_patch_ixs, left_patch_ix, top_patch_ix, nrow, ncol }
-    }
-
-}
-
-/// Search the image for disjoint color patches of a single user-specified color. If tol
-/// is informed, any pixel witin patch+- tol is considered. If not, only pixels with strictly
-/// the desired color are returned.
-pub (crate) fn single_color_patches(
-    patches : &mut Vec<Patch>,
-    win : &Window<'_, u8>,
-    px_spacing : u16,
-    mut mode : ColorMode,
-    exp_mode : ExpansionMode
-) -> usize {
-    let mut n_patches = 0;
-
-    /// TODO avoid reallocating this structure, which has Vec<usize>.
-    let mut search = PatchSearch::new(win, px_spacing as usize);
-
-    // TODO also avoid reallocating this structure.
-    let mut prev_row_mask : Vec<bool> = Vec::with_capacity(win.width() / px_spacing as usize);
-
-    for c in (0..(win.width() / px_spacing as usize)) {
-        prev_row_mask.push(false);
-    }
-
-    let mut last_matching_col = None;
-    for (r, c, px_color) in win.labeled_pixels::<u16, _>(px_spacing as usize) {
-        let col_ix = c as usize;
-        // let (r, c) = (ix / win.width(), ix % win.width());
-        // let px_color = win[(r*px_spacing, c*px_spacing)];
-        search.top_patch_ix = if r >= 1 && prev_row_mask[col_ix] {
-            Some(search.prev_row_patch_ixs[col_ix])
-        } else {
+/*/// Updates the contour state. If the strip (row or column) is already complete, returns the index
+/// of the pxs vector that should be updated. If the row/column is new at the patch or it is still
+/// incomplete (with a single pixel), return None.
+fn update_contour_state(matches : &mut HashMap<usize, ContourStrip>, pos : usize, pxs_ix : usize) -> Option<usize> {
+    match matches.get(r) {
+        Some(ContourStrip::Incomplete) => {
+            *self.n_matches_row.get_mut(r).unwrap() = ContourStrip::Complete(pxs_ix);
             None
-        };
-
-        if c == 0 {
-            last_matching_col = None;
-        }
-
-        let color_match = mode.matches(px_color);
-        let merges_left = if let Some(last_c) = last_matching_col { c - last_c == 1 } else { false } && color_match && search.left_patch_ix.is_some();
-        let merges_top = r >= 1 && prev_row_mask[col_ix] && color_match && search.top_patch_ix.is_some();
-        if color_match {
-            append_or_update_patch(patches, &mut search, &mut n_patches, win, merges_left, merges_top, r, c, mode.color(), px_spacing, exp_mode);
-            last_matching_col = Some(c);
-            prev_row_mask[col_ix] = true;
-        } else {
-            prev_row_mask[col_ix] = false;
-            search.left_patch_ix = None;
-        }
-    }
-
-    if exp_mode == ExpansionMode::Contour {
-
-        // A contour should have at least three pixel points. Remove the ones
-        // without this many points.
-        let mut ix = 0;
-        while ix < n_patches {
-            if patches[ix].pxs.len() < 3 {
-                patches.swap(ix, n_patches-1);
-                n_patches -= 1;
-            } else {
-                ix += 1;
-            }
-        }
-
-        for mut patch in patches[0..n_patches].iter_mut() {
-            close_contour(patch, win);
-        }
-    }
-
-    n_patches
-}
-
-/// During pixel insertion in a patch, row raster order is preserved, but column raster order is not.
-/// Returns up to which index of patches the new data is valid. We keep patches of a previous iteration
-/// so the pixel vectors within patches do not get reallocated. In the public API, we use this quantity
-/// to limit the index of the patch slice only to the points generated by the current iteration.
-pub(crate) fn full_color_patches(
-    patches : &mut Vec<Patch>,
-    win : &Window<'_, u8>,
-    px_spacing : u16,
-    mut mode : ColorMode,
-    exp_mode : ExpansionMode
-) -> usize {
-
-    /*// Recycle previous pixel vectors to avoid reallocations
-    let mut prev_pxs : Vec<Vec<(usize, usize)>> = patches
-        .iter_mut()
-        .map(|mut patch| mem::take(&mut patch.pxs ) )
-        .collect();
-    patches.clear();*/
-    let mut n_patches = 0;
-
-    // let (ncol, nrow) = (win.width() / px_spacing, win.height() / px_spacing);
-
-    // Maps each column to a patch index
-    // let mut prev_row_patch_ixs : HashMap<usize, usize> = HashMap::with_capacity(ncol);
-
-    // TODO also take this by &mut
-    // let mut prev_row_patch_ixs : Vec<usize> = Vec::with_capacity(ncol);
-    // for c in (0..ncol) {
-        //prev_row_patch_ixs.insert(c, 0);
-    //    prev_row_patch_ixs.push(0);
-    // }
-
-    /// TODO avoid reallocating this structure, which has Vec<usize>.
-    let mut search = PatchSearch::new(win, px_spacing as usize);
-
-    for (r, c, color) in win.labeled_pixels(px_spacing as usize) {
-        // let (r, c) = (ix / win.width(), ix % win.width());
-        // let color = win[(r*px_spacing, c*px_spacing)];
-
-        let might_merge_top = if r >= 1 {
-            mode.set_reference_color(win[((r-1)*px_spacing, c*px_spacing)]);
-            mode.matches(color)
-        } else {
-            false
-        };
-        let might_merge_left = if c >= 1 {
-            mode.set_reference_color(win[(r*px_spacing, (c-1)*px_spacing)]);
-            mode.matches(color)
-        } else {
-            false
-        };
-
-        if c == 0 {
-            search.left_patch_ix = None;
-        }
-
-        // println!("{},{}", r, c);
-        // println!("{:?}", patches);
-
-        /*// Get patch that contains the pixel above the current pixel
-        // let top_patch_ix = patches.iter().position(|patch| patch.pxs.iter().any(|px| r >= 1 && px.0 == r-1 && px.1 == c ) );
-        let top_patch_ix = patches.iter().rev()
-            .position(|patch| patch.pixel_is_below((r, c)) )
-            .map(|inv_pos| patches.len() - 1 - inv_pos);*/
-        search.top_patch_ix = if r >= 1 { Some(search.prev_row_patch_ixs[c as usize]) } else { None };
-        // println!("{},{}", r, c);
-        // Get patch that contains the pixel to the left of current pixel
-        // let left_patch_ix = patches.iter().position(|patch| patch.pxs.iter().any(|px| c >= 1 && px.0 == r && px.1 == c-1 ) );
-        /*let left_patch_ix = patches.iter().rev()
-            .position(|patch| patch.pixel_is_right((r, c)) )
-            .map(|inv_pos| patches.len() - 1 - inv_pos);*/
-        // let left_patch_ix =
-
-        // Verifies if patches have the same color
-        /*let merges_top = might_merge_top && if let Some(top) = top_patch_ix.and_then(|ix| patches.get(ix) ) {
-            top.color == color
-        } else {
-            false
-        };
-        let merges_left = might_merge_left && if let Some(left) = left_patch_ix.and_then(|ix| patches.get(ix) ) {
-            left.color == color
-        } else {
-            false
-        };*/
-        let merges_left = might_merge_left && search.left_patch_ix.is_some();
-        let merges_top = might_merge_top && search.top_patch_ix.is_some();
-        append_or_update_patch(patches, &mut search, &mut n_patches, win, merges_left, merges_top, r, c, color, px_spacing, exp_mode);
-
-        // patches.trim(n_patches);
-        // println!("{:?}", patches.last().unwrap());
-    }
-
-    if exp_mode == ExpansionMode::Contour {
-        for mut patch in patches[0..n_patches].iter_mut() {
-            close_contour(patch, win);
-        }
-    }
-
-    n_patches
-}
-
-// TODO review patch color strategy. For now, the patch color
-// is the color that inaugurated the patch via its top-left pixel
-// at the raster search strategy. This contrasts with the growth
-// strategy where the patch color is the seed position color.
-fn append_or_update_patch(
-    patches : &mut Vec<Patch>,
-    search : &mut PatchSearch,
-    n_patches : &mut usize,
-    win : &Window<'_, u8>,
-    merges_left : bool,
-    merges_top : bool,
-    r : u16,
-    c : u16,
-    color : u8,
-    px_spacing : u16,
-    exp_mode : ExpansionMode
-) {
-    match (merges_left, merges_top) {
-        (true, true) => {
-
-            let top_differs_left = search.top_patch_ix.unwrap() != search.left_patch_ix.unwrap();
-            if top_differs_left {
-                merge_left_to_top_patch(patches, search, n_patches);
-            }
-
-            // Push new pixel to top patch
-            patches[search.top_patch_ix.unwrap()].add_to_bottom((r, c), exp_mode);
-            search.prev_row_patch_ixs[c as usize] = search.top_patch_ix.unwrap();
-            search.left_patch_ix = Some(search.top_patch_ix.unwrap());
         },
-        (true, false) => {
-            patches[search.left_patch_ix.unwrap()].add_to_right((r, c), exp_mode);
-            search.prev_row_patch_ixs[c as usize] = search.left_patch_ix.unwrap();
+        Some(ContourStrip::Complete(pos)) => {
+            Some(pos)
         },
-        (false, true) => {
-            patches[search.top_patch_ix.unwrap()].add_to_bottom((r, c), exp_mode);
-            search.prev_row_patch_ixs[c as usize] = search.top_patch_ix.unwrap();
-            search.left_patch_ix = Some(search.top_patch_ix.unwrap());
-        },
-        (false, false) => {
-            add_patch(patches, search, n_patches, win, r, c, color, px_spacing);
+        None => {
+            self.n_matches_row.insert(r, ContourStrip::Incomplete);
+            None
+        }
+    }
+}
+
+struct ContourState {
+    states : Vec<PatchContourState>,
+    n_elems : usize
+}
+
+impl ContourState {
+
+    pub fn new() -> Self {
+        ContourState {
+            states : Vec::new(),
+            n_elems : 0
         }
     }
 
-    // Irrespective of whether a patch was added or updated, it should have
-    // at least one pixel at the last valid position of n_patches.
-    assert!(patches[*n_patches-1].pxs.len() > 0);
-}
-
-/// Since we might be recycling the patches Vec<_> from a previous iteration,
-/// either update one of the junk patches to hold the new patch, or push
-/// this new patch to the vector. In either case, n_patches (which hold the
-/// valid patch slice size) will be incremented by one.
-fn add_patch(
-    patches : &mut Vec<Patch>,
-    search : &mut PatchSearch,
-    n_patches : &mut usize,
-    win : &Window<'_, u8>,
-    r : u16,
-    c : u16,
-    color : u8,
-    px_spacing : u16
-) {
-    if *n_patches < patches.len() {
-        patches[*n_patches].pxs.clear();
-        patches[*n_patches].pxs.push((r, c));
-        patches[*n_patches].outer_rect = (r, c, 1, 1);
-        patches[*n_patches].color = color;
-        patches[*n_patches].scale = px_spacing;
-        patches[*n_patches].img_height = win.height();
-        patches[*n_patches].area = 1;
-    } else {
-        patches.push(Patch::new((r, c), color, px_spacing, win.height()));
-    }
-    *n_patches += 1;
-    search.prev_row_patch_ixs[c as usize] = *n_patches - 1;
-    search.left_patch_ix = Some(*n_patches - 1);
-}
-
-fn merge_left_to_top_patch(patches : &mut Vec<Patch>, search : &mut PatchSearch, n_patches : &mut usize) {
-    // This method can't be called when the left and top patches are the same.
-    assert!(search.left_patch_ix.unwrap() != search.top_patch_ix.unwrap());
-
-    let left_patch = mem::take(&mut patches[search.left_patch_ix.unwrap()]);
-    patches[search.top_patch_ix.unwrap()].merge(left_patch);
-
-    // Remove old left patch (now merged with top).
-    patches.remove(search.left_patch_ix.unwrap());
-
-    if let Some(ref mut ix) = search.top_patch_ix {
-        if *ix > search.left_patch_ix.unwrap() {
-            *ix -= 1;
-        }
-    } else {
-        panic!()
+    pub fn merge(&mut self, this_ix : usize, other_ix : usize) {
+        assert!(this_ix < n_elems && other_ix < n_elems);
+        let other = self.states.remove(other_ix);
+        self.n_elems -= 1;
+        self.states[this_ix].merge(other);
     }
 
-    // Update indices of previous row patches, since the remove(.) invalidated
-    // every index >= left patch.
-    for mut ix in search.prev_row_patch_ixs.iter_mut() {
-        if *ix == search.left_patch_ix.unwrap() {
-            *ix = search.top_patch_ix.unwrap();
+    pub fn clear(&mut self) {
+        self.states.iter_mut().for_each(|s| s.clear() );
+        self.n_elems = 0;
+    }
+
+    fn retrieve_patch(&mut self, patch_ix : usize) -> &mut PatchContourState {
+        assert!(patch_ix <= self.n_elems + 1);
+        if let Some(state) = self.states.get_mut(patch_ix) {
+            state
         } else {
-            if *ix > search.left_patch_ix.unwrap() {
-                *ix -= 1;
-            }
+            self.states.push(PatchContourState::new());
+            self.n_elems += 1;
+            &mut self.states[self.states.len() - 1]
         }
     }
 
-    // Account for removed patch.
-    *n_patches -= 1;
-}
-
-#[test]
-fn test_patches() {
-    let check = Image::<u8>::new_checkerboard(16, 4);
-    println!("{}", check);
-    for patch in check.full_window().patches(1).iter() {
-        println!("{:?}", patch);
-        println!("{:?}", patch.polygon());
+    pub fn add_new(&mut self, patch_ix : usize, r : usize, c : usize, pxs_ix :usize) {
+        self.update_row(patch_ix, r, pxs_ix);
+        self.update_col(patch_ix, c, pxs_ix);
     }
-}
+
+    /// Updates contour strip, returning true if it is now complete.
+    pub fn update_row(&mut self, patch_ix : usize, r : usize, pxs_ix : usize) -> Option<usize> {
+        self.retrieve_patch(patch_ix).update_row(r, pxs_ix)
+    }
+
+    /// Updates contour strip, returning true if it is now complete.
+    pub fn update_col(&mut self, patch_ix : usize, c : usize, pxs_ix : usize) -> Option<usize> {
+        self.retrieve_patch(patch_ix).update_col(c, pxs_ix)
+    }
+
+}*/
 
 /*/// Returns the color patches of a given labeled window (such as retrurned by segment_colors).
 pub fn binary_patches(label_win : &Window<'_, u8>, px_spacing : usize) -> Vec<BinaryPatch> {

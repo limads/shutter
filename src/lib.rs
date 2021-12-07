@@ -23,14 +23,14 @@ pub mod path;
 // #[cfg(feature="opencvlib")]
 // pub mod tracking;
 
-#[cfg(feature="opencvlib")]
-pub mod template;
+// #[cfg(feature="opencvlib")]
+// pub mod template;
 
-#[cfg(feature="opencvlib")]
-pub mod matching;
+// #[cfg(feature="opencvlib")]
+// pub mod matching;
 
-#[cfg(feature="opencvlib")]
-pub mod flow;
+// #[cfg(feature="opencvlib")]
+// pub mod flow;
 
 #[cfg(feature="opencvlib")]
 pub mod contour;

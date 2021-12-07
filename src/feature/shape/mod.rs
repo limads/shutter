@@ -426,13 +426,48 @@ pub fn join_pairs_col_ordered(pairs : &[[(usize, usize); 2]], max_dist : f64) ->
     clusters
 }
 
+// Define if points lie on a diagonal
+pub fn same_diagonal(a : (usize, usize), b : (usize, usize)) -> bool {
+    (a.0  as i32 - b.0 as i32).abs() == (a.1 as i32 - b.1 as i32).abs()
+}
+
+pub fn colinear_pair(a : (usize, usize), b : (usize, usize)) -> bool {
+    a.0 == b.0 || a.1 == b.1 || same_diagonal(a, b)
+}
+
+pub fn colinear_triplet(a : (usize, usize), b : (usize, usize), c : (usize, usize)) -> bool {
+    (a.0 == b.0 && a.0 == c.0) || (a.1 == b.1 && b.1 == c.1 ) || (same_diagonal(a, b) && same_diagonal(a, c))
+}
+
 /// Returns the angle at the vertex p1 in the triangle [p1, p2, p3] using the law of cosines.
 /// Reference https://stackoverflow.com/questions/1211212/how-to-calculate-an-angle-from-three-points
-pub fn vertex_angle(pt1 : (usize, usize), pt2 : (usize, usize), pt3 : (usize, usize)) -> f64 {
-    let dist_12 = euclidian(&[pt1.0 as f64, pt1.1 as f64], &[pt2.0 as f64, pt2.1 as f64]);
-    let dist_13 = euclidian(&[pt1.0 as f64, pt1.1 as f64], &[pt3.0 as f64, pt3.1 as f64]);
-    let dist_23 = euclidian(&[pt2.0 as f64, pt2.1 as f64], &[pt3.0 as f64, pt3.1 as f64]);
-    ((dist_12.powf(2.) + dist_13.powf(2.) - dist_23.powf(2.)) / 2.*dist_12*dist_13).acos()
+/// We invert the y-axis for all points to situate them in the analytical plane.
+pub fn vertex_angle(pt1 : (usize, usize), pt2 : (usize, usize), pt3 : (usize, usize)) -> Option<f64> {
+
+    if pt1 == pt2 || pt1 == pt3 || pt2 == pt3 {
+        return None;
+    }
+    
+    if colinear_triplet(pt1, pt2, pt3) {
+        return None;
+    }
+    
+    let dist_12 = euclidian(&[-1. * pt1.0 as f64, pt1.1 as f64], &[-1. * pt2.0 as f64, pt2.1 as f64]);
+    let dist_13 = euclidian(&[-1. * pt1.0 as f64, pt1.1 as f64], &[-1. * pt3.0 as f64, pt3.1 as f64]);
+    let dist_23 = euclidian(&[-1. * pt2.0 as f64, pt2.1 as f64], &[-1. * pt3.0 as f64, pt3.1 as f64]);
+    // println!("sides = {:?}", (dist_12, dist_13, dist_23));
+    // println!("num = {:?}", dist_12.powf(2.) + dist_13.powf(2.) - dist_23.powf(2.));
+    // println!("den = {}", 2.*dist_12*dist_13);
+    let c = (dist_12.powf(2.) + dist_13.powf(2.) - dist_23.powf(2.)) / (2.*dist_12*dist_13);
+    // println!("div = {}", c);
+    
+    // If this fails, the user might have informed an invalid triangle.
+    if c >= -1. && c <= 1. {
+        Some(c.acos())
+    } else {
+        None
+    }
+    
 }
 
 /// Returns the side ab given vertex angles theta1 (ab), and the remaining sides b and c using the law of sines.
@@ -449,6 +484,8 @@ fn line_intersect() {
 #[test]
 fn vertex_opening() {
     println!("{:?}", vertex_angle((0, 0), (0, 5), (5, 0)));
+    println!("{:?}", vertex_angle((1, 0), (0, 1), (1, 2)));
+    // println!("{:?}", vertex_angle((1, 0), (0, 1), (1, 2)));
 }
 
 /// Calculate line intersection
@@ -639,7 +676,7 @@ pub fn outer_ellipse(pts : &[(usize, usize)]) -> Option<Ellipse> {
     let small_axis = euclidian(&[minor_pt1.0 as f64, minor_pt1.1 as f64], &[minor_pt2.0 as f64, minor_pt2.1 as f64]);
 
     // Calculate angle of center with respect to x axis.
-    let angle = vertex_angle(center, major_pt2, (center.0, center.1 + small_axis as usize));
+    let angle = vertex_angle(center, major_pt2, (center.0, center.1 + small_axis as usize)).unwrap();
 
     Some(Ellipse {
         center,

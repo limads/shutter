@@ -6,10 +6,15 @@ use std::fmt;
 use std::fmt::Debug;
 use simba::simd::{AutoSimd};
 use std::convert::TryFrom;
-use crate::feature::color::{self, Patch, /*BinaryPatch, Neighborhood*/ };
+use crate::feature::patch::{self, Patch};
 use itertools::Itertools;
-use crate::feature::color::ColorMode;
+use crate::feature::patch::ColorMode;
 use num_traits::Zero;
+use serde::{Serialize, Deserialize, de::DeserializeOwned};
+use std::any::Any;
+use tempfile;
+use std::fs;
+use std::io::Write;
 
 #[cfg(feature="opencvlib")]
 use opencv::core;
@@ -69,18 +74,30 @@ pub(crate) mod iter;
 /// bounded at a low and high end, because they are the product of a saturated digital quantization
 /// process. But indexing, following OpenCV convention, happens from the top-left point, following
 /// the matrix convention.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(bound = "")]
 pub struct Image<N> 
 where
-    N : Scalar
+    N : Scalar + Clone + Copy + Serialize + DeserializeOwned + Any
 {
     buf : Vec<N>,
     ncols : usize
 }
 
+impl<N> fmt::Display for Image<N>
+where
+    N : Scalar + Clone + Copy + Serialize + DeserializeOwned + Any + Default + num_traits::Zero
+{
+
+    fn fmt(&self, f : &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Image (Height = {}; Width = {})", self.height(), self.width())
+    }
+
+}
+
 impl<N> Image<N>
 where
-    N : Scalar + Copy + Default + Zero
+    N : Scalar + Copy + Default + Zero + Copy + Serialize + DeserializeOwned + Any
 {
 
     pub fn subsample_from(&mut self, content : &[N], ncols : usize, sample_n : usize) {
@@ -308,7 +325,7 @@ where
 }
 
 impl<N> Image<N>
-    where N : Scalar + Copy + RealField 
+    where N : Scalar + Copy + RealField + Copy + Serialize + DeserializeOwned + Any
 {
 
     pub fn scale_by(&mut self, scalar : N)  {
@@ -375,7 +392,7 @@ impl Image<f32> {
 
 impl<N> Index<(usize, usize)> for Image<N> 
 where
-    N : Scalar
+    N : Scalar + Copy + Serialize + DeserializeOwned + Any
 {
 
     type Output = N;
@@ -387,7 +404,7 @@ where
 
 impl<N> IndexMut<(usize, usize)> for Image<N>
 where
-    N : Scalar + Copy + Default
+    N : Scalar + Copy + Default + Copy + Serialize + DeserializeOwned + Any
 {
     
     fn index_mut(&mut self, index: (usize, usize)) -> &mut Self::Output {
@@ -489,7 +506,7 @@ fn shrink_to_divisor(mut n : usize, by : usize) -> Option<usize> {
 
 impl<'a, N> Window<'a, N>
 where
-    N : Scalar + Mul<Output=N> + MulAssign + Copy
+    N : Scalar + Mul<Output=N> + MulAssign + Copy + Copy + Serialize + DeserializeOwned + Any
 {
 
     pub fn far_thin_neighborhood(&'a self, center_tl : (usize, usize), win_sz : (usize, usize), dist : usize) -> Option<Neighborhood<'a, N>> {
@@ -755,7 +772,7 @@ where
     }
 
     /// Iterate over image pixels, expanding from a given location, until any image border is found.
-    /// Iteration happens clock-wise from the seed pixel.
+    /// Iteration happens clock-wise from the seed pixel. Indices are the original image scale.
     pub fn expanding_pixels(
         &self,
         seed : (usize, usize),
@@ -844,6 +861,15 @@ impl<'a> Iterator for PackedIterator<'a, u8> {
 
 impl<'a> Window<'a, u8> {
 
+    /// Gets pos or the nearest pixel to it that satisfies a condition.
+    pub fn nearest_matching(&self, pos : (usize, usize), px_spacing : usize, f : impl Fn(u8)->bool) -> Option<(usize, usize)> {
+        if f(self[pos]) {
+            Some(pos)
+        } else {
+            self.expanding_pixels(pos, px_spacing).find(|(_, px)| f(**px) ).map(|(pos, _)| pos )
+        }
+    }
+
     pub fn color_at_labels(&'a self, ixs : impl Iterator<Item=(usize, usize)> + 'a) -> impl Iterator<Item=u8> + 'a {
         ixs.map(move |ix| self[ix] )
     }
@@ -889,9 +915,10 @@ impl<'a> Window<'a, u8> {
 
     /// Extract contiguous image regions of homogeneous color.
     pub fn patches(&self, px_spacing : usize) -> Vec<Patch> {
-        let mut patches = Vec::new();
+        /*let mut patches = Vec::new();
         color::full_color_patches(&mut patches, self, px_spacing as u16, ColorMode::Exact(0), color::ExpansionMode::Dense);
-        patches
+        patches*/
+        unimplemented!()
     }
 
     /*pub fn binary_patches(&self, px_spacing : usize) -> Vec<BinaryPatch> {
@@ -1076,7 +1103,7 @@ where
 #[cfg(feature="opencvlib")]
 impl<N> Into<core::Mat> for &Image<N>
 where
-    N : Scalar + Copy + Default + Zero
+    N : Scalar + Copy + Default + Zero + Serialize + DeserializeOwned + Any
 {
 
     fn into(self) -> core::Mat {
@@ -1089,7 +1116,7 @@ where
 #[cfg(feature="opencvlib")]
 impl<N> Into<core::Mat> for &mut Image<N>
 where
-    N : Scalar + Copy + Default + Zero
+    N : Scalar + Copy + Default + Zero + Serialize + DeserializeOwned + Any
 {
 
     fn into(self) -> core::Mat {
@@ -1255,7 +1282,7 @@ impl WindowMut<'_, u8> {
     }
 
     pub fn patches(&self, px_spacing : usize) -> Vec<Patch> {
-        let src_win = unsafe {
+        /*let src_win = unsafe {
             Window {
                 offset : (self.offset.0, self.offset.1),
                 orig_sz : self.orig_sz,
@@ -1265,7 +1292,8 @@ impl WindowMut<'_, u8> {
         };
         let mut patches = Vec::new();
         color::full_color_patches(&mut patches, &src_win, px_spacing as u16, ColorMode::Exact(0), color::ExpansionMode::Dense);
-        patches
+        patches*/
+        unimplemented!()
     }
 
     pub fn draw(&mut self, mark : Mark) {
@@ -1441,7 +1469,7 @@ where
 
 impl<'a, N> WindowMut<'a, N>
 where
-    N : Scalar + Copy + Mul<Output=N> + MulAssign + PartialOrd
+    N : Scalar + Copy + Mul<Output=N> + MulAssign + PartialOrd + Serialize + DeserializeOwned
 {
 
     pub fn orig_sz(&self) -> (usize, usize) {
@@ -1638,7 +1666,7 @@ where
 
 impl<N> ripple::filter::Convolve for Image<N>
 where
-    N : Scalar + Copy + Default + Zero
+    N : Scalar + Copy + Default + Zero + Copy + Serialize + DeserializeOwned + Any
 {
 
     fn convolve_mut(&self, filter : &Self, out : &mut Self) {
@@ -1670,7 +1698,7 @@ where
 
 impl<N> AsRef<[N]> for Image<N>
 where
-    N : Scalar
+    N : Scalar + Copy + Serialize + DeserializeOwned + Any
 {
     fn as_ref(&self) -> &[N] {
         &self.buf[..]
@@ -1679,7 +1707,7 @@ where
 
 impl<N> AsMut<[N]> for Image<N> 
 where
-    N : Scalar
+    N : Scalar + Copy + Serialize + DeserializeOwned + Any
 {
     fn as_mut(&mut self) -> &mut [N] {
         &mut self.buf[..]
@@ -1706,7 +1734,7 @@ where
     }
 }
 
-impl<N> fmt::Display for Image<N> 
+/*impl<N> fmt::Display for Image<N>
 where
     N : Scalar + Copy,
     f64 : From<N>
@@ -1714,7 +1742,7 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", io::build_pgm_string_from_slice(&self.buf[..], self.ncols))
     }
-}
+}*/
 
 impl showable::Show for Window<'_, u8> {
 
@@ -1867,3 +1895,110 @@ The token type that repeats is enclosed in $(), followed by a separator and a * 
         }
     }
 }*/
+
+impl interactive::Interactive for Image<u8> {
+
+    fn type_name() -> &'static str {
+        "Image"
+    }
+
+    fn embed(&self) -> Option<String> {
+        Some(crate::io::to_html(&self.full_window()))
+    }
+
+    fn show(&self) {
+
+        use std::process::Command;
+        use tempfile;
+
+        let mut tf = tempfile::NamedTempFile::new().unwrap();
+        let png = crate::io::encode(self.clone()).unwrap();
+        tf.write_all(&png).unwrap();
+        let path = tf.path();
+        let new_path = format!("{}.png", path.to_str().unwrap());
+        fs::rename(path, new_path.clone()).unwrap();
+        Command::new("eog")
+            .args(&[&new_path])
+            .output()
+            .unwrap();
+    }
+
+    #[export_name="register_image"]
+    extern "C" fn interactive(registry : Box<interactive::Registry<'_>>) -> Box<interactive::RegistrationInfo> {
+
+        registry.add::<Self>()
+            .fallible_method("cat", |a : rhai::ImmutableString| -> Result<String, Box<rhai::EvalAltResult>> { Ok(format!("{}hellofromclient", a)) })
+            .fallible_method("add_one", |a : i64| -> Result<i64, Box<rhai::EvalAltResult>> { Ok(a + 1) })
+            .register()
+
+        /*use rhai;
+        Self::prepare(engine);
+        Self::display(engine);
+        Self::serialization(engine);
+
+        Self::new(
+            engine,
+            |img, map| {
+                match (map.get("width").and_then(|w| w.as_int().ok() ), (map.get("height").and_then(|h| h.as_int().ok() ))) {
+                    (Some(w), Some(h)) => {
+                        if w > 0 && h > 0 {
+                            *img = Image::new_constant(h as usize, w as usize, 0);
+                            Ok(())
+                        } else {
+                            Err(Box::new(rhai::EvalAltResult::from("Arguments should be greater than zero")))
+                        }
+                    },
+                    _ => {
+                        Err(Box::new(rhai::EvalAltResult::from("Invalid fields")))
+                    }
+                }
+
+            }
+        );
+
+        engine.register_result_fn(
+            "open",
+            |img : &mut Self, path : rhai::ImmutableString| -> Result<(), Box<rhai::EvalAltResult>> {
+                let new_img = crate::io::decode_from_file(&path)
+                    .map_err(|e| Box::new(rhai::EvalAltResult::from(format!("{}", e))) )?;
+                *img = new_img;
+                Ok(())
+            }
+        );
+
+        engine.register_fn("add_two", |a : i64| -> i64 { a + 2 });
+        engine.register_fn("add_two_float", |a : f64| -> f64 { a + 2. });
+        engine.register_fn("append_text_client", |a : String| -> String { format!("{}newtext", a) });
+        engine.register_fn("append_text_client_dyn", |a : rhai::Dynamic| -> rhai::Dynamic { rhai::Dynamic::from(format!("{}newtext", a.into_string().unwrap())) });
+
+        use std::any::TypeId;
+        let immutable_str_id = unsafe { std::mem::transmute::<u64, TypeId>(3264575275192760566) };
+
+        engine.register_raw_fn(
+            "append_text_client_raw",
+            /*&[TypeId::of::<ImmutableString>()]*/ &[immutable_str_id],
+            |ctx : rhai::NativeCallContext<'_>, args : &mut [&mut rhai::Dynamic]| -> Result<rhai::Dynamic, Box<rhai::EvalAltResult>> {
+                Ok(rhai::Dynamic::from(format!("{}newtext", std::mem::take(args[0]).cast::<rhai::ImmutableString>())))
+            }
+        );
+
+        println!("Type id of ImmutableString at shutter : {:?}", rhai::ImmutableString::from("").type_id() );
+        println!("Type id of Dynamic at shutter : {:?}", rhai::Dynamic::from(1i16).type_id() );
+        println!("Type id of Arc at client : {:?}", std::sync::Arc::new(1i16).type_id() );
+        println!("ImmutableString at client: {:?}", rhai::ImmutableString::from(""));
+
+        use smartstring;
+        println!("SmartString at client: {:?}", smartstring::SmartString::<smartstring::LazyCompact>::new_const().type_id());
+
+        Self::info()*/
+    }
+
+    // Perhaps we abstract certain details away,
+    // and just require the registration of "associated" and "methods",
+    // automatically taking care of the plumbing without exposing the engine
+    // to the user.
+
+}
+
+
+

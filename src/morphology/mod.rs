@@ -3,6 +3,8 @@ use crate::image::*;
 use nalgebra::Scalar;
 use std::fmt::Debug;
 use num_traits::Zero;
+use serde::{Serialize, Deserialize, de::DeserializeOwned};
+use std::any::Any;
 
 #[derive(Clone, Debug)]
 pub enum MorphShape {
@@ -38,7 +40,7 @@ fn build_kernel(sz : usize, iterations : usize, shape : MorphShape) -> MorphKern
 
 pub struct Erosion<P>
 where
-    P : Scalar + From<u8> + Debug + Copy + Default
+    P : Scalar + From<u8> + Debug + Copy + Default + Serialize + DeserializeOwned + Any
 {
     tgt : Image<P>,
     kernel : MorphKernel
@@ -46,7 +48,7 @@ where
 
 impl<P> Erosion<P>
 where
-    P : Scalar + From<u8> + Debug + Copy + Default + Zero
+    P : Scalar + From<u8> + Debug + Copy + Default + Zero + Serialize + DeserializeOwned + Any
 {
 
     pub fn new(img_sz : (usize, usize), kernel_sz : usize, shape : MorphShape, iterations : usize) -> Self {
@@ -78,7 +80,7 @@ where
 
 pub struct Dilation<P>
 where
-    P : Scalar + From<u8> + Debug + Copy + Default
+    P : Scalar + From<u8> + Debug + Copy + Default + Serialize + DeserializeOwned + Any
 {
     tgt : Image<P>,
     kernel : MorphKernel
@@ -86,7 +88,7 @@ where
 
 impl<P> Dilation<P>
 where
-    P : Scalar + From<u8> + Debug + Copy + Default + Zero
+    P : Scalar + From<u8> + Debug + Copy + Default + Zero + Serialize + DeserializeOwned
 {
 
     pub fn new(img_sz : (usize, usize), kernel_sz : usize, shape : MorphShape, iterations : usize) -> Self {
