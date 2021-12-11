@@ -1154,6 +1154,7 @@ where
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Mark {
 
     // Position, square lenght and color
@@ -1183,6 +1184,16 @@ pub enum Mark {
     Text((usize, usize), String, u8)
     
 }
+
+/*impl TryFrom<rhai::Dynamic> for Mark {
+
+    type Err = ();
+
+    fn try_from(d : rhai::Dynamic) -> Result<Self, ()> {
+
+    }
+
+}*/
 
 #[derive(Debug)]
 pub struct WindowMut<'a, N> 
@@ -1403,7 +1414,7 @@ impl WindowMut<'_, u8> {
                         cvutils::write_text(
                             self.win, 
                             self.orig_sz.1, 
-                            (self.offset.0 + tl_pos.0, self.offset.1 + tl_pos.1), 
+                            (self.offset.0 + tl_pos.0, self.offset.1 + tl_pos.1),
                             &txt[..], 
                             color
                         ); 
@@ -1560,11 +1571,11 @@ where
     }
 
     pub fn width(&self) -> usize {
-        self.shape().0
+        self.shape().1
     }
 
     pub fn height(&self) -> usize {
-        self.shape().1
+        self.shape().0
     }
 
 }
@@ -1744,7 +1755,7 @@ where
     }
 }*/
 
-impl showable::Show for Window<'_, u8> {
+/*impl showable::Show for Window<'_, u8> {
 
     fn show(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // crate::io::to_html(&self).fmt(f)
@@ -1768,7 +1779,7 @@ impl showable::Show for Image<u8> {
         showable::Modality::XML
     }
 
-}
+}*/
 
 /*#[cfg(feature="literate")]
 impl<'a> literate::show::Stack<'a> for Window<'a, u8> {
@@ -1896,10 +1907,170 @@ The token type that repeats is enclosed in $(), followed by a separator and a * 
     }
 }*/
 
-impl interactive::Interactive for Image<u8> {
+/*#[no_mangle]
+pub extern "C" fn get_funcs() -> Box<Vec<interactive::AlienFunc>> {
 
-    fn type_name() -> &'static str {
+    use interactive::AlienFunc;
+
+    let mut funcs = Vec::new();
+    funcs.push(AlienFunc::new("add_three", |a : i64| -> Result<i64, Box<rhai::EvalAltResult>> { Ok(a + 3) }));
+    funcs.push(AlienFunc::new("add_four", |a : i64| -> Result<i64, Box<rhai::EvalAltResult>> { Ok(a + 4) }));
+    funcs.push(AlienFunc::new("append_text_to_string", |a : String| -> Result<String, Box<rhai::EvalAltResult>> { Ok(format!("{}newtext", a)) }));
+
+    Box::new(funcs)
+}*/
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct MyStruct {
+    field : [i64; 2]
+}
+
+impl Default for MyStruct {
+
+    fn default() -> Self {
+        Self { field : [0, 0] }
+    }
+
+}
+
+impl std::iter::IntoIterator for MyStruct {
+
+    type Item = i64;
+
+    type IntoIter = Box<dyn Iterator<Item=i64>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        Box::new(vec![self.field[0].clone(), self.field[1].clone()].into_iter())
+    }
+
+}
+
+fn convert_from_map(other : rhai::Dynamic) -> Result<MyStruct, Box<rhai::EvalAltResult>> {
+    match other.try_cast::<rhai::Map>() {
+        Some(map) => {
+            match map.get("field") {
+                Some(v) => {
+                    match v.clone().try_cast::<rhai::Array>() {
+                        Some(arr) => {
+                            match (arr.get(0).and_then(|v| v.clone().try_cast::<i64>()), arr.get(1).and_then(|v| v.clone().try_cast::<i64>())) {
+                                (Some(v1), Some(v2)) => {
+                                    Ok(MyStruct { field : [v1, v2] })
+                                },
+                                _ => Err(Box::new("Invalid fields".into()))
+                            }
+                        },
+                        None => Err(Box::new("Field is not array".into()))
+                    }
+                },
+                None => Err(Box::new("Missing field".into()))
+            }
+        },
+        None => Err(Box::new("Result is not a map".into()))
+    }
+}
+
+impl deft::Interactive for MyStruct {
+
+    #[export_name="register_MyStruct"]
+    extern "C" fn interactive() -> Box<deft::RegistrationInfo> {
+        deft::RegistryType::<Self>::builder()
+            .method("add_one", |a : i64| -> Result<i64, Box<rhai::EvalAltResult>> { Ok(a + 1) })
+            .iterable()
+            .initializable()
+            .parseable()
+            .indexable(|s : &mut Self, ix : i64| { Ok(s.field[ix as usize]) })
+            .mutably_indexable(|s : &mut Self, ix : i64, val : i64| { s.field[ix as usize] = val; Ok(()) })
+            .field("field", |s : &mut MyStruct| { Ok(vec![rhai::Dynamic::from(s.field[0]), rhai::Dynamic::from(s.field[1])]) })
+            .convertible(|s : &mut Self, other : rhai::Dynamic| { convert_from_map(other) })
+            .priority(0)
+            .register()
+    }
+
+}
+
+impl deft::Show for Image<u8> {
+
+    fn show(&self) {
+
+        use std::process::Command;
+        use tempfile;
+
+        let mut tf = tempfile::NamedTempFile::new().unwrap();
+        let png = crate::io::encode(self.clone()).unwrap();
+        tf.write_all(&png).unwrap();
+        let path = tf.path();
+        let new_path = format!("{}.png", path.to_str().unwrap());
+        fs::rename(path, new_path.clone()).unwrap();
+        Command::new("eog")
+            .args(&[&new_path])
+            .output()
+            .unwrap();
+    }
+}
+
+impl deft::Embed for Image<u8> {
+
+    fn embed(&self) -> String {
+        crate::io::to_html(&self.full_window())
+    }
+
+}
+
+impl deft::Interactive for Image<u8> {
+
+    fn short_name() -> &'static str {
         "Image"
+    }
+
+    #[export_name="register_Image"]
+    extern "C" fn interactive() -> Box<deft::RegistrationInfo> {
+
+        use rhai::{Dynamic, Array};
+        use deft::ReplResult;
+
+        deft::RegistryType::<Self>::builder()
+            .method("open",
+            |img : &mut Self, path : rhai::ImmutableString| -> Result<Self, Box<rhai::EvalAltResult>> {
+                let new_img = crate::io::decode_from_file(&path)
+                    .map_err(|e| Box::new(rhai::EvalAltResult::from(format!("{}", e))) )?;
+                Ok(new_img)
+            })
+            .method("shape", |s : &mut Self| -> ReplResult<Array> {
+                Ok(vec![Dynamic::from(s.height() as i64), Dynamic::from(s.width() as i64) ])
+            })
+            .method("height", |s : &mut Self| -> ReplResult<i64> { Ok(s.height() as i64) })
+            .method("width", |s : &mut Self| -> ReplResult<i64> { Ok(s.width() as i64) })
+            .method("mark", |s : &mut Self, marks : Array| -> ReplResult<()> {
+                println!("{:?}", s.shape());
+                for mark in marks.iter() {
+                    match mark.clone().try_cast::<Patch>() {
+                        Some(patch) => {
+                            s.full_window_mut().draw(Mark::Shape(patch.outer_points(crate::feature::patch::ExpansionMode::Contour), 255));
+                        },
+                        None => {
+                            return Err("Mark is not patch".into());
+                        }
+                    }
+                }
+                Ok(())
+            })
+            .initializable()
+            .showable()
+            .embeddable()
+            .priority(0)
+            .register()
+    }
+
+}
+
+/*impl interactive::Interactive for Image<u8> {
+
+    // fn hosrt_name() -> &'static str {
+    //    "Image"
+    // }
+
+    fn new() -> Self {
+        unimplemented!()
     }
 
     fn embed(&self) -> Option<String> {
@@ -1998,7 +2169,7 @@ impl interactive::Interactive for Image<u8> {
     // automatically taking care of the plumbing without exposing the engine
     // to the user.
 
-}
+}*/
 
 
 

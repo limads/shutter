@@ -23,6 +23,7 @@ use std::convert::TryFrom;
 use std::ops::Div;
 use std::ops::Add;
 use bayes;
+use serde::{Serialize, Deserialize};
 
 /*IppStatus ippiMarkSpeckles_<mod>(Ipp<datatype>* pSrcDst, int srcDstStep, IppiSize
 roiSize, Ipp<datatype> speckleVal, int maxSpeckleSize, Ipp<datatype> maxPixDiff,
@@ -65,7 +66,7 @@ pub fn intensity_above<const P : u8>(px : u8) -> bool {
 /// patch is dense (has no holes in it), we can represent it with another
 /// structure called contour, holding only external boundray pixels. If the patch
 /// has holes, we must represent all pixels with this patch structure.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Patch {
     // Instead of storing all pixels, we can store a rect and only
     // the outer pixels. The rect is just characterized by a top-left
@@ -82,6 +83,18 @@ pub struct Patch {
 
     // Number of pixels inside it.
     area : usize
+}
+
+impl deft::Interactive for Patch {
+
+    #[export_name="register_Patch"]
+    extern "C" fn interactive() -> Box<deft::RegistrationInfo> {
+        deft::RegistryType::<Self>::builder()
+            .initializable()
+            .parseable()
+            .register()
+    }
+
 }
 
 /*fn patch_from_grouped_rows(
@@ -356,7 +369,7 @@ fn patch_growth() {
     img[(7,7)] = 1;
     img[(7,8)] = 1;*/
 
-    println!("{:?}", Patch::grow(&img.full_window(), (11, 11), 1, ColorMode::Exact(1), ReferenceMode::Constant, None, ExpansionMode::Contour));
+    // println!("{:?}", Patch::grow(&img.full_window(), (11, 11), 1, ColorMode::Exact(1), ReferenceMode::Constant, None, ExpansionMode::Contour));
 }
 
 // Extract a single patch, using the color momentum as seed.
@@ -1032,6 +1045,11 @@ impl Patch {
         }
     }
 
+}
+
+#[test]
+fn segmentation_test() {
+    // script!("scripts/segmentation.rh")
 }
 
 pub enum NestedPatch {

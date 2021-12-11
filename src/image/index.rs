@@ -43,8 +43,9 @@ where
     let height = dst_y - src_y;
     
     // We can use abs here because reflecting the triangle over the vertical or horizontal axis
-    // does not change its hypotenuse.
+    // does not change its hypotenuse lenght.
     let dist = base.abs().hypot(height.abs());
+
     let theta = height.atan2(base);
     
     (dist, theta)

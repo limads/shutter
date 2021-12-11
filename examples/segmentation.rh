@@ -1,0 +1,12 @@
+#!~/.cargo/bin/deft-run
+
+{
+    let img = Image().open("/home/diego/Downloads/index.png");
+    let raster = RasterSegmenter(img.height(), img.width(), 1);
+    // let patches = raster.segment_single(img, 20);
+    let patches = raster.segment_all(img, 20);
+    img.mark(patches);
+    img.show();
+}
+
+

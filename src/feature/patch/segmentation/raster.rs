@@ -17,7 +17,9 @@ pub struct RasterSegmenter {
     // Holds how many pixels are there for each row for the given patch
     // n_matches_row : Vec<u16>,
 
-    search : PatchSearch
+    search : PatchSearch,
+
+    win_sz : (usize, usize)
 }
 
 impl RasterSegmenter {
@@ -28,14 +30,16 @@ impl RasterSegmenter {
             prev_row_mask.push(false);
         }
         let search = PatchSearch::new(win_sz, px_spacing);
-        Self { patches : Vec::with_capacity(16), px_spacing, n_patches : 0, prev_row_mask, search, /*n_matches_row, n_matches_col*/ }
+        Self { patches : Vec::with_capacity(16), px_spacing, n_patches : 0, prev_row_mask, search, win_sz, /*n_matches_row, n_matches_col*/ }
     }
 
     // TODO use color mode to EXCLUDE a given color. Then, the struct should also hold a top
     // row with the marker telling whether ANY of the admissible colors were found.
-    pub fn segment_all<'a>(&'a mut self, win : &WindowMut<'_, u8>, margin : u8, exp_mode : ExpansionMode) -> &'a [Patch] {
-        let src_win = unsafe { crate::image::create_immutable(&win) };
-        let n_patches = full_color_patches(&mut self.search, /*&mut self.n_matches_row, &mut self.n_matches_col,*/ &mut self.patches, &src_win, self.px_spacing.try_into().unwrap(), margin, exp_mode);
+    pub fn segment_all<'a>(&'a mut self, win : &Window<'_, u8>, margin : u8, exp_mode : ExpansionMode) -> &'a [Patch] {
+        // let src_win = unsafe { crate::image::create_immutable(&win) };
+        assert!(win.shape() == self.win_sz);
+        assert!(win.shape().1 / self.px_spacing == self.search.prev_row_patch_ixs.len());
+        let n_patches = full_color_patches(&mut self.search, &mut self.patches, &win, self.px_spacing.try_into().unwrap(), margin, exp_mode);
         self.n_patches = n_patches;
         &self.patches[0..self.n_patches]
     }
@@ -45,6 +49,8 @@ impl RasterSegmenter {
     where
         F : Fn(u8)->bool
     {
+        assert!(win.shape() == self.win_sz);
+        assert!(win.shape().1 / self.px_spacing == self.search.prev_row_patch_ixs.len());
         assert!(win.width() / self.px_spacing == self.prev_row_mask.len());
         let n_patches = unsafe {
             single_color_patches(
@@ -64,6 +70,39 @@ impl RasterSegmenter {
 
     pub fn patches(&self) -> &[Patch] {
         &self.patches[0..self.n_patches]
+    }
+
+}
+
+impl deft::Interactive for RasterSegmenter {
+
+    #[export_name="register_RasterSegmenter"]
+    extern "C" fn interactive() -> Box<deft::RegistrationInfo> {
+
+        use deft::ReplResult;
+        use rhai::{Array, Dynamic};
+
+        deft::RegistryType::<Self>::builder()
+            .function("RasterSegmenter", |h : i64, w : i64, spacing : i64| -> ReplResult<Self> {
+                Ok(Self::new((h as usize, w as usize), spacing as usize))
+            })
+            .method("segment_all", |s : &mut Self, w : Image<u8>, margin : i64| -> ReplResult<Array> {
+                let patches = s.segment_all(&w.full_window(), margin as u8, ExpansionMode::Contour)
+                    .iter()
+                    .map(|patch| Dynamic::from(patch.clone()) )
+                    .collect::<Vec<_>>();
+                Ok(patches)
+            })
+            .method("segment_single", |s : &mut Self, w : Image<u8>, below : i64| -> ReplResult<Array> {
+                let patches = s.segment_single_color(&w.full_window(), move |px| { px <= below as u8 }, ExpansionMode::Contour)
+                    .iter()
+                    .map(|patch| Dynamic::from(patch.clone()) )
+                    .collect::<Vec<_>>();
+                    println!("{} patches", patches.len());
+                Ok(patches)
+            })
+            .priority(1)
+            .register()
     }
 
 }
@@ -268,22 +307,7 @@ where
     }
 
     if exp_mode == ExpansionMode::Contour {
-
-        // A contour should have at least three pixel points. Remove the ones
-        // without this many points.
-        let mut ix = 0;
-        while ix < n_patches {
-            if patches[ix].pxs.len() < 3 {
-                patches.swap(ix, n_patches-1);
-                n_patches -= 1;
-            } else {
-                ix += 1;
-            }
-        }
-
-        for mut patch in patches[0..n_patches].iter_mut() {
-            close_contour(patch, win);
-        }
+        filter_contours(&mut n_patches, patches, win);
     }
 
     // assert!(search.contour_state.n_elems == n_patches);
@@ -340,12 +364,30 @@ fn full_color_patches(
     }
 
     if exp_mode == ExpansionMode::Contour {
-        for mut patch in patches[0..n_patches].iter_mut() {
-            close_contour(patch, win);
-        }
+        filter_contours(&mut n_patches, patches, win);
     }
 
     n_patches
+}
+
+fn filter_contours(n_patches : &mut usize, patches : &mut Vec<Patch>, win : &Window<'_, u8>) {
+
+    // A contour should have at least three pixel points. Remove the ones
+    // without this many points.
+    let mut ix = 0;
+    while ix < *n_patches {
+        if patches[ix].pxs.len() < 3 {
+            patches.swap(ix, *n_patches-1);
+            *n_patches -= 1;
+        } else {
+            ix += 1;
+        }
+    }
+
+    for mut patch in patches[0..*n_patches].iter_mut() {
+        close_contour(patch, win);
+    }
+
 }
 
 // TODO review patch color strategy. For now, the patch color
@@ -487,4 +529,22 @@ fn test_patches() {
         // println!("{:?}", patch.polygon());
     }
 }
+
+#[test]
+fn test_raster() {
+
+    use deft::Show;
+    use crate::image::Mark;
+
+    let mut img = crate::io::decode_from_file("/home/diego/Downloads/full_bright_image2.png").unwrap();
+    let mut raster = RasterSegmenter::new((img.height(), img.width()), 1);
+    let patches = raster.segment_single_color(&img.full_window(), |b| b < 30, ExpansionMode::Contour);
+    for patch in patches {
+        img.full_window_mut().draw(Mark::Shape(patch.outer_points(ExpansionMode::Contour), 255));
+    }
+    // img.full_window_mut().draw(Mark::Rect((1,1), (10, 10), 255));
+    img.show();
+    // crate::io::encode_to_file(img, "/home/diego/Downloads/index-drawn.png");
+}
+
 

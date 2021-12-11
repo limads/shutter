@@ -134,22 +134,34 @@ pub fn draw_line(
     dst : (usize, usize),
     color : u8 
 ) {
-    let (nrow, _) = img_dims;
+    let (nrow, ncol) = img_dims;
+
+    // Draw straight horizontal line (if applicable)
+    if src.0 == dst.0 {
+        for c in src.1.min(dst.1)..(src.1.max(dst.1)) {
+            buf[src.0*ncol + c] = color;
+        }
+        return;
+    }
+
+    // Draw straight vertical line (if applicable)
+    if src.1 == dst.1 {
+        for r in src.0.min(dst.0)..(src.0.max(dst.0)) {
+            buf[r*ncol + src.1] = color;
+        }
+        return;
+    }
+
+    // Draw non-straight line. A bit more costly, since we must calculate the
+    // inclination angle, and fill all pixels across the diagonal.
     let (dist, theta) = index::index_distance(src, dst, nrow);
-    // println!("dist = {}; theta = {}", dist, theta);
     let d_max = dist as usize;
-    // let reflect_x = if theta.abs() > HALF_PI { -1.0 } else { 1.0 };
-    // let reflect_y = if theta < 0.0 { -1.0 } else { 1.0 };
-    // println!("Reflect x : {}; Reflect y: {}", reflect_x, reflect_y);
     for i in 0..d_max {
         let x_incr = theta.cos() * i as f64;
         let y_incr = theta.sin() * i as f64;
         let x_pos = (src.1 as i32 + x_incr as i32) as usize;
         let y_pos = (src.0 as i32 - y_incr as i32) as usize;
-        // println!("y index incr = {} (double)", (y_incr*reflect));
-        // println!("y index incr = {} (usize)", (y_incr*reflect) as usize);
-        // println!("x_incr = {}; y_incr = {}; x_pos = {}; y_pos = {}", x_incr, y_incr, x_pos, y_pos);
-        buf[y_pos*nrow + x_pos] = color;
+        buf[y_pos*ncol + x_pos] = color;
     }
 }
 

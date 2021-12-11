@@ -1,7 +1,7 @@
 use std::io::BufWriter;
 use ::image::codecs::png;
 use crate::image::Image;
-use ::image::{ImageDecoder, ColorType};
+use ::image::{ImageDecoder, ColorType, ExtendedColorType};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::iter::FromIterator;
@@ -35,6 +35,12 @@ pub fn decode(
     if color_type != ColorType::L8 {
         return Err("Image import error: Unsupported color type. Convert image to L8 first.");
     }
+
+    let ext_color_type = dec.original_color_type();
+    if ext_color_type != ExtendedColorType::L8 {
+        return Err("Image import error: Unsupported color type. Convert image to L8 first.");
+    }
+
     let nrows = dec.dimensions().1 as usize;
     let ncols = dec.dimensions().0 as usize;
     let mut buf = Vec::<u8>::from_iter((0..(nrows * ncols)).map(|_| 0 ));
