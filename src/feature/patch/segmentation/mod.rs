@@ -39,6 +39,8 @@ pub mod seed;
 
 pub mod raster;
 
+pub mod density;
+
 // use nohash-hasher;
 
 // use crate::feature::shape;
@@ -91,6 +93,35 @@ impl deft::Interactive for Patch {
     extern "C" fn interactive() -> Box<deft::RegistrationInfo> {
         deft::RegistryType::<Self>::builder()
             .initializable()
+            .method("outer_rect", |s : &mut Self| -> deft::ReplResult<rhai::Array> {
+                let out = s.outer_rect::<i64>();
+                Ok(vec![
+                    rhai::Dynamic::from(out.0),
+                    rhai::Dynamic::from(out.1),
+                    rhai::Dynamic::from(out.2),
+                    rhai::Dynamic::from(out.3)
+                ])
+            })
+            .method("contour_points", |s : &mut Self| -> deft::ReplResult<rhai::Array> {
+                let mut pts = Vec::new();
+                for pt in s.outer_points::<i64>(ExpansionMode::Contour) {
+                    pts.push(rhai::Dynamic::from(vec![
+                        rhai::Dynamic::from(pt.0 as i64),
+                        rhai::Dynamic::from(pt.1 as i64)
+                    ]));
+                }
+                Ok(pts)
+            })
+            .method("dense_points", |s : &mut Self| -> deft::ReplResult<rhai::Array> {
+                let mut pts = Vec::new();
+                for pt in s.outer_points::<i64>(ExpansionMode::Dense) {
+                    pts.push(rhai::Dynamic::from(vec![
+                        rhai::Dynamic::from(pt.0 as i64),
+                        rhai::Dynamic::from(pt.1 as i64)
+                    ]));
+                }
+                Ok(pts)
+            })
             .parseable()
             .register()
     }

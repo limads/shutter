@@ -117,7 +117,11 @@ impl SeedGrowth {
     {
         self.front.reset(seed);
         self.patch.pxs.clear();
-        self.patch.pxs.push(seed);
+
+        if self.exp_mode == ExpansionMode::Dense {
+            self.patch.pxs.push(seed);
+        }
+
         self.patch.outer_rect = (seed.0, seed.1, 1, 1);
         self.patch.color = win[seed];
         self.patch.scale = self.px_spacing as u16;
@@ -132,18 +136,13 @@ impl SeedGrowth {
 
 }
 
-// Dense strategy here.
-// TODO to build patch with only the external contour, verify which elements
-// past_row and curr_row have in common. Drop all elements of past_row that also
-// are present in current row, and push current_row and all remaining elements of
-// past_row that were not dropped. Perhaps we can make this function generic over which
-// allocation strategy to self.pxs we use here.
 fn expand_patch(
     exp_patch : &mut ExpansionFront,
     patch : &mut Patch,
     outer_rect : (u16, u16, u16, u16),
     mode : ExpansionMode,
-    win : &Window<'_, u8>
+    win : &Window<'_, u8>,
+    seed : (u16, u16)
 ) {
 
     // Only push corner when those conditions are not met for the desired pair.
@@ -169,8 +168,8 @@ fn expand_patch(
     let corners_joined = [(tl_joined, tr_joined), (tl_joined, bl_joined), (bl_joined, br_joined), (tr_joined, br_joined)];
 
     for (mut ext, (fst_corner, snd_corner)) in exp_fronts.iter_mut().zip(corners_joined.iter()) {
-        let is_seed = ext.past.len() == 1 && ext.past.get(0).cloned() == Some((patch.pxs[0]));
-        if is_seed {
+        let past_is_seed = ext.past.len() == 1 && ext.past[0].clone() == /*Some((patch.pxs[0]))*/ seed;
+        if past_is_seed {
             ext.past.clear();
             mem::swap(&mut ext.curr, &mut ext.past);
             continue;
@@ -372,6 +371,13 @@ where
     let mut sum : u64 = win[seed] as u64;
 
     let (h, w) = (win.height() as u16, win.width() as u16);
+
+    if exp_mode == ExpansionMode::Contour {
+        assert!(patch.pxs.len() == 0);
+    } else {
+        assert!(patch.pxs.len() == 1);
+    }
+
     loop {
         assert!(exp_patch.top.curr.is_empty() && exp_patch.left.curr.is_empty() && exp_patch.right.curr.is_empty() && exp_patch.bottom.curr.is_empty());
         let left_col = if grows_left { seed.1.checked_sub(abs_dist) } else { None };
@@ -461,7 +467,7 @@ where
             if let Some(c) = right_col {
                 for r in /*row_range.skip(1).take(row_end-1)*/ right_range.clone() {
                     let px = (r, c);
-                    let is_corner = (c == right_range.start || c == right_range.end-1);
+                    let is_corner = (r == right_range.start || r == right_range.end-1);
                     if comp(win[px]) && (is_corner || ( /*pixel_to_right_of_rect(&outer_rect, px) &&*/ pixel_neighbors_right(&exp_patch, px))) {
                         if !grows_right {
                             // outer_rect.3 += px_spacing;
@@ -477,7 +483,7 @@ where
         let grows_any = grows_left || grows_right || grows_bottom || grows_top;
         expand_rect_with_front(&mut outer_rect, &exp_patch);
         patch.outer_rect = outer_rect;
-        expand_patch(exp_patch, patch, outer_rect, exp_mode, win);
+        expand_patch(exp_patch, patch, outer_rect, exp_mode, win, seed);
 
         if let Some(area) = max_area {
             if /*patch.pxs.len()*/ outer_rect.2 * outer_rect.3 > area as u16 {
@@ -489,7 +495,7 @@ where
             if exp_mode == ExpansionMode::Contour {
 
                 // Remove seed before closing patch
-                patch.pxs.swap_remove(0);
+                // patch.pxs.swap_remove(0);
 
                 // A contour should have at least three pixel points. A dense
                 // patch can have any number of points >= 1.
@@ -507,6 +513,11 @@ where
     }
 
     assert!(patch.pxs.len() > 0);
+
+    if exp_mode == ExpansionMode::Contour {
+        assert!(patch.pxs.iter().find(|px| **px == seed ).is_none());
+    }
+
     // Some(patch)
     true
 }

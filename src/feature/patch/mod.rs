@@ -164,22 +164,33 @@ pub struct Mode {
 }
 
 /// Calculates the intensity histogram of the image read.
-/// Always return a 256-sized vector of bit values.
+/// Always return a 256-sized vector of bit values. The second
+/// field returns the total number of pixels at the image.
 #[derive(Debug, Clone)]
-pub struct DenseHistogram([usize; 256]);
+pub struct DenseHistogram([usize; 256], usize);
 
 impl DenseHistogram {
 
     pub fn calculate_from_pixels<'a>(px_iter : impl Iterator<Item=&'a u8>) -> Self {
         let mut hist = [0; 256];
+        let mut n_pxs = 0;
         for px in px_iter {
             hist[*px as usize] += 1;
+            n_pxs += 1;
         }
-        Self(hist)
+        Self(hist, n_pxs)
     }
 
     pub fn calculate(win : &Window<'_, u8>, spacing : usize) -> Self {
         Self::calculate_from_pixels(win.pixels(spacing))
+    }
+
+    pub fn quantiles(&self, qs : &[f64]) -> Vec<u8> {
+        use bayes::calc::running;
+        running::quantiles(&mut self.0.iter().cloned(), self.1, qs)
+            .iter()
+            .map(|qs| qs.0 as u8 )
+            .collect()
     }
 
     /// Returns the histogram modes. The vector contains at most [required] modes,

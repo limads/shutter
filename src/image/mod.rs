@@ -1170,7 +1170,7 @@ pub enum Mark {
     Digit((usize, usize), usize, usize, u8),
 
     // Position, label, digit value, size and color
-    Label((usize, usize), &'static str, usize, u8),
+    // Label((usize, usize), &'static str, usize, u8),
 
     // Center, radius and color
     Circle((usize, usize), usize, u8),
@@ -1371,7 +1371,7 @@ impl WindowMut<'_, u8> {
                 
                 draw::draw_digit_native(self.win, self.orig_sz.1, tl_pos, val, sz, color);
             },
-            Mark::Label(pos, msg, sz, color) => {
+            /*Mark::Label(pos, msg, sz, color) => {
                 let tl_pos = (self.offset.0 + pos.0, self.offset.1 + pos.1);
 
                 #[cfg(feature="opencvlib")]
@@ -1381,7 +1381,7 @@ impl WindowMut<'_, u8> {
                 }
 
                 panic!("Label draw require 'opencvlib' feature");
-            },
+            },*/
             Mark::Circle(pos, radius, color) => {
                 let center_pos = (self.offset.0 + pos.0, self.offset.1 + pos.1);
 
@@ -1988,6 +1988,15 @@ impl deft::Interactive for MyStruct {
 
 }
 
+#[test]
+fn deft_test() {
+    let a = 1i64;
+    let b = String::from("Hello");
+    let c = &1i64;
+    let d = MyStruct { field : [0, 1] };
+    deft::repl!(a, b, c, d);
+}
+
 impl deft::Show for Image<u8> {
 
     fn show(&self) {
@@ -2040,8 +2049,8 @@ impl deft::Interactive for Image<u8> {
             })
             .method("height", |s : &mut Self| -> ReplResult<i64> { Ok(s.height() as i64) })
             .method("width", |s : &mut Self| -> ReplResult<i64> { Ok(s.width() as i64) })
-            .method("mark", |s : &mut Self, marks : Array| -> ReplResult<()> {
-                println!("{:?}", s.shape());
+            .method("draw", |s : &mut Self, mark : rhai::Map| -> ReplResult<()> {
+                /*println!("{:?}", s.shape());
                 for mark in marks.iter() {
                     match mark.clone().try_cast::<Patch>() {
                         Some(patch) => {
@@ -2051,7 +2060,10 @@ impl deft::Interactive for Image<u8> {
                             return Err("Mark is not patch".into());
                         }
                     }
-                }
+                }*/
+
+                let mark : Mark = deft::convert::deserialize_from_map(mark).unwrap();
+                s.full_window_mut().draw(mark);
                 Ok(())
             })
             .initializable()

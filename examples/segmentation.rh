@@ -1,11 +1,22 @@
 #!~/.cargo/bin/deft-run
 
+// let raster = RasterSegmenter(img.height(), img.width(), 1);
+// let patches = raster.segment_single(img, 20);
+// let patches = raster.segment_all(img, 20);
+// img.draw(#{ "Rect" : [[r[0], r[1]], [r[2], r[3]], 255] });
+// Neighboring Pixels are spaced by 1 / win_dim at the vertical then horizontal
+// distance, so the "distance" for neighboring pixels will be sqrt((1/win_dim)^2 + (1/win_dim)^2)
 {
-    let img = Image().open("/home/diego/Downloads/index.png");
-    let raster = RasterSegmenter(img.height(), img.width(), 1);
-    // let patches = raster.segment_single(img, 20);
-    let patches = raster.segment_all(img, 20);
-    img.mark(patches);
+    let img = Image().open("/home/diego/Downloads/eye-120.png");
+    let seg = DensitySegmenter();
+    seg.set_px_spacing(2);
+    seg.set_color_weight(8.0);
+    seg.set_dims([120, 120]);
+    let patches = seg.segment(img, 4.0, 4);
+    for patch in patches {
+    	let r = patch.outer_rect();
+    	img.draw(#{ "Shape" : [patch.dense_points(), 255] });
+    }
     img.show();
 }
 
