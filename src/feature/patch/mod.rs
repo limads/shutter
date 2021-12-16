@@ -34,7 +34,7 @@ impl ColorCluster {
 #[derive(Clone, Debug)]
 pub struct ColorClustering {
     pub colors : Vec<ColorCluster>,
-    pub hist : Option<DenseHistogram>
+    pub hist : Option<ColorProfile>
 }
 
 impl ColorClustering {
@@ -82,9 +82,9 @@ impl ColorClustering {
 /// (2) For images 2..n:
 ///     (2.1). Find closest mean to each pixel
 ///     (2.2). Modify pixels to have this mean value.
-pub fn segment_colors<'a>(pxs : impl Iterator<Item=&'a u8> + 'a + Clone, n_colors : usize, hist_init : bool) -> (KMeans, Option<DenseHistogram>) {
+pub fn segment_colors<'a>(pxs : impl Iterator<Item=&'a u8> + 'a + Clone, n_colors : usize, hist_init : bool) -> (KMeans, Option<ColorProfile>) {
     let hist = if hist_init {
-        Some(DenseHistogram::calculate_from_pixels(pxs.clone()))
+        Some(ColorProfile::calculate_from_pixels(pxs.clone()))
     } else {
         None
     };
@@ -149,7 +149,7 @@ impl SparseHistogram {
     }
 }
 
-impl From<SparseHistogram> for DenseHistogram {
+impl From<SparseHistogram> for ColorProfile {
 
     fn from(sparse : SparseHistogram) -> Self {
         unimplemented!()
@@ -165,11 +165,19 @@ pub struct Mode {
 
 /// Calculates the intensity histogram of the image read.
 /// Always return a 256-sized vector of bit values. The second
-/// field returns the total number of pixels at the image.
+/// field contains the total number of pixels at the image.
 #[derive(Debug, Clone)]
-pub struct DenseHistogram([usize; 256], usize);
+pub struct ColorProfile([usize; 256], usize);
 
-impl DenseHistogram {
+impl Default for ColorProfile {
+
+    fn default() -> Self {
+        ColorProfile([0; 256], 0)
+    }
+
+}
+
+impl ColorProfile {
 
     pub fn calculate_from_pixels<'a>(px_iter : impl Iterator<Item=&'a u8>) -> Self {
         let mut hist = [0; 256];
@@ -225,8 +233,12 @@ impl DenseHistogram {
             }).collect()
     }
 
-    pub fn bins<'a>(&'a self) -> impl Iterator<Item=(u8, usize)> + Clone + 'a {
+    pub fn iter_bins<'a>(&'a self) -> impl Iterator<Item=(u8, usize)> + Clone + 'a {
         self.0.iter().enumerate().map(|(ix, n)| (ix as u8, *n) )
+    }
+
+    pub fn bins(&self) -> &[usize; 256] {
+        &self.0
     }
 
     pub fn dense_regions(&self, min_count_per_px : usize, min_dist : f64, min_cluster_sz : usize) -> Vec<(u8, u8)> {
@@ -241,6 +253,21 @@ impl DenseHistogram {
             limits.push((clust[0][0] as u8, clust[clust.len()-1][0] as u8));
         }
         limits
+    }
+
+}
+
+impl deft::Interactive for ColorProfile {
+
+    #[link_name="register_ColorProfile"]
+    extern "C" fn interactive() -> Box<deft::TypeInfo> {
+        deft::TypeInfo::builder::<Self>()
+            .initializable()
+            .method("calculate", |s : &mut Self, img : crate::image::Image<u8>, spacing : i64| -> deft::ReplResult<Self> {
+                Ok(Self::calculate(&img.full_window(), spacing as usize))
+            })
+            .priority(1)
+            .register()
     }
 
 }
@@ -417,7 +444,7 @@ fn next_mode(
 fn find_modes() {
     use crate::image::Image;
     let a = Image::new_checkerboard(8, 2);
-    let hist = DenseHistogram::calculate(&a.full_window(), 1);
+    let hist = ColorProfile::calculate(&a.full_window(), 1);
     //println!("{:?}", a);
     //println!("{:?}", hist);
     //println!("{:?}", hist.modes(2, 2));

@@ -90,8 +90,8 @@ pub struct Patch {
 impl deft::Interactive for Patch {
 
     #[export_name="register_Patch"]
-    extern "C" fn interactive() -> Box<deft::RegistrationInfo> {
-        deft::RegistryType::<Self>::builder()
+    extern "C" fn interactive() -> Box<deft::TypeInfo> {
+        deft::TypeInfo::builder::<Self>()
             .initializable()
             .method("outer_rect", |s : &mut Self| -> deft::ReplResult<rhai::Array> {
                 let out = s.outer_rect::<i64>();

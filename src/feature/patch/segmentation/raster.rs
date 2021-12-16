@@ -77,12 +77,12 @@ impl RasterSegmenter {
 impl deft::Interactive for RasterSegmenter {
 
     #[export_name="register_RasterSegmenter"]
-    extern "C" fn interactive() -> Box<deft::RegistrationInfo> {
+    extern "C" fn interactive() -> Box<deft::TypeInfo> {
 
         use deft::ReplResult;
         use rhai::{Array, Dynamic};
 
-        deft::RegistryType::<Self>::builder()
+        deft::TypeInfo::builder::<Self>()
             .function("RasterSegmenter", |h : i64, w : i64, spacing : i64| -> ReplResult<Self> {
                 Ok(Self::new((h as usize, w as usize), spacing as usize))
             })
@@ -98,7 +98,6 @@ impl deft::Interactive for RasterSegmenter {
                     .iter()
                     .map(|patch| Dynamic::from(patch.clone()) )
                     .collect::<Vec<_>>();
-                    println!("{} patches", patches.len());
                 Ok(patches)
             })
             .priority(1)

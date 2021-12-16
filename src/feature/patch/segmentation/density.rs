@@ -110,12 +110,12 @@ impl DensitySegmenter {
 impl deft::Interactive for DensitySegmenter {
 
     #[export_name="register_DensitySegmenter"]
-    extern "C" fn interactive() -> Box<deft::RegistrationInfo> {
+    extern "C" fn interactive() -> Box<deft::TypeInfo> {
 
         use deft::ReplResult;
         use rhai::{Array, Dynamic};
 
-        deft::RegistryType::<Self>::builder()
+        deft::TypeInfo::builder::<Self>()
             .initializable()
             .method("set_px_spacing", |s : &mut Self, spacing : i64| -> ReplResult<()> {
                 s.set_px_spacing(spacing as usize);

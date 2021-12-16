@@ -458,6 +458,11 @@ impl<'a, N> Window<'a, N>
 where
     N : Scalar
 {
+
+    pub fn offset(&self) -> (usize, usize) {
+        self.offset
+    }
+
     pub fn is_full(&'a self) -> bool {
         self.orig_sz == self.win_sz
     }
@@ -1972,8 +1977,8 @@ fn convert_from_map(other : rhai::Dynamic) -> Result<MyStruct, Box<rhai::EvalAlt
 impl deft::Interactive for MyStruct {
 
     #[export_name="register_MyStruct"]
-    extern "C" fn interactive() -> Box<deft::RegistrationInfo> {
-        deft::RegistryType::<Self>::builder()
+    extern "C" fn interactive() -> Box<deft::TypeInfo> {
+        deft::TypeInfo::builder::<Self>()
             .method("add_one", |a : i64| -> Result<i64, Box<rhai::EvalAltResult>> { Ok(a + 1) })
             .iterable()
             .initializable()
@@ -2032,12 +2037,12 @@ impl deft::Interactive for Image<u8> {
     }
 
     #[export_name="register_Image"]
-    extern "C" fn interactive() -> Box<deft::RegistrationInfo> {
+    extern "C" fn interactive() -> Box<deft::TypeInfo> {
 
         use rhai::{Dynamic, Array};
         use deft::ReplResult;
 
-        deft::RegistryType::<Self>::builder()
+        deft::TypeInfo::builder::<Self>()
             .method("open",
             |img : &mut Self, path : rhai::ImmutableString| -> Result<Self, Box<rhai::EvalAltResult>> {
                 let new_img = crate::io::decode_from_file(&path)
@@ -2107,7 +2112,7 @@ impl deft::Interactive for Image<u8> {
     }
 
     #[export_name="register_image"]
-    extern "C" fn interactive(registry : Box<interactive::Registry<'_>>) -> Box<interactive::RegistrationInfo> {
+    extern "C" fn interactive(registry : Box<interactive::Registry<'_>>) -> Box<interactive::TypeInfo> {
 
         registry.add::<Self>()
             .fallible_method("cat", |a : rhai::ImmutableString| -> Result<String, Box<rhai::EvalAltResult>> { Ok(format!("{}hellofromclient", a)) })
