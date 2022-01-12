@@ -87,13 +87,13 @@ pub struct Patch {
     area : usize
 }
 
-impl deft::Interactive for Patch {
+/*impl deft::Interactive for Patch {
 
     #[export_name="register_Patch"]
     extern "C" fn interactive() -> Box<deft::TypeInfo> {
         deft::TypeInfo::builder::<Self>()
             .initializable()
-            .method("outer_rect", |s : &mut Self| -> deft::ReplResult<rhai::Array> {
+            .fallible("outer_rect", |s : &mut Self| -> deft::ReplResult<rhai::Array> {
                 let out = s.outer_rect::<i64>();
                 Ok(vec![
                     rhai::Dynamic::from(out.0),
@@ -102,7 +102,7 @@ impl deft::Interactive for Patch {
                     rhai::Dynamic::from(out.3)
                 ])
             })
-            .method("contour_points", |s : &mut Self| -> deft::ReplResult<rhai::Array> {
+            .fallible("contour_points", |s : &mut Self| -> deft::ReplResult<rhai::Array> {
                 let mut pts = Vec::new();
                 for pt in s.outer_points::<i64>(ExpansionMode::Contour) {
                     pts.push(rhai::Dynamic::from(vec![
@@ -112,7 +112,7 @@ impl deft::Interactive for Patch {
                 }
                 Ok(pts)
             })
-            .method("dense_points", |s : &mut Self| -> deft::ReplResult<rhai::Array> {
+            .fallible("dense_points", |s : &mut Self| -> deft::ReplResult<rhai::Array> {
                 let mut pts = Vec::new();
                 for pt in s.outer_points::<i64>(ExpansionMode::Dense) {
                     pts.push(rhai::Dynamic::from(vec![
@@ -123,10 +123,10 @@ impl deft::Interactive for Patch {
                 Ok(pts)
             })
             .parseable()
-            .register()
+            .build()
     }
 
-}
+}*/
 
 /*fn patch_from_grouped_rows(
     sorted_rows : &[usize],
@@ -435,6 +435,8 @@ fn pixel_below_rect(outer_rect : &(u16, u16, u16, u16), (r, c) : (u16, u16)) -> 
     pixel_horizontally_aligned_to_rect(outer_rect, (r, c))
 }
 
+/// A pixel neighbor is a pixel with distance 1 to another. Searches the set at row/col
+/// for a pixel with this distance, assuming the row is ordered by column
 fn pixel_neighbors_row(row : &[(u16, u16)], px : (u16, u16)) -> bool {
     row.binary_search_by(|row_px|
         if (row_px.1 as i16 - px.1 as i16).abs() <= 1 {
@@ -445,6 +447,7 @@ fn pixel_neighbors_row(row : &[(u16, u16)], px : (u16, u16)) -> bool {
     ).is_ok()
 }
 
+/// See docs for pixel_neighbors_row. The same logic applies here.
 fn pixel_neighbors_col(col : &[(u16, u16)], px : (u16, u16)) -> bool {
     col.binary_search_by(|col_px|
         // if (col_px.0 as i16 - px.0 as i16).abs() <= 1 {
@@ -559,6 +562,10 @@ impl Patch {
         shape::contour_perimeter(&self.pxs[..])
     }
 
+    pub fn perimeter(&self) -> f32 {
+        self.unscaled_perimeter() * self.scale as f32
+    }
+
     pub fn circularity(&self) -> Option<f32> {
         // let poly = self.polygon()?;
         // let (area, _) = parry2d::mass_properties::details::convex_polygon_area_and_center_of_mass(&poly.points());
@@ -585,7 +592,7 @@ impl Patch {
 
     /// Number of pixels contained in the patch.
     pub fn area(&self) -> usize {
-        self.area
+        self.area * self.scale as usize
     }
 
     /// Starts a new patch.

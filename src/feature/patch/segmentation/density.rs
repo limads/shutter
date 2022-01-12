@@ -107,7 +107,7 @@ impl DensitySegmenter {
 
 }
 
-impl deft::Interactive for DensitySegmenter {
+/*impl deft::Interactive for DensitySegmenter {
 
     #[export_name="register_DensitySegmenter"]
     extern "C" fn interactive() -> Box<deft::TypeInfo> {
@@ -117,19 +117,19 @@ impl deft::Interactive for DensitySegmenter {
 
         deft::TypeInfo::builder::<Self>()
             .initializable()
-            .method("set_px_spacing", |s : &mut Self, spacing : i64| -> ReplResult<()> {
+            .fallible("set_px_spacing", |s : &mut Self, spacing : i64| -> ReplResult<()> {
                 s.set_px_spacing(spacing as usize);
                 Ok(())
             })
-            .method("set_dims", |s : &mut Self, dims : rhai::Array| -> ReplResult<()> {
+            .fallible("set_dims", |s : &mut Self, dims : rhai::Array| -> ReplResult<()> {
                 s.set_dims((dims[0].clone().cast::<i64>() as usize, dims[1].clone().cast::<i64>() as usize));
                 Ok(())
             })
-            .method("set_color_weight", |s : &mut Self, weight : f64| -> ReplResult<()> {
+            .fallible("set_color_weight", |s : &mut Self, weight : f64| -> ReplResult<()> {
                 s.set_color_weight(weight);
                 Ok(())
             })
-            .method("segment", |s : &mut Self, w : Image<u8>, max_dist : f64, min_cluster_sz : i64| -> ReplResult<Array> {
+            .fallible("segment", |s : &mut Self, w : Image<u8>, max_dist : f64, min_cluster_sz : i64| -> ReplResult<Array> {
                 let patches = s.segment(&w.full_window(), max_dist, min_cluster_sz as usize, |_| true )
                     .iter()
                     .map(|patch| Dynamic::from(patch.clone()) )
@@ -137,7 +137,9 @@ impl deft::Interactive for DensitySegmenter {
                 Ok(patches)
             })
             .priority(1)
-            .register()
+            .build()
     }
 
-}
+}*/
+
+

@@ -257,20 +257,20 @@ impl ColorProfile {
 
 }
 
-impl deft::Interactive for ColorProfile {
+/*impl deft::Interactive for ColorProfile {
 
-    #[link_name="register_ColorProfile"]
+    #[export_name="register_ColorProfile"]
     extern "C" fn interactive() -> Box<deft::TypeInfo> {
         deft::TypeInfo::builder::<Self>()
             .initializable()
-            .method("calculate", |s : &mut Self, img : crate::image::Image<u8>, spacing : i64| -> deft::ReplResult<Self> {
+            .fallible("calculate", |s : &mut Self, img : crate::image::Image<u8>, spacing : i64| -> deft::ReplResult<Self> {
                 Ok(Self::calculate(&img.full_window(), spacing as usize))
             })
             .priority(1)
-            .register()
+            .build()
     }
 
-}
+}*/
 
 fn bump_modes(
     modes : &mut Vec<Mode>,

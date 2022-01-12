@@ -24,6 +24,10 @@ use std::ops::Add;
 use bayes;
 use super::*;
 
+/// Represents an iteration for one of the four expansion fronts for a convex shape
+/// that is supposed to be grown from a pixel seed. "curr" holds pixels that match
+/// the patch color for the current border. "past" holds pixels that matched the
+/// patch color at the previous iteration.
 #[derive(Default, Clone, Debug)]
 struct RowPair {
     curr : Vec<(u16, u16)>,
@@ -32,6 +36,7 @@ struct RowPair {
 
 impl RowPair {
 
+    /// Starts a new row pair without any values.
     fn new_empty() -> Self {
         Self {
             curr : Vec::with_capacity(32),
@@ -39,12 +44,14 @@ impl RowPair {
         }
     }
 
+    /// Starts a new row pair with a seed pixel value at the past row.
     fn new(px : (u16, u16)) -> Self {
         let (curr, mut past) = (Vec::with_capacity(32), Vec::with_capacity(32));
         past.push(px);
         Self { curr, past }
     }
 
+    /// Starts a row pair for a new image seed, preserving the old allocations.
     pub fn reset(&mut self, px : (u16, u16)) {
         self.curr.clear();
         self.past.clear();
@@ -53,6 +60,8 @@ impl RowPair {
 
 }
 
+/// Represents an iteration for all four expansion fronts for a convex shape to be grown
+/// for a pixel seed.
 #[derive(Default, Clone, Debug)]
 struct ExpansionFront {
     top : RowPair,
@@ -63,6 +72,7 @@ struct ExpansionFront {
 
 impl ExpansionFront {
 
+    /// Starts a new front with clean allocations (no pixel seed).
     fn new_empty() -> Self {
         let top = RowPair::new_empty();
         let (left, bottom, right) = (top.clone(), top.clone(), top.clone());
@@ -74,6 +84,7 @@ impl ExpansionFront {
         }
     }
 
+    /// Starts all fronts with the "past" row populated with a seed pixel.
     fn new(px : (u16, u16)) -> Self {
         let pair = RowPair::new(px);
         Self {
@@ -84,6 +95,7 @@ impl ExpansionFront {
         }
     }
 
+    /// Resets the iteration using the informed pixel, preserving old allocations.
     pub  fn reset(&mut self, px : (u16, u16)) {
         self.top.reset(px);
         self.left.reset(px);
@@ -94,7 +106,12 @@ impl ExpansionFront {
 }
 
 /// Convex-patch seed growing segmentation. If patch is not convex, this algorithm
-/// will miss non-convex patch areas. TODO rename to SeedSegmenter
+/// might miss non-convex patch areas. To segment a full image, several SeedGrowth
+/// structures should be instantiated, (one for each desired seed). If regions are
+/// required to be non-overlapping, the SeedGrowth algorithm can be cleaned after each
+/// iteration, and the borders of the previous iteration can be used as information to
+/// where the next seed should be positioned, and the image should be trimmed taking only
+/// the regions not yet considered at the previous iteration. TODO rename to SeedSegmenter
 #[derive(Debug, Clone)]
 pub struct SeedGrowth {
     front : ExpansionFront,
@@ -214,7 +231,7 @@ fn expand_patch(
                     }
 
                     // Expand area
-                    if n == 1 {
+                    /*if n == 1 {
                         patch.area += 1;
                     } else {
                         if n > 1 {
@@ -225,7 +242,8 @@ fn expand_patch(
                                 patch.area += (ext.past[n-1].0 - ext.past[0].0) as usize;
                             }
                         }
-                    }
+                    }*/
+                    patch.area += ext.past.len();
 
                     // Stop swapping at the last empty border so eventually we reach the final
                     // branch with the last past pixels that were found.
@@ -379,7 +397,12 @@ where
     }
 
     loop {
-        assert!(exp_patch.top.curr.is_empty() && exp_patch.left.curr.is_empty() && exp_patch.right.curr.is_empty() && exp_patch.bottom.curr.is_empty());
+        debug_assert!(
+            exp_patch.top.curr.is_empty() &&
+            exp_patch.left.curr.is_empty() &&
+            exp_patch.right.curr.is_empty() &&
+            exp_patch.bottom.curr.is_empty()
+        );
         let left_col = if grows_left { seed.1.checked_sub(abs_dist) } else { None };
         let top_row = if grows_top { seed.0.checked_sub(abs_dist) } else { None };
         let right_col = if grows_right {
@@ -523,3 +546,43 @@ where
 }
 
 
+#[test]
+fn test_seed() {
+
+    use crate::feature::patch::seed::*;
+    use crate::image::*;
+
+	let mut img = Image::<u8>::new_constant(100, 100, 10);
+    let radius : f32 = 20.;
+
+	for i in 0..100 {
+		for j in 0..100 {
+			let dist_center = ((i as i32 - 50).pow(2) as f32 + (j as i32 - 50).pow(2) as f32).sqrt();
+		    if dist_center < radius {
+		        img[(i, j)] = 255;
+		    }
+		}
+	}
+
+	let mut growth = SeedGrowth::new(
+		1,
+		None,
+		crate::feature::patch::ExpansionMode::Contour
+	);
+
+	let patch = growth.grow(
+		&img.full_window(),
+		(50, 50),
+		|byte| byte == 255
+	).unwrap();
+	let rect = patch.outer_rect::<usize>();
+	let pxs = patch.outer_points(crate::feature::patch::ExpansionMode::Contour);
+	img.draw(Mark::Shape(pxs.clone(), 127));
+
+	let (center, emp_radius) = crate::feature::shape::outer_circle(&pxs[..]);
+	println!("patch area = {}", patch.area());
+	println!("circle area = {}", std::f32::consts::PI * radius.powf(2.) );
+	println!("emp circle center = {:?}", center);
+	println!("circle area (emp radius) = {}", std::f32::consts::PI * emp_radius.powf(2.) );
+	img.show();
+}

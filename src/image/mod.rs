@@ -344,8 +344,21 @@ impl<N> Image<N>
 
 impl Image<u8> {
 
-    pub fn do_thing(self : &Box<Self>) {
+    pub fn show(&self) {
 
+        use std::process::Command;
+        use tempfile;
+
+        let mut tf = tempfile::NamedTempFile::new().unwrap();
+        let png = crate::io::encode(self.clone()).unwrap();
+        tf.write_all(&png).unwrap();
+        let path = tf.path();
+        let new_path = format!("{}.png", path.to_str().unwrap());
+        fs::rename(path, new_path.clone()).unwrap();
+        Command::new("eog")
+            .args(&[&new_path])
+            .output()
+            .unwrap();
     }
 
     pub fn new_checkerboard(sz : usize, sq_sz : usize) -> Self {
@@ -1925,7 +1938,7 @@ pub extern "C" fn get_funcs() -> Box<Vec<interactive::AlienFunc>> {
     Box::new(funcs)
 }*/
 
-#[derive(Serialize, Deserialize, Clone)]
+/*#[derive(Serialize, Deserialize, Clone)]
 pub struct MyStruct {
     field : [i64; 2]
 }
@@ -1972,14 +1985,14 @@ fn convert_from_map(other : rhai::Dynamic) -> Result<MyStruct, Box<rhai::EvalAlt
         },
         None => Err(Box::new("Result is not a map".into()))
     }
-}
+}*/
 
-impl deft::Interactive for MyStruct {
+/*impl deft::Interactive for MyStruct {
 
     #[export_name="register_MyStruct"]
     extern "C" fn interactive() -> Box<deft::TypeInfo> {
         deft::TypeInfo::builder::<Self>()
-            .method("add_one", |a : i64| -> Result<i64, Box<rhai::EvalAltResult>> { Ok(a + 1) })
+            .fallible("add_one", |a : i64| -> Result<i64, Box<rhai::EvalAltResult>> { Ok(a + 1) })
             .iterable()
             .initializable()
             .parseable()
@@ -1988,12 +2001,12 @@ impl deft::Interactive for MyStruct {
             .field("field", |s : &mut MyStruct| { Ok(vec![rhai::Dynamic::from(s.field[0]), rhai::Dynamic::from(s.field[1])]) })
             .convertible(|s : &mut Self, other : rhai::Dynamic| { convert_from_map(other) })
             .priority(0)
-            .register()
+            .build()
     }
 
-}
+}*/
 
-#[test]
+/*#[test]
 fn deft_test() {
     let a = 1i64;
     let b = String::from("Hello");
@@ -2004,22 +2017,6 @@ fn deft_test() {
 
 impl deft::Show for Image<u8> {
 
-    fn show(&self) {
-
-        use std::process::Command;
-        use tempfile;
-
-        let mut tf = tempfile::NamedTempFile::new().unwrap();
-        let png = crate::io::encode(self.clone()).unwrap();
-        tf.write_all(&png).unwrap();
-        let path = tf.path();
-        let new_path = format!("{}.png", path.to_str().unwrap());
-        fs::rename(path, new_path.clone()).unwrap();
-        Command::new("eog")
-            .args(&[&new_path])
-            .output()
-            .unwrap();
-    }
 }
 
 impl deft::Embed for Image<u8> {
@@ -2043,18 +2040,18 @@ impl deft::Interactive for Image<u8> {
         use deft::ReplResult;
 
         deft::TypeInfo::builder::<Self>()
-            .method("open",
+            .fallible("open",
             |img : &mut Self, path : rhai::ImmutableString| -> Result<Self, Box<rhai::EvalAltResult>> {
                 let new_img = crate::io::decode_from_file(&path)
                     .map_err(|e| Box::new(rhai::EvalAltResult::from(format!("{}", e))) )?;
                 Ok(new_img)
             })
-            .method("shape", |s : &mut Self| -> ReplResult<Array> {
+            .fallible("shape", |s : &mut Self| -> ReplResult<Array> {
                 Ok(vec![Dynamic::from(s.height() as i64), Dynamic::from(s.width() as i64) ])
             })
-            .method("height", |s : &mut Self| -> ReplResult<i64> { Ok(s.height() as i64) })
-            .method("width", |s : &mut Self| -> ReplResult<i64> { Ok(s.width() as i64) })
-            .method("draw", |s : &mut Self, mark : rhai::Map| -> ReplResult<()> {
+            .fallible("height", |s : &mut Self| -> ReplResult<i64> { Ok(s.height() as i64) })
+            .fallible("width", |s : &mut Self| -> ReplResult<i64> { Ok(s.width() as i64) })
+            .fallible("draw", |s : &mut Self, mark : rhai::Map| -> ReplResult<()> {
                 /*println!("{:?}", s.shape());
                 for mark in marks.iter() {
                     match mark.clone().try_cast::<Patch>() {
@@ -2075,10 +2072,10 @@ impl deft::Interactive for Image<u8> {
             .showable()
             .embeddable()
             .priority(0)
-            .register()
+            .build()
     }
 
-}
+}*/
 
 /*impl interactive::Interactive for Image<u8> {
 
@@ -2092,23 +2089,6 @@ impl deft::Interactive for Image<u8> {
 
     fn embed(&self) -> Option<String> {
         Some(crate::io::to_html(&self.full_window()))
-    }
-
-    fn show(&self) {
-
-        use std::process::Command;
-        use tempfile;
-
-        let mut tf = tempfile::NamedTempFile::new().unwrap();
-        let png = crate::io::encode(self.clone()).unwrap();
-        tf.write_all(&png).unwrap();
-        let path = tf.path();
-        let new_path = format!("{}.png", path.to_str().unwrap());
-        fs::rename(path, new_path.clone()).unwrap();
-        Command::new("eog")
-            .args(&[&new_path])
-            .output()
-            .unwrap();
     }
 
     #[export_name="register_image"]
@@ -2187,6 +2167,4 @@ impl deft::Interactive for Image<u8> {
     // to the user.
 
 }*/
-
-
 

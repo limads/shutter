@@ -74,7 +74,7 @@ impl RasterSegmenter {
 
 }
 
-impl deft::Interactive for RasterSegmenter {
+/*impl deft::Interactive for RasterSegmenter {
 
     #[export_name="register_RasterSegmenter"]
     extern "C" fn interactive() -> Box<deft::TypeInfo> {
@@ -83,17 +83,17 @@ impl deft::Interactive for RasterSegmenter {
         use rhai::{Array, Dynamic};
 
         deft::TypeInfo::builder::<Self>()
-            .function("RasterSegmenter", |h : i64, w : i64, spacing : i64| -> ReplResult<Self> {
+            .fallible("RasterSegmenter", |h : i64, w : i64, spacing : i64| -> ReplResult<Self> {
                 Ok(Self::new((h as usize, w as usize), spacing as usize))
             })
-            .method("segment_all", |s : &mut Self, w : Image<u8>, margin : i64| -> ReplResult<Array> {
+            .fallible("segment_all", |s : &mut Self, w : Image<u8>, margin : i64| -> ReplResult<Array> {
                 let patches = s.segment_all(&w.full_window(), margin as u8, ExpansionMode::Contour)
                     .iter()
                     .map(|patch| Dynamic::from(patch.clone()) )
                     .collect::<Vec<_>>();
                 Ok(patches)
             })
-            .method("segment_single", |s : &mut Self, w : Image<u8>, below : i64| -> ReplResult<Array> {
+            .fallible("segment_single", |s : &mut Self, w : Image<u8>, below : i64| -> ReplResult<Array> {
                 let patches = s.segment_single_color(&w.full_window(), move |px| { px <= below as u8 }, ExpansionMode::Contour)
                     .iter()
                     .map(|patch| Dynamic::from(patch.clone()) )
@@ -101,10 +101,10 @@ impl deft::Interactive for RasterSegmenter {
                 Ok(patches)
             })
             .priority(1)
-            .register()
+            .build()
     }
 
-}
+}*/
 
 /// Keeps state of a patch search
 #[derive(Debug, Clone)]

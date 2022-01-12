@@ -4,6 +4,9 @@ use std::cmp::{PartialEq, Ordering};
 use nalgebra::*;
 use away::{Manhattan, Metric};
 
+/// Calculates the euclidian distance between two points. By convention the row coordinate will
+/// come first, but since the distance is scalar (not vector) quantity, the order of the coordinate
+/// isn't relevant.
 pub fn point_euclidian(a : (usize, usize), b : (usize, usize)) -> f32 {
     ((a.0 as f32 - b.0 as f32).powf(2.) + (a.1 as f32 - b.1 as f32).powf(2.)).sqrt()
 }
@@ -54,7 +57,8 @@ pub fn point_distances(pts : &[(usize, usize)]) -> Vec<((usize, usize), (usize, 
     dists
 }
 
-/// Returns the outer circle that encloses a set of points
+/// Returns the outer circle that encloses a set of points (smallest circle with center at the shape
+/// sutch that the shape is circumscribed in the circle).
 pub fn outer_circle(pts : &[(usize, usize)]) -> ((usize, usize), f32) {
     assert!(pts.len() >= 2);
     let dists = point_distances(pts);
@@ -62,7 +66,17 @@ pub fn outer_circle(pts : &[(usize, usize)]) -> ((usize, usize), f32) {
     circle_from_diameter(max_chord.0, max_chord.1)
 }
 
-/// Returns center and radius of the largest circle with a pair of points
+/*/// Returns the inner circle by approximating it from the closest two points. This is cheaper,
+/// but does not guarantee there will be other points of the shape inside it. It is at best an
+/// upper bound for the inner circle.
+pub fn approx_inner_circle(pts : &[(usize, usize)]) -> ((usize, usize), f32) {
+    assert!(pts.len() >= 2);
+    let dists = point_distances(pts);
+    let min_chord = dists.iter().min_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal)).unwrap();
+    circle_from_diameter(min_chord.0, min_chord.1)
+}*/
+
+/// Returns center and radius of the largest inscribed circle with a pair of points
 /// in the set that forms its diameter that does not contain any of the other points.
 pub fn inner_circle(pts : &[(usize, usize)]) -> Option<((usize, usize), f32)> {
     assert!(pts.len() >= 2);
@@ -227,12 +241,32 @@ pub fn contour_area(pts : &[(usize, usize)], outer_rect : (usize, usize, usize, 
     }
 }*/
 
-/// A cricle has circularity of 1; Other polygons have circularity < 1.
-/// A circle has the largest area among all shapes with the same circumference.
-pub fn circularity(area : f64, perim : f64) -> f64 {
-    let circ = (4. * std::f64::consts::PI * area) / perim.powf(2.);
-    // assert!(circ <= 1.0);
-    circ
+/// A cricle has circularity of 1; Other circular polygons (ellipses, conic sections) have circularity < 1.
+/// (Isoperimetric inequality).
+/// A circle has the largest area among all round shapes (i.e. shapes for which a circumference can be calculated)
+/// with the same circumference.
+pub fn circularity(area : f32, circumf : f32) -> Option<f32> {
+    let circ = (4. * std::f32::consts::PI * area) / circumf.powf(2.);
+
+    // This condition will fail when joining the points of the shape fails (i.e. shape path crosses
+    // over any of the already-formed paths.
+    if circumf < 1.0 {
+        Some(circ)
+    } else {
+        None
+    }
+
+}
+
+// Roundess gives how close to a circle an arbitrary polygon is. It is the ratio between the inscribed
+// and circumscribed cricles of the shape.
+// https://en.wikipedia.org/wiki/Roundness
+pub fn roundness(pts : &[(usize, usize)]) -> Option<f32> {
+    let (_, inner_radius) = inner_circle(&pts)?;
+    let (_, outer_radius) = outer_circle(&pts);
+    let round =  inner_radius / outer_radius;
+    assert!(round < 1.0);
+    Some(round)
 }
 
 // Measures how close to a closed shape a blob is.
@@ -736,7 +770,11 @@ pub fn win_contains_circle(win_sz : &(usize, usize), circ : ((usize, usize), f32
     (circ.0.0 + circ.1 as usize) < win_sz.0 && (circ.0.1 + circ.1 as usize) < win_sz.1
 }
 
-pub fn outer_circle_for_square(sq : &(usize, usize, usize, usize), win_sz : (usize, usize)) -> Option<((usize, usize), f32)> {
+/// Returns the smallerst circle with center at the square such that the share is circumscribed in the shape.
+pub fn outer_circle_for_square(
+    sq : &(usize, usize, usize, usize),
+    win_sz : (usize, usize)
+) -> Option<((usize, usize), f32)> {
     if sq.2 > win_sz.0 || sq.3 > win_sz.1 {
         return None;
     }
