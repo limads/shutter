@@ -879,6 +879,22 @@ impl<'a> Iterator for PackedIterator<'a, u8> {
 
 impl<'a> Window<'a, u8> {
 
+    #[cfg(feature="opencvlib")]
+    pub fn copy_scale_mut_within(&self, src : (usize, usize), src_sz : (usize, usize), dst : (usize, usize), dst_sz : (usize, usize)) {
+
+        use opencv::{core, imgproc};
+
+        let ratio_row = (dst_sz.0 / src_sz.0) as f64;
+        let ratio_col = (dst_sz.1 / src_sz.1) as f64;
+        if let Some(src) = self.sub_window(src, src_sz) {
+            if let Some(dst) = self.sub_window(dst, dst_sz) {
+                let mut src : core::Mat = src.into();
+                let mut dst : core::Mat = dst.into();
+                imgproc::resize(&src, &mut dst, core::Size2i::default(), ratio_col, ratio_row, imgproc::INTER_LINEAR);
+            }
+        }
+    }
+
     /// Gets pos or the nearest pixel to it that satisfies a condition.
     pub fn nearest_matching(&self, pos : (usize, usize), px_spacing : usize, f : impl Fn(u8)->bool) -> Option<(usize, usize)> {
         if f(self[pos]) {

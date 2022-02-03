@@ -872,6 +872,7 @@ pub mod cvellipse {
         ApproxMeanSquare
     }
 
+    #[derive(Debug)]
     pub struct EllipseFitting {
         pt_vec : core::Vector<core::Point2i>
     }
@@ -930,6 +931,7 @@ pub mod cvellipse {
         }
     }
 
+    #[derive(Debug)]
     pub struct EnclosingCircle {
 
         pt_vec : core::Vector<core::Point2i>

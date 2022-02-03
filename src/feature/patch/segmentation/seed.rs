@@ -132,6 +132,12 @@ impl SeedGrowth {
     where
         F : Fn(u8)->bool
     {
+
+        if seed.0 / self.px_spacing as u16 > (win.height() - 1) as u16 || seed.1 as u16 / self.px_spacing as u16 > (win.width() - 1)  as u16 {
+            println!("Warning: Seed extrapolate image area");
+            return None;
+        }
+
         self.front.reset(seed);
         self.patch.pxs.clear();
 

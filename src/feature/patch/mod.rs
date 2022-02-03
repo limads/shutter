@@ -210,6 +210,38 @@ impl ColorProfile {
         modes.drain(..).map(|ix| Mode { n_pxs : self.0[ix], color : ix as u8 }).collect()
     }
 
+    /// Assumes each pixel comes from a normal density. Calculates the
+    /// quality of the normal fir for each pixel attribution.
+    pub fn normal_fit_quality(&self, modes : &[Mode], discrs : &[usize]) -> f64 {
+
+        /*let mut joint_lp = 0.0;
+        assert!(discrs.len() == modes.len() - 1);
+
+        for (ix, m) in modes.iter().enumerate() {
+            let low = if ix == 0 {
+                0
+            } else {
+                m - discr[ix]
+            };
+
+            let high = if ix == modes.len() {
+                255
+            } else {
+                m + discr[ix+1]
+            };
+
+            let width = (high - low) as f64 / 2.;
+            let stddev = width / 1.96;
+            let norm = Normal::prior(m as f64, stddev.powf(2.));
+            for px in [low..high] {
+                joint_lp += norm.log_prob(px as f64) * self.0[px] as f64;
+            }
+        }
+
+        joint_lp*/
+        unimplemented!()
+    }
+
     /// Returns vec of modes and their discriminants.
     pub fn unsupervised_modes(&self, win_sz : usize, min_width : usize, min_rel : f32) -> (Vec<Mode>, Vec<(usize, usize)>) {
         let mut modes = Vec::new();

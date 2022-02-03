@@ -470,7 +470,7 @@ fn add_patch(
         patches[*n_patches].color = color;
         patches[*n_patches].scale = px_spacing;
         patches[*n_patches].img_height = win.height();
-        patches[*n_patches].area = 1;
+        patches[*n_patches].area += 1;
     } else {
         patches.push(Patch::new((r as u16, c as u16), color, px_spacing, win.height()));
     }

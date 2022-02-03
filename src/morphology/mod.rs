@@ -13,6 +13,7 @@ pub enum MorphShape {
     Ellipse
 }
 
+#[derive(Debug)]
 struct MorphKernel {
     iterations : i32,
     sz : i32,
@@ -38,6 +39,7 @@ fn build_kernel(sz : usize, iterations : usize, shape : MorphShape) -> MorphKern
     MorphKernel { iterations : iterations as i32, sz : sz as i32, anchor, border_val, kernel }
 }
 
+#[derive(Debug)]
 pub struct Erosion<P>
 where
     P : Scalar + From<u8> + Debug + Copy + Default + Serialize + DeserializeOwned + Any
