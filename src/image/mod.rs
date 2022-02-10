@@ -527,6 +527,14 @@ where
     N : Scalar + Mul<Output=N> + MulAssign + Copy + Copy + Serialize + DeserializeOwned + Any
 {
 
+    /// Returns a minimum number of overlapping windows of the informed shape,
+    /// that completely cover the current window.
+    pub fn minimum_inner_windows(&'a self, shape : (usize, usize)) -> Vec<Window<'a, N>> {
+        let mut sub_wins = Vec::new();
+
+        sub_wins
+    }
+
     pub fn far_thin_neighborhood(&'a self, center_tl : (usize, usize), win_sz : (usize, usize), dist : usize) -> Option<Neighborhood<'a, N>> {
         let outside_bounds = center_tl.0 < win_sz.0 + dist ||
             center_tl.0 > self.height().checked_sub(win_sz.0 + dist)? ||

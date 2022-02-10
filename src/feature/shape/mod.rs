@@ -11,6 +11,10 @@ pub fn point_euclidian(a : (usize, usize), b : (usize, usize)) -> f32 {
     ((a.0 as f32 - b.0 as f32).powf(2.) + (a.1 as f32 - b.1 as f32).powf(2.)).sqrt()
 }
 
+pub fn point_euclidian_u16(a : (u16, u16), b : (u16, u16)) -> f32 {
+    ((a.0 as f32 - b.0 as f32).powf(2.) + (a.1 as f32 - b.1 as f32).powf(2.)).sqrt()
+}
+
 /// Calculate the angle formed by side_a and side_b given the opposite side using the law of cosines.
 pub fn angle(side_a : f64, side_b : f64, opp_side : f64) -> f64 {
 	let angle_cos = (side_a.powf(2.) + side_b.powf(2.) - opp_side.powf(2.)) / (2. * side_a * side_b);

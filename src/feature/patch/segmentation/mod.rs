@@ -62,6 +62,123 @@ pub fn intensity_above<const P : u8>(px : u8) -> bool {
     px >= P
 }
 
+pub struct ContourNeighborhood<'a> {
+
+    begin : &'a (u16, u16),
+
+    middle : &'a (u16, u16),
+
+    end : &'a (u16, u16)
+
+}
+
+pub enum NeighborhoodType {
+    Vertical,
+    Horizontal,
+    Diagonal,
+    Generic
+}
+
+impl<'a> ContourNeighborhood<'a> {
+
+    pub fn neighborhood_type(&self) -> NeighborhoodType {
+        let vert_dist_begin = (self.middle.0 as i32 - self.begin.0 as i32).abs();
+        let vert_dist_end =  (self.middle.0 as i32 - self.end.0 as i32).abs();
+        let horiz_dist_begin = (self.middle.1 as i32 - self.begin.1 as i32).abs();
+        let horiz_dist_end =  (self.middle.1 as i32 - self.end.1 as i32).abs();
+
+        let vert_dist = vert_dist_begin + vert_dist_end;
+        let horiz_dist = horiz_dist_begin + horiz_dist_end;
+
+        if vert_dist == horiz_dist {
+            return NeighborhoodType::Diagonal;
+        } else {
+            if vert_dist > 0 && horiz_dist == 0 {
+                return NeighborhoodType::Vertical;
+            } else {
+                if vert_dist == 0 && horiz_dist > 0 {
+                    return NeighborhoodType::Horizontal;
+                }
+            }
+        }
+        NeighborhoodType::Generic
+    }
+
+    pub fn below_seed(&self, seed : (u16, u16)) -> bool {
+        self.middle.0 > seed.0 && self.begin.0 > seed.0 && self.end.0 > seed.0
+    }
+
+    pub fn above_seed(&self, seed : (u16, u16)) -> bool {
+        self.middle.0 < seed.0 && self.begin.0 < seed.0 && self.end.0 < seed.0
+    }
+
+    pub fn to_right_of_seed(&self, seed : (u16, u16)) -> bool {
+        self.middle.1 > seed.1 && self.begin.1 > seed.1 && self.end.1 > seed.1
+    }
+
+    pub fn to_left_of_seed(&self, seed : (u16, u16)) -> bool {
+        self.middle.1 < seed.1 && self.begin.1 < seed.1 && self.end.1 < seed.1
+    }
+
+    pub fn strictly_below_seed(&self, seed : (u16, u16)) -> Option<bool> {
+        match (self.below_seed(seed), self.above_seed(seed)) {
+            (true, false) => Some(true),
+            (false, true) => Some(false),
+            _ => None
+        }
+    }
+
+    pub fn strictly_to_right_of_seed(&self, seed : (u16, u16)) -> Option<bool> {
+        match (self.to_left_of_seed(seed), self.to_right_of_seed(seed)) {
+            (false, true) => Some(true),
+            (true, false) => Some(false),
+            _ => None
+        }
+    }
+
+    pub fn closest_outside_neighbor(&self, seed : (u16, u16)) -> Option<(u16, u16)> {
+        let vert_incr = if self.strictly_below_seed(seed)? { 1 } else { -1 };
+        let horiz_incr = if self.strictly_to_right_of_seed(seed)? { 1 } else { -1 };
+        match self.neighborhood_type() {
+            NeighborhoodType::Vertical => Some((self.middle.0, u16::try_from(self.middle.1 as i32 + horiz_incr).ok()?)),
+            NeighborhoodType::Horizontal => Some((u16::try_from(self.middle.0 as i32 + vert_incr).ok()?, self.middle.1)),
+            NeighborhoodType::Diagonal => {
+                Some((u16::try_from(self.middle.0 as i32 + vert_incr).ok()?, u16::try_from(self.middle.1 as i32 + horiz_incr).ok()?))
+            },
+            NeighborhoodType::Generic => {
+                let cand1 = [(0, horiz_incr), (vert_incr, 0), (horiz_incr, vert_incr)];
+                let cand2 = candidate_increment::<2>(vert_incr, horiz_incr);
+                let cand3 = candidate_increment::<3>(vert_incr, horiz_incr);
+                let cand4 = candidate_increment::<4>(vert_incr, horiz_incr);
+                let candidates = cand1.iter()
+                    .chain(cand2.iter())
+                    .chain(cand3.iter())
+                    .chain(cand4.iter());
+
+                let begin_dist = shape::point_euclidian_u16(*self.begin, seed);
+                let end_dist = shape::point_euclidian_u16(*self.end, seed);
+                let middle_dist = shape::point_euclidian_u16(*self.middle, seed);
+                for cand in candidates{
+                    if let (Ok(y), Ok(x)) = (u16::try_from(self.middle.0 as i32 + cand.0), u16::try_from(self.middle.1 as i32 + cand.1)) {
+                        if (y, x) != *self.begin && (y, x) != *self.end && (y, x) != *self.middle {
+                            let dist = shape::point_euclidian_u16((y, x), seed);
+                            if dist > begin_dist && dist > end_dist && dist > middle_dist {
+                                return Some((y, x));
+                            }
+                        }
+                    }
+                }
+                None
+            }
+        }
+    }
+
+}
+
+fn candidate_increment<const I : i32>(vert_incr : i32, horiz_incr : i32) -> [(i32, i32); 3] {
+    [(I*vert_incr, horiz_incr), (vert_incr, I*horiz_incr), (I*vert_incr, I*horiz_incr)]
+}
+
 /// The most general patch is a set of pixel positions with a homogeneous color
 /// and a scale that was used for extraction. The patch is assumed to be
 /// homonegeneous within a pixel spacing given by the scale field. TODO if the
@@ -519,6 +636,53 @@ pub enum ReferenceMode {
 
 impl Patch {
 
+    /// Iterates over pixel index of the middle element and its local neighborhood.
+    pub fn neighborhoods<'a>(&'a self) -> Vec<(usize, ContourNeighborhood<'a>)> {
+        assert!(self.scale == 1);
+        let mut neighs = Vec::new();
+        for ix in 1..(self.pxs.len() - 1) {
+            neighs.push((ix, ContourNeighborhood { begin : &self.pxs[ix-1], middle : &self.pxs[ix], end : &self.pxs[ix+1] }));
+        }
+        neighs
+    }
+
+    pub fn expand_to_similar(&mut self, seed : (u16, u16), px_tol : u8, win : Window<'_, u8>) -> usize {
+        assert!(self.scale == 1);
+        let mut changes = Vec::new();
+        for (ix, neigh) in self.neighborhoods() {
+            if let Some(out) = neigh.closest_outside_neighbor(seed) {
+                if out.0 < win.width() as u16 && out.1 < win.height() as u16 {
+                    let old_middle = (self.pxs[ix].0 as usize, self.pxs[ix].1 as usize);
+                    if (win[old_middle] as i16 - win[(out.0 as usize, out.1 as usize)] as i16).abs() as u8 <= px_tol {
+                        changes.push((ix, out));
+                    }
+                }
+            }
+        }
+
+        let n_changes = changes.len();
+        for (ch_ix, ch) in changes {
+            let old = self.pxs[ch_ix];
+            self.area += (ch.0.checked_sub(old.0).unwrap_or(0) + ch.1.checked_sub(old.1).unwrap_or(0)) as usize;
+            self.pxs[ch_ix] = ch;
+            if ch.0 < self.outer_rect.0 {
+                self.outer_rect.0 = ch.0;
+            }
+            if ch.1 < self.outer_rect.1 {
+                self.outer_rect.1 = ch.1;
+            }
+            let h = ch.0 - self.outer_rect.0;
+            let w = ch.1 - self.outer_rect.1;
+            if h > self.outer_rect.2 {
+                self.outer_rect.2 = h;
+            }
+            if w > self.outer_rect.3 {
+                self.outer_rect.3 = w;
+            }
+        }
+        n_changes
+    }
+
     pub fn new_empty() -> Self {
         Self {
             pxs : Vec::with_capacity(32),
@@ -551,7 +715,7 @@ impl Patch {
 
     pub fn inner_angle_stats(&self) -> (f64, f64) {
         let angles = self.inner_angles().collect::<Vec<_>>();
-        bayes::calc::running::mean_variance(&angles[..], true)
+        bayes::calc::running::mean_variance_from_slice(&angles[..], true)
     }
 
     pub fn unscaled_area(&self) -> f32 {
