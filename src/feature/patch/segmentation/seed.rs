@@ -134,7 +134,7 @@ impl SeedGrowth {
     {
 
         if seed.0 / self.px_spacing as u16 > (win.height() - 1) as u16 || seed.1 as u16 / self.px_spacing as u16 > (win.width() - 1)  as u16 {
-            println!("Warning: Seed extrapolate image area");
+            // println!("Warning: Seed extrapolate image area");
             return None;
         }
 
@@ -150,6 +150,13 @@ impl SeedGrowth {
         self.patch.scale = self.px_spacing as u16;
         self.patch.img_height = win.height();
         self.patch.area = 1;
+
+        if self.exp_mode == ExpansionMode::Contour {
+            assert!(self.patch.pxs.len() == 0);
+        } else {
+            assert!(self.patch.pxs.len() == 1);
+        }
+
         if grow(&mut self.patch, &mut self.front, &win, seed, self.px_spacing, comp, ReferenceMode::Constant, self.max_area, self.exp_mode) {
             Some(&self.patch)
         } else {
@@ -159,13 +166,56 @@ impl SeedGrowth {
 
 }
 
+fn expand_rect(ext : &mut RowPair, patch : &mut Patch, outer_rect : (u16, u16, u16, u16), fst_corner : bool, snd_corner : bool) {
+    ext.past.clear();
+    patch.area = (outer_rect.2 * outer_rect.3) as usize;
+    mem::swap(&mut ext.curr, &mut ext.past);
+}
+
+fn expand_dense(ext : &mut RowPair, patch : &mut Patch, outer_rect : (u16, u16, u16, u16), fst_corner : bool, snd_corner : bool) {
+    patch.area += ext.past.len();
+    patch.pxs.extend(ext.past.drain(..));
+    mem::swap(&mut ext.curr, &mut ext.past);
+}
+
+fn expand_contour(ext : &mut RowPair, patch : &mut Patch, outer_rect : (u16, u16, u16, u16), fst_corner : bool, snd_corner : bool) {
+    if ext.curr.len() > 0 {
+        // TODO Remove old corner pixels
+        // ext.past.remove(4 - ix);
+
+        // Only push corners when the distance between corners of edge limits
+        // are not sufficient to represent the shape in its current state.
+        if !fst_corner {
+            patch.pxs.push(ext.past[0]);
+        }
+
+        let n = ext.past.len();
+        if n > 1 && !snd_corner {
+            patch.pxs.push(ext.past[n-1]);
+        }
+
+        patch.area += ext.past.len();
+
+        // Stop swapping at the last empty border so eventually we reach the final
+        // branch with the last past pixels that were found.
+        ext.past.clear();
+    } else {
+        // The last patch iteration will take all remaining contour values.
+        patch.area += ext.past.len();
+        patch.pxs.extend(ext.past.drain(..));
+    }
+    mem::swap(&mut ext.curr, &mut ext.past);
+}
+
+/// Computes a single iteration of the seed expansion algorithm.
 fn expand_patch(
     exp_patch : &mut ExpansionFront,
     patch : &mut Patch,
     outer_rect : (u16, u16, u16, u16),
-    mode : ExpansionMode,
+    // mode : ExpansionMode,
     win : &Window<'_, u8>,
-    seed : (u16, u16)
+    seed : (u16, u16),
+    extension_func : fn(&mut RowPair, &mut Patch, (u16, u16, u16, u16), bool, bool)
 ) {
 
     // Only push corner when those conditions are not met for the desired pair.
@@ -197,74 +247,8 @@ fn expand_patch(
             mem::swap(&mut ext.curr, &mut ext.past);
             continue;
         }
-        match mode {
-            ExpansionMode::Rect => {
-                ext.past.clear();
-                patch.area = (outer_rect.2 * outer_rect.3) as usize;
-                mem::swap(&mut ext.curr, &mut ext.past);
-            },
-            ExpansionMode::Dense => {
-                patch.area += ext.past.len();
-                patch.pxs.extend(ext.past.drain(..));
-                mem::swap(&mut ext.curr, &mut ext.past);
-            },
-            ExpansionMode::Contour => {
-                if ext.curr.len() > 0 {
-                    /*match ext.past.len() {
-                        0 => { },
-                        1 => {
-                            patch.pxs.push(ext.past[0]);
-                        },
-                        _ => {
-                            // Just push past border extreme pixels for non-final iterations.
-                            patch.pxs.push(ext.past[0]);
-                            patch.pxs.push(ext.past[ext.past.len()-1]);
-                        }
-                    }*/
-
-                    // TODO Remove old corner pixels
-                    // ext.past.remove(4 - ix);
-
-                    // Only push corners when the distance between corners of edge limits
-                    // are not sufficient to represent the shape in its current state.
-                    if !*fst_corner {
-                        patch.pxs.push(ext.past[0]);
-                    }
-
-                    let n = ext.past.len();
-                    if n > 1 && !*snd_corner {
-                        patch.pxs.push(ext.past[n-1]);
-                    }
-
-                    // Expand area
-                    /*if n == 1 {
-                        patch.area += 1;
-                    } else {
-                        if n > 1 {
-                            let is_row_front = ext.past[n-1].0 == ext.past[0].0;
-                            if is_row_front {
-                                patch.area += (ext.past[n-1].1 - ext.past[0].1) as usize;
-                            } else {
-                                patch.area += (ext.past[n-1].0 - ext.past[0].0) as usize;
-                            }
-                        }
-                    }*/
-                    patch.area += ext.past.len();
-
-                    // Stop swapping at the last empty border so eventually we reach the final
-                    // branch with the last past pixels that were found.
-                    ext.past.clear();
-                } else {
-                    // The last patch iteration will take all remaining contour values.
-                    patch.area += ext.past.len();
-                    patch.pxs.extend(ext.past.drain(..));
-                }
-                mem::swap(&mut ext.curr, &mut ext.past);
-            }
-        }
+        extension_func(ext, patch, outer_rect, *fst_corner, *snd_corner);
     }
-    // }
-
 }
 
 fn update_stats(mode : &mut ColorMode, n_px : &mut u16, sum : &mut u64, sum_abs_dev : &mut u64, ref_mode : ReferenceMode, new : u8) {
@@ -376,6 +360,9 @@ where
     //    return None;
     // }
     // mode.set_reference_color(win[seed]);
+    if !comp(win[seed]) {
+        return false;
+    }
 
     // let mut patch = Patch::new((seed.0 as u16, seed.1 as u16), win[seed], 1, win.height());
     // let seed = (seed.0 as u16, seed.1 as u16);
@@ -396,11 +383,17 @@ where
 
     let (h, w) = (win.height() as u16, win.width() as u16);
 
-    if exp_mode == ExpansionMode::Contour {
-        assert!(patch.pxs.len() == 0);
-    } else {
-        assert!(patch.pxs.len() == 1);
-    }
+    let extension_func = match exp_mode {
+        ExpansionMode::Rect => {
+            expand_rect
+        },
+        ExpansionMode::Dense => {
+            expand_dense
+        },
+        ExpansionMode::Contour => {
+            expand_contour
+        }
+    };
 
     loop {
         debug_assert!(
@@ -512,10 +505,10 @@ where
         let grows_any = grows_left || grows_right || grows_bottom || grows_top;
         expand_rect_with_front(&mut outer_rect, &exp_patch);
         patch.outer_rect = outer_rect;
-        expand_patch(exp_patch, patch, outer_rect, exp_mode, win, seed);
+        expand_patch(exp_patch, patch, outer_rect, /*exp_mode,*/ win, seed, extension_func);
 
         if let Some(area) = max_area {
-            if /*patch.pxs.len()*/ outer_rect.2 * outer_rect.3 > area as u16 {
+            if outer_rect.2 * outer_rect.3 > area as u16 {
                 return false;
             }
         }

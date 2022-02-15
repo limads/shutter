@@ -798,7 +798,7 @@ where
     }
 
     /// Iterate over image pixels, expanding from a given location, until any image border is found.
-    /// Iteration happens clock-wise from the seed pixel. Indices are the original image scale.
+    /// Iteration happens clock-wise from the seed pixel. Indices are at the original image scale.
     pub fn expanding_pixels(
         &self,
         seed : (usize, usize),

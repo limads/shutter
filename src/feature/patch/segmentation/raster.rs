@@ -39,7 +39,44 @@ impl RasterSegmenter {
         // let src_win = unsafe { crate::image::create_immutable(&win) };
         assert!(win.shape() == self.win_sz);
         assert!(win.shape().1 / self.px_spacing == self.search.prev_row_patch_ixs.len());
-        let n_patches = full_color_patches(&mut self.search, &mut self.patches, &win, self.px_spacing.try_into().unwrap(), margin, exp_mode);
+        let n_patches = match exp_mode {
+            ExpansionMode::Rect => {
+                full_color_patches(
+                    &mut self.search,
+                    &mut self.patches,
+                    &win,
+                    self.px_spacing.try_into().unwrap(),
+                    margin,
+                    Patch::add_to_right_rect,
+                    Patch::add_to_bottom_rect,
+                )
+            },
+            ExpansionMode::Contour => {
+                let mut n_patches = full_color_patches(
+                    &mut self.search,
+                    &mut self.patches,
+                    &win,
+                    self.px_spacing.try_into().unwrap(),
+                    margin,
+                    Patch::add_to_right_contour,
+                    Patch::add_to_bottom_contour,
+                );
+                filter_contours(&mut n_patches, &mut self.patches, &win);
+                n_patches
+            },
+            ExpansionMode::Dense => {
+                full_color_patches(
+                    &mut self.search,
+                    &mut self.patches,
+                    &win,
+                    self.px_spacing.try_into().unwrap(),
+                    margin,
+                    Patch::add_to_right_dense,
+                    Patch::add_to_bottom_dense,
+                )
+            }
+        };
+
         self.n_patches = n_patches;
         &self.patches[0..self.n_patches]
     }
@@ -53,15 +90,46 @@ impl RasterSegmenter {
         assert!(win.shape().1 / self.px_spacing == self.search.prev_row_patch_ixs.len());
         assert!(win.width() / self.px_spacing == self.prev_row_mask.len());
         let n_patches = unsafe {
-            single_color_patches(
-                &mut self.search,
-                &mut self.prev_row_mask,
-                &mut self.patches,
-                &win,
-                self.px_spacing.try_into().unwrap(),
-                comp,
-                exp_mode
-            )
+            match exp_mode {
+                ExpansionMode::Rect => {
+                    single_color_patches(
+                        &mut self.search,
+                        &mut self.prev_row_mask,
+                        &mut self.patches,
+                        &win,
+                        self.px_spacing.try_into().unwrap(),
+                        comp,
+                        Patch::add_to_right_rect,
+                        Patch::add_to_bottom_rect
+                    )
+                },
+                ExpansionMode::Contour => {
+                    let mut n_patches = single_color_patches(
+                        &mut self.search,
+                        &mut self.prev_row_mask,
+                        &mut self.patches,
+                        &win,
+                        self.px_spacing.try_into().unwrap(),
+                        comp,
+                        Patch::add_to_right_contour,
+                        Patch::add_to_bottom_contour
+                    );
+                    filter_contours(&mut n_patches, &mut self.patches, &win);
+                    n_patches
+                },
+                ExpansionMode::Dense => {
+                    single_color_patches(
+                        &mut self.search,
+                        &mut self.prev_row_mask,
+                        &mut self.patches,
+                        &win,
+                        self.px_spacing.try_into().unwrap(),
+                        comp,
+                        Patch::add_to_right_dense,
+                        Patch::add_to_bottom_dense
+                    )
+                }
+            }
         };
         self.n_patches = n_patches;
         assert!(self.patches[0..self.n_patches].iter().all(|patch| patch.pxs.len() > 0 ));
@@ -242,17 +310,20 @@ impl PatchContourState {
 /// is informed, any pixel witin patch+- tol is considered. If not, only pixels with strictly
 /// the desired color are returned. Unsafe is required because we use get_unchecked in the hot
 /// loop that iterate over pixels.
-unsafe fn single_color_patches<F>(
+unsafe fn single_color_patches<F, R, B>(
     search : &mut PatchSearch,
     prev_row_mask : &mut Vec<bool>,
     patches : &mut Vec<Patch>,
     win : &Window<'_, u8>,
     px_spacing : u16,
     comp : F,
-    exp_mode : ExpansionMode
+    add_to_right : R,
+    add_to_bottom : B
 ) -> usize
 where
-    F : Fn(u8)->bool
+    F : Fn(u8)->bool,
+    R : Fn(&mut Patch, (u16, u16)) + Copy,
+    B : Fn(&mut Patch, (u16, u16)) + Copy
 {
     let mut n_patches = 0;
     let mut last_matching_col = None;
@@ -260,56 +331,46 @@ where
     let subsampled_ncols = win.width() / px_spacing as usize;
     let last_col = subsampled_ncols - 1;
     for (r, c, px_color) in win.labeled_pixels::<usize, _>(px_spacing as usize) {
-        color_match = comp(px_color);
-        // let (r, c) = (ix / win.width(), ix % win.width());
-        // let px_color = win[(r*px_spacing, c*px_spacing)];
-        /*search.top_patch_ix =*/ if r >= 1 && *prev_row_mask.get_unchecked(c) && color_match {
-            /*Some(*search.prev_row_patch_ixs.get_unchecked(col_ix))*/
-            search.merges_top = true;
-            search.top_patch_ix = *search.prev_row_patch_ixs.get_unchecked(c);
-        } else {
-            search.merges_top = false;
-            // None
-        } //;
 
-        //if c == 0 {
-        //    last_matching_col = None;
-        //    search.merges_left = false;
-        //} else {
-        search.merges_left = if let Some(last_c) = last_matching_col {
-            c > 0 && c - last_c == 1
-        } else {
-            false
-        };
+        if comp(px_color) {
+            if r >= 1 && *prev_row_mask.get_unchecked(c) {
+                search.merges_top = true;
+                search.top_patch_ix = *search.prev_row_patch_ixs.get_unchecked(c);
+            } else {
+                search.merges_top = false;
+            }
+            search.merges_left = if let Some(last_c) = last_matching_col {
+                c > 0 && c - last_c == 1
+            } else {
+                false
+            };
 
-        // }
-        // let color_match = color_mode.matches(px_color);
-
-        // TODO check if the left_patch_ix.is_some() condition is critical or not (I think not, it is never set to None at append_or_update_patch.
-        // let merges_left = if let Some(last_c) = last_matching_col { c - last_c == 1 } else { false } && color_match && search.left_patch_ix.is_some();
-        // let merges_top = r >= 1 && *prev_row_mask.get_unchecked(col_ix) && color_match && search.top_patch_ix.is_some();
-        if color_match {
-            append_or_update_patch(patches, search, &mut n_patches, win, /*merges_left, merges_top,*/ r, c, px_color, px_spacing, exp_mode);
+            append_or_update_patch(
+                patches,
+                search,
+                &mut n_patches,
+                win,
+                r,
+                c,
+                px_color,
+                px_spacing,
+                add_to_right,
+                add_to_bottom
+            );
             if c < last_col  {
                 last_matching_col = Some(c);
             } else {
                 last_matching_col = None;
             }
             *prev_row_mask.get_unchecked_mut(c) = true;
+
         } else {
             *prev_row_mask.get_unchecked_mut(c) = false;
             if c == last_col {
                 last_matching_col = None;
             }
-            // search.left_patch_ix = None;
         }
     }
-
-    if exp_mode == ExpansionMode::Contour {
-        filter_contours(&mut n_patches, patches, win);
-    }
-
-    // assert!(search.contour_state.n_elems == n_patches);
 
     n_patches
 }
@@ -319,14 +380,19 @@ where
 /// so the pixel vectors within patches do not get reallocated. In the public API, we use this quantity
 /// to limit the index of the patch slice only to the points generated by the current iteration.
 /// Patches are defined by the next color being within **margin** from the last pixel color.
-fn full_color_patches(
+fn full_color_patches<R, B>(
     search : &mut PatchSearch,
     patches : &mut Vec<Patch>,
     win : &Window<'_, u8>,
     px_spacing : u16,
     margin : u8,
-    exp_mode : ExpansionMode
-) -> usize {
+    add_to_right : R,
+    add_to_bottom : B
+) -> usize
+where
+    R : Fn(&mut Patch, (u16, u16)) + Copy,
+    B : Fn(&mut Patch, (u16, u16)) + Copy
+{
 
     // It is working, just update using the new merges_left/merges_top logic used at single_color_patches.
     let mut n_patches = 0;
@@ -359,11 +425,7 @@ fn full_color_patches(
 
         // let merges_left = might_merge_left && search.left_patch_ix.is_some();
         // let merges_top = might_merge_top && search.top_patch_ix.is_some();
-        append_or_update_patch(patches, search, &mut n_patches, win, r, c, color, px_spacing, exp_mode);
-    }
-
-    if exp_mode == ExpansionMode::Contour {
-        filter_contours(&mut n_patches, patches, win);
+        append_or_update_patch(patches, search, &mut n_patches, win, r, c, color, px_spacing, add_to_right, add_to_bottom);
     }
 
     n_patches
@@ -393,19 +455,21 @@ fn filter_contours(n_patches : &mut usize, patches : &mut Vec<Patch>, win : &Win
 // is the color that inaugurated the patch via its top-left pixel
 // at the raster search strategy. This contrasts with the growth
 // strategy where the patch color is the seed position color.
-fn append_or_update_patch(
+fn append_or_update_patch<R, B>(
     patches : &mut Vec<Patch>,
     search : &mut PatchSearch,
     n_patches : &mut usize,
     win : &Window<'_, u8>,
-    // merges_left : bool,
-    // merges_top : bool,
     r : usize,
     c : usize,
     color : u8,
     px_spacing : u16,
-    exp_mode : ExpansionMode
-) {
+    add_to_right : R,
+    add_to_bottom : B
+) where
+    R : Fn(&mut Patch, (u16, u16)) + Copy,
+    B : Fn(&mut Patch, (u16, u16)) + Copy
+{
     let pos = (r as u16, c as u16);
     match (search.merges_left, search.merges_top) {
         (true, true) => {
@@ -419,23 +483,23 @@ fn append_or_update_patch(
                 merge_left_to_top_patch(patches, search, n_patches);
 
                 // Push new pixel to top patch
-                patches[search.top_patch_ix].add_to_bottom(pos, exp_mode);
+                add_to_bottom(&mut patches[search.top_patch_ix], pos);
                 search.prev_row_patch_ixs[c] = search.top_patch_ix;
                 search.left_patch_ix = search.top_patch_ix;
             } else {
                 // Push new pixel to left patch. We could also push to the bottom,
                 // and stay at a valid state, but pushing to the left is cheaper.
-                patches[search.left_patch_ix].add_to_right(pos, exp_mode);
+                add_to_right(&mut patches[search.left_patch_ix], pos);
                 search.prev_row_patch_ixs[c] = search.left_patch_ix;
                 // search.left_patch_ix = Some(search.top_patch_ix.unwrap());
             }
         },
         (true, false) => {
-            patches[search.left_patch_ix].add_to_right(pos, exp_mode);
+            add_to_right(&mut patches[search.left_patch_ix], pos);
             search.prev_row_patch_ixs[c] = search.left_patch_ix;
         },
         (false, true) => {
-            patches[search.top_patch_ix].add_to_bottom(pos, exp_mode);
+            add_to_bottom(&mut patches[search.top_patch_ix], pos);
             search.prev_row_patch_ixs[c] = search.top_patch_ix;
             search.left_patch_ix = search.top_patch_ix;
         },

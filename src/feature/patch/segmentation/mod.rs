@@ -988,88 +988,101 @@ impl Patch {
 
     pub fn add_to_right(&mut self, px : (u16, u16), exp_mode : ExpansionMode) {
         // assert!(self.pixel_not_far_right(px), format!("Pixel not at right: {:?}", (self.outer_rect, &self.pxs, px)));
-
         match exp_mode {
-            ExpansionMode::Rect => { },
-            ExpansionMode::Dense => {
-                self.pxs.push(px);
-            },
-            ExpansionMode::Contour => {
-                // TODO replace by counter of pixels within the current row.
-                let mut this_row = self.pxs.iter().rev().take_while(|(r, _)| *r == px.0 ).take(2);
-                let has_2_this_row = this_row.next().is_some() && this_row.next().is_some();
-                if has_2_this_row {
-                    *(self.pxs.last_mut().unwrap()) = px;
-                } else  {
-                    self.pxs.push(px);
+            ExpansionMode::Rect => self.add_to_right_rect(px),
+            ExpansionMode::Dense => self.add_to_right_dense(px),
+            ExpansionMode::Contour => self.add_to_right_contour(px),
+        }
+    }
+
+    pub fn add_to_right_contour(&mut self, px : (u16, u16)) {
+        // TODO replace by counter of pixels within the current row.
+        let mut this_row = self.pxs.iter().rev().take_while(|(r, _)| *r == px.0 ).take(2);
+        let has_2_this_row = this_row.next().is_some() && this_row.next().is_some();
+        if has_2_this_row {
+            *(self.pxs.last_mut().unwrap()) = px;
+        } else  {
+            self.pxs.push(px);
+        }
+        self.expand_rect_and_area(px);
+    }
+
+    pub fn add_to_bottom_contour(&mut self, px : (u16, u16)) {
+        if self.outer_rect.2 <= 1 {
+            // Always add bottom pixels when the patch is still thin.
+            self.pxs.push(px);
+        } else {
+            // If patch is not thin, verify if there are any pixels representing the
+            // bottom patch border with the same col. If there are, we substitute it. If
+            // there are not (the top row is represented only by the left and right pixels),
+            // we add this pixel.
+
+            // We iterate at least 2 rows because insertion of bottom pixels will leave the last row unsorted
+            // (might have a few pixels of the row below it).
+            let prev_row = self.pxs.iter_mut().rev()
+                .enumerate()
+                .take_while(|(_, (r, _))| *r >= px.0.saturating_sub(2) )
+                .filter(|(_, (r, _))| *r == px.0 - 1 );
+
+            let mut substituted = false;
+            for (rev_ix, mut prev_px) in prev_row {
+                if prev_px.1 == px.1 {
+                    *prev_px = px;
+
+                    // Keep last elements at the last row
+                    let n = self.pxs.len();
+                    self.pxs.swap(n - rev_ix - 1, n-1);
+
+                    substituted = true;
+                    break;
                 }
             }
-        }
 
-        self.area += 1;
-        self.expand_rect(&[px]);
+            // In this case, the color matched but the contour only represented
+            // the previous row by their left and right border pixels. We push
+            // the new pixel in this case, effectively expanding the row by one.
+            if !substituted {
+                self.pxs.push(px);
+            }
+
+            // let has_2_this_col = found_cols == 2;
+            // if let Some(subs_px) = subs_col_px {
+            // let mut col_iter_mut = self.pxs.iter_mut().rev().filter(|(_, c)| *c == px.1 );
+            // *(col_iter_mut.next().unwrap()) = px;
+            // *subs_px = px;
+            // }
+        }
+        self.expand_rect_and_area(px);
+    }
+
+    pub fn add_to_right_dense(&mut self, px : (u16, u16)) {
+        self.pxs.push(px);
+        self.expand_rect_and_area(px);
+    }
+
+    pub fn add_to_bottom_dense(&mut self, px : (u16, u16)) {
+        self.pxs.push(px);
+        self.expand_rect_and_area(px);
+    }
+
+    pub fn add_to_right_rect(&mut self, px : (u16, u16)) {
+        self.expand_rect_and_area(px);
+    }
+
+    pub fn add_to_bottom_rect(&mut self, px : (u16, u16)) {
+        self.expand_rect_and_area(px);
     }
 
     pub fn add_to_bottom(&mut self, px : (u16, u16), exp_mode : ExpansionMode) {
         // assert!(self.pixel_not_far_below(px), format!("Pixel not at bottom: {:?}", (self.outer_rect, &self.pxs, px)));
         match exp_mode {
-            ExpansionMode::Rect => { },
-            ExpansionMode::Dense => {
-                self.pxs.push(px);
-            },
-            ExpansionMode::Contour => {
-
-                if self.outer_rect.2 <= 1 {
-                    // Always add bottom pixels when the patch is still thin.
-                    self.pxs.push(px);
-                } else {
-                    // If patch is not thin, we verify if there are any pixels representing the
-                    // bottom patch border with the same col. If there are, we substitute it. If
-                    // there are not (the top row is represented only by the left and right pixels),
-                    // we add this pixel.
-
-                    // We iterate at least 2 rows because insertion of bottom pixels will leave the last row unsorted
-                    // (might have a few pixels of the row below it).
-                    let prev_row = self.pxs.iter_mut().rev()
-                        .enumerate()
-                        .take_while(|(_, (r, _))| *r >= px.0.saturating_sub(2) )
-                        .filter(|(_, (r, _))| *r == px.0 - 1 );
-
-                    let mut substituted = false;
-                    for (rev_ix, mut prev_px) in prev_row {
-                        if prev_px.1 == px.1 {
-                            *prev_px = px;
-
-                            // Keep last elements at the last row
-                            let n = self.pxs.len();
-                            self.pxs.swap(n - rev_ix - 1, n-1);
-
-                            substituted = true;
-                            break;
-                        }
-                    }
-
-                    // In this case, the color matched but the contour only represented
-                    // the previous row by their left and right border pixels. We push
-                    // the new pixel in this case, effectively expanding the row by one.
-                    if !substituted {
-                        self.pxs.push(px);
-                    }
-
-                    // let has_2_this_col = found_cols == 2;
-                    // if let Some(subs_px) = subs_col_px {
-                    // let mut col_iter_mut = self.pxs.iter_mut().rev().filter(|(_, c)| *c == px.1 );
-                    // *(col_iter_mut.next().unwrap()) = px;
-                    // *subs_px = px;
-                    // }
-                }
-
-                // } else {
-                //    self.pxs.push(px);
-                // }
-            }
+            ExpansionMode::Rect => self.add_to_bottom_rect(px),
+            ExpansionMode::Dense => self.add_to_bottom_dense(px),
+            ExpansionMode::Contour => self.add_to_bottom_contour(px)
         }
+    }
 
+    pub fn expand_rect_and_area(&mut self, px : (u16, u16)) {
         self.area += 1;
         self.expand_rect(&[px]);
     }
