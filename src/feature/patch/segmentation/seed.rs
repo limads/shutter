@@ -345,7 +345,6 @@ fn grow<F>(
     win : &Window<'_, u8>,
     seed : (u16, u16),
     px_spacing : usize,
-    // mut mode : ColorMode,
     comp : F,
     ref_mode : ReferenceMode,
     max_area : Option<usize>,
@@ -374,7 +373,6 @@ where
     // Will check the absolute difference is <= px_spacing there.
     assert!(px_spacing == 1);
 
-    let mut abs_dist = px_spacing as u16;
     let mut outer_rect = (seed.0, seed.1, 1, 1);
 
     let mut n_px = 0;
@@ -395,13 +393,33 @@ where
         }
     };
 
+    // Loop counter, starting from seed and incrementing by px_spacing.
+    let mut abs_dist = px_spacing as u16;
+
+    debug_assert!(
+
+        // Current front should be empty.
+        exp_patch.top.curr.is_empty() &&
+        exp_patch.left.curr.is_empty() &&
+        exp_patch.right.curr.is_empty() &&
+        exp_patch.bottom.curr.is_empty() &&
+
+        // Past front should contain seed only.
+        exp_patch.top.past.len() == 1 &&
+        exp_patch.left.past.len() == 1 &&
+        exp_patch.right.past.len() == 1 &&
+        exp_patch.bottom.past.len() == 1
+    );
+
     loop {
+
         debug_assert!(
             exp_patch.top.curr.is_empty() &&
             exp_patch.left.curr.is_empty() &&
             exp_patch.right.curr.is_empty() &&
             exp_patch.bottom.curr.is_empty()
         );
+
         let left_col = if grows_left { seed.1.checked_sub(abs_dist) } else { None };
         let top_row = if grows_top { seed.0.checked_sub(abs_dist) } else { None };
         let right_col = if grows_right {
@@ -428,7 +446,7 @@ where
         if exp_patch.top.past.len() >= 1 {
             let top_range = (exp_patch.top.past[0].1.saturating_sub(1))..((exp_patch.top.past[exp_patch.top.past.len()-1].1 + 2).min(w));
             if let Some(r) = top_row {
-                for c in /*col_range.clone()*/ top_range.clone() {
+                for c in top_range.clone() {
                     let px = (r, c);
                     let is_corner = (c == top_range.start || c == top_range.end-1);
                     if comp(win[px]) && (is_corner || ( /*pixel_above_rect(&outer_rect, px) &&*/ pixel_neighbors_top(&exp_patch, px))) {
@@ -448,7 +466,7 @@ where
         if exp_patch.left.past.len() >= 1 {
             let left_range = (exp_patch.left.past[0].0.saturating_sub(1))..((exp_patch.left.past[exp_patch.left.past.len()-1].0 + 2).min(h));
             if let Some(c) = left_col {
-                for r in /*row_range.clone().skip(1).take(row_end-1)*/ left_range.clone() {
+                for r in left_range.clone() {
                     let px = (r, c);
                     let is_corner = (r == left_range.start || r == left_range.end-1);
                     if comp(win[px]) && ( is_corner || ( /*pixel_to_left_of_rect(&outer_rect, px) &&*/ pixel_neighbors_left(&exp_patch, px))) {
@@ -468,10 +486,10 @@ where
         if exp_patch.bottom.past.len() >= 1 {
             let bottom_range = (exp_patch.bottom.past[0].1.saturating_sub(1))..((exp_patch.bottom.past[exp_patch.bottom.past.len()-1].1 + 2).min(w));
             if let Some(r) = bottom_row {
-                for c in /*col_range*/ bottom_range.clone() {
+                for c in bottom_range.clone() {
                     let px = (r, c);
                     let is_corner = (r == bottom_range.start || r == bottom_range.end-1);
-                    if comp(win[px]) && (is_corner || ( /*pixel_below_rect(&outer_rect, px) &&*/ pixel_neighbors_bottom(&exp_patch, px))) {
+                    if comp(win[px]) && (is_corner || ( pixel_neighbors_bottom(&exp_patch, px))) {
                         if !grows_bottom {
                             // outer_rect.2 += px_spacing;
                             grows_bottom = true;
@@ -487,10 +505,10 @@ where
         if exp_patch.right.past.len() >= 1 {
             let right_range = (exp_patch.right.past[0].0.saturating_sub(1))..((exp_patch.right.past[exp_patch.right.past.len()-1].0 + 2).min(h));
             if let Some(c) = right_col {
-                for r in /*row_range.skip(1).take(row_end-1)*/ right_range.clone() {
+                for r in right_range.clone() {
                     let px = (r, c);
                     let is_corner = (r == right_range.start || r == right_range.end-1);
-                    if comp(win[px]) && (is_corner || ( /*pixel_to_right_of_rect(&outer_rect, px) &&*/ pixel_neighbors_right(&exp_patch, px))) {
+                    if comp(win[px]) && (is_corner || ( pixel_neighbors_right(&exp_patch, px))) {
                         if !grows_right {
                             // outer_rect.3 += px_spacing;
                             grows_right = true;
@@ -505,7 +523,7 @@ where
         let grows_any = grows_left || grows_right || grows_bottom || grows_top;
         expand_rect_with_front(&mut outer_rect, &exp_patch);
         patch.outer_rect = outer_rect;
-        expand_patch(exp_patch, patch, outer_rect, /*exp_mode,*/ win, seed, extension_func);
+        expand_patch(exp_patch, patch, outer_rect, win, seed, extension_func);
 
         if let Some(area) = max_area {
             if outer_rect.2 * outer_rect.3 > area as u16 {
@@ -534,10 +552,11 @@ where
         abs_dist += px_spacing as u16;
     }
 
-    assert!(patch.pxs.len() > 0);
+    debug_assert!(patch.pxs.len() > 0);
 
     if exp_mode == ExpansionMode::Contour {
-        assert!(patch.pxs.iter().find(|px| **px == seed ).is_none());
+        // Just make sure seed isn't inserted
+        debug_assert!(patch.pxs.iter().find(|px| **px == seed ).is_none());
     }
 
     // Some(patch)

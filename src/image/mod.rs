@@ -797,6 +797,16 @@ where
         iterate_row_wise(self.win, self.offset, self.win_sz, self.orig_sz, spacing).step_by(spacing)
     }
 
+    pub fn rect_pixels(&'a self, rect : (usize, usize, usize, usize)) -> impl Iterator<Item=N> + Clone + 'a {
+        let row_iter = rect.0..(rect.0 + rect.2);
+        let col_iter = rect.1..(rect.1 + rect.3);
+
+        col_iter.clone().map(move |c| self[(rect.0, c)] )
+            .chain(row_iter.clone().map(move |r| self[(r, rect.1 + rect.3 - 1 )] ) )
+            .chain(col_iter.clone().rev().map(move |c| self[(rect.0 + rect.2 - 1, c)] ) )
+            .chain(row_iter.clone().rev().map(move |r| self[(r, rect.1 )] ))
+    }
+
     /// Iterate over image pixels, expanding from a given location, until any image border is found.
     /// Iteration happens clock-wise from the seed pixel. Indices are at the original image scale.
     pub fn expanding_pixels(

@@ -51,9 +51,6 @@ pub mod density;
 // #[cfg(feature="opencvlib")]
 // pub mod mser;
 
-// TODO categorize into raster-based segmentation, seed-based segmentation
-// and cluster-based segmentation.
-
 pub fn intensity_below<const P : u8>(px : u8) -> bool {
     px <= P
 }
@@ -136,7 +133,16 @@ impl<'a> ContourNeighborhood<'a> {
         }
     }
 
-    pub fn closest_outside_neighbor(&self, seed : (u16, u16)) -> Option<(u16, u16)> {
+    pub fn closest_outside_neighbor(&self, win : &Window<'_, u8>, seed : (u16, u16)) -> Option<(u16, u16)> {
+        let out = self.closest_outside_neighbor_unchecked(seed)?;
+        if out.0 < win.height() as u16 && out.1 < win.width() as u16 {
+            Some(out)
+        } else {
+            None
+        }
+    }
+
+    pub fn closest_outside_neighbor_unchecked(&self, seed : (u16, u16)) -> Option<(u16, u16)> {
         let vert_incr = if self.strictly_below_seed(seed)? { 1 } else { -1 };
         let horiz_incr = if self.strictly_to_right_of_seed(seed)? { 1 } else { -1 };
         match self.neighborhood_type() {
@@ -634,7 +640,104 @@ pub enum ReferenceMode {
     Adaptive
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct PatchBorder {
+    inner : u8,
+    outer : u8
+}
+
 impl Patch {
+
+    pub fn rect_border_color(&self, win : &Window<'_, u8>) -> Option<u8> {
+        let mut out : u64 = 0;
+        let mut n : u64 = 0;
+        for px in win.rect_pixels(self.outer_rect::<usize>()) {
+            out += px as u64;
+            n += 1;
+        }
+        if n >= 1 {
+            Some((out / n) as u8)
+        } else {
+            None
+        }
+    }
+
+    pub fn border_color(&self, seed : (u16, u16), win : &Window<'_, u8>) -> Option<PatchBorder> {
+        let mut inner : u64 = 0;
+        let mut outer : u64 = 0;
+        let mut n : u64 = 0;
+        for (center_ix, neigh) in self.neighborhoods() {
+            if let Some(out) = neigh.closest_outside_neighbor(&win, seed) {
+                inner += win[self.pxs[center_ix]] as u64;
+                outer += win[out] as u64;
+                n += 1;
+            }
+        }
+        if n >= 1 {
+            Some(PatchBorder { inner : (inner / n) as u8, outer : (outer / n) as u8 })
+        } else {
+            None
+        }
+    }
+
+    /// Expands this patch if its color is closer to the average color border than the
+    /// outer color (if given) or the outer color calculated by taking the closest
+    /// outer pixels to the border (if outer is not given).
+    pub fn expand_to_closest_color(&mut self, win : Window<'_, u8>, seed : (u16, u16), outer : Option<u8>) -> usize {
+        if let Some(color) = self.border_color(seed, &win) {
+            let mut changes = Vec::new();
+            for (ix, neigh) in self.neighborhoods() {
+                if let Some(out) = neigh.closest_outside_neighbor(&win, seed) {
+                    if out.0 < win.width() as u16 && out.1 < win.height() as u16 {
+                        // let old_middle = (self.pxs[ix].0 as usize, self.pxs[ix].1 as usize);
+                        let new_cand_middle = (out.0 as usize, out.1 as usize);
+                        let diff_outer = (win[new_cand_middle] as i16 - outer.unwrap_or(color.outer) as i16).abs();
+                        let diff_inner = (win[new_cand_middle] as i16 - color.inner as i16).abs();
+                        if diff_inner < diff_outer {
+                            changes.push((ix, out));
+                        }
+                    }
+                }
+            }
+            self.expand_with_changes(changes)
+        } else {
+            0
+        }
+    }
+
+    pub fn radial_expansion(&mut self, win : &Window<'_, u8>, px_tol : u8, seed : (u16, u16), limit : usize) -> usize {
+        let mut changes = Vec::new();
+        for (ix, px) in self.pxs.iter().enumerate() {
+            let coord = (px.0 as f32 - seed.0 as f32, px.1 as f32 - seed.1 as f32);
+            let dist = crate::feature::shape::point_euclidian_u16(*px, seed);
+            let theta = coord.0.atan2(coord.1);
+            let cos_theta = theta.cos();
+            let sin_theta = theta.sin();
+            let mut expand = 1;
+            loop {
+                let new_coord = (seed.0 as f32 + (sin_theta*(dist + expand as f32)), seed.1 as f32 + (cos_theta*(dist + expand as f32)));
+                if new_coord.0 > 0.0 && new_coord.0 < (win.height() as f32 - 1.) && new_coord.1 > 0.0 && new_coord.1 < (win.width() as f32 - 1.) {
+                    let new_coord_u = (new_coord.0 as usize, new_coord.1 as usize);
+                    if ((win[new_coord_u] as i16 - win[*px] as i16).abs() as u8) < px_tol {
+                        if expand == 1 {
+                            changes.push((ix, (new_coord_u.0 as u16, new_coord_u.1 as u16)));
+                        } else {
+                            *changes.last_mut().unwrap() = ((ix, (new_coord_u.0 as u16, new_coord_u.1 as u16)));
+                        }
+                        expand += 1;
+                        if expand == limit {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+        }
+        self.expand_with_changes(changes)
+    }
 
     /// Iterates over pixel index of the middle element and its local neighborhood.
     pub fn neighborhoods<'a>(&'a self) -> Vec<(usize, ContourNeighborhood<'a>)> {
@@ -646,39 +749,60 @@ impl Patch {
         neighs
     }
 
-    pub fn expand_to_similar(&mut self, seed : (u16, u16), px_tol : u8, win : Window<'_, u8>) -> usize {
+    /*pub fn expand_to_similar(&mut self, seed : (u16, u16), px_tol : u8, win : Window<'_, u8>) -> usize {
         assert!(self.scale == 1);
         let mut changes = Vec::new();
         for (ix, neigh) in self.neighborhoods() {
-            if let Some(out) = neigh.closest_outside_neighbor(seed) {
+            if let Some(out) = neigh.closest_outside_neighbor(&win, seed) {
                 if out.0 < win.width() as u16 && out.1 < win.height() as u16 {
                     let old_middle = (self.pxs[ix].0 as usize, self.pxs[ix].1 as usize);
-                    if (win[old_middle] as i16 - win[(out.0 as usize, out.1 as usize)] as i16).abs() as u8 <= px_tol {
-                        changes.push((ix, out));
+                    let mut new_cand_middle = (out.0 as usize, out.1 as usize);
+
+                    let dy = (out.0 as i16 - self.pxs[ix].0 as i16).signum();
+                    let dx = (out.1 as i16 - self.pxs[ix].1 as i16).signum();
+
+                    let mut n_expanded = 0;
+                    while (win[old_middle] as i16 - win[new_cand_middle] as i16).abs() as u8 <= px_tol {
+                        if n_expanded == 0 {
+                            changes.push((ix, out));
+                        } else {
+                            *changes.last_mut().unwrap() = (ix, out);
+                        }
+                        n_expanded += 1;
+                        let new_y = out.0 as i16 + dy;
+                        let new_x = out.1 as i16 + dx;
+                        if new_y > 0 && new_y < win.height() && new_x > 0 && new_x < win.width() {
+                            new_cand_middle.0 = new_y as usize;
+                            new_cand_middle.1 = new_x as usize;
+                            out = (new_y as u16, new_x as u16);
+                        } else {
+                            break;
+                        }
+
                     }
                 }
             }
         }
 
+        self.expand_with_changes(changes)
+    }*/
+
+    fn expand_with_changes(&mut self, changes : Vec<(usize, (u16, u16))>) -> usize {
         let n_changes = changes.len();
         for (ch_ix, ch) in changes {
             let old = self.pxs[ch_ix];
             self.area += (ch.0.checked_sub(old.0).unwrap_or(0) + ch.1.checked_sub(old.1).unwrap_or(0)) as usize;
             self.pxs[ch_ix] = ch;
             if ch.0 < self.outer_rect.0 {
+                self.outer_rect.2 = self.outer_rect.2 + (self.outer_rect.0 - ch.0);
                 self.outer_rect.0 = ch.0;
             }
             if ch.1 < self.outer_rect.1 {
+                self.outer_rect.3 = self.outer_rect.3 + (self.outer_rect.1 - ch.1);
                 self.outer_rect.1 = ch.1;
             }
-            let h = ch.0 - self.outer_rect.0;
-            let w = ch.1 - self.outer_rect.1;
-            if h > self.outer_rect.2 {
-                self.outer_rect.2 = h;
-            }
-            if w > self.outer_rect.3 {
-                self.outer_rect.3 = w;
-            }
+            self.outer_rect.2 = (ch.0 - self.outer_rect.0).max(self.outer_rect.2);
+            self.outer_rect.3 = (ch.1 - self.outer_rect.1).max(self.outer_rect.3);
         }
         n_changes
     }
