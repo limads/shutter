@@ -25,6 +25,17 @@ use std::ops::Add;
 use bayes;
 use serde::{Serialize, Deserialize};
 
+/*
+(Klette & Rosenfeld (2004) For a binary image, a pair of pixels can be connected at the 4-neighborhood
+or 8-neighborhood. A set of connected pixel pairs where each pair is connected to
+at least one other defines a region, and can be conceptualized as an undirected
+graph with pixels as the nodes and their connectedness as the edges. The RasterSegmenter
+builds those graphs via the 4-neighborhood, the SeedSegmenter via the 8-neighborhood. RasterSegmenter
+can be used to build many graphs from the same image in a single iteration, where each separate group
+is a separate graph with the criteria "is this color" or "is not this color", where the colors are
+defined as the iteration happens given a separation criteria.
+*/
+
 /*IppStatus ippiMarkSpeckles_<mod>(Ipp<datatype>* pSrcDst, int srcDstStep, IppiSize
 roiSize, Ipp<datatype> speckleVal, int maxSpeckleSize, Ipp<datatype> maxPixDiff,
 IppiNorm norm, Ipp8u* pBuffer );*/
@@ -40,6 +51,8 @@ pub mod seed;
 pub mod raster;
 
 pub mod density;
+
+pub mod ray;
 
 // use nohash-hasher;
 
@@ -705,7 +718,7 @@ impl Patch {
         }
     }
 
-    pub fn radial_expansion(&mut self, win : &Window<'_, u8>, px_tol : u8, seed : (u16, u16), limit : usize) -> usize {
+    pub fn radial_expansion(&mut self, win : &Window<'_, u8>, px_tol : u8, adaptive : bool, seed : (u16, u16), limit : usize) -> usize {
         let mut changes = Vec::new();
         for (ix, px) in self.pxs.iter().enumerate() {
             let coord = (px.0 as f32 - seed.0 as f32, px.1 as f32 - seed.1 as f32);
@@ -714,11 +727,19 @@ impl Patch {
             let cos_theta = theta.cos();
             let sin_theta = theta.sin();
             let mut expand = 1;
+            let mut old_coord = (px.0 as usize, px.1 as usize);
             loop {
-                let new_coord = (seed.0 as f32 + (sin_theta*(dist + expand as f32)), seed.1 as f32 + (cos_theta*(dist + expand as f32)));
+                let new_coord = ((seed.0 as f32 - (sin_theta*(dist + expand as f32 + 1.))).ceil(), (seed.1 as f32 + (cos_theta*(dist + expand as f32 + 1.))).ceil());
                 if new_coord.0 > 0.0 && new_coord.0 < (win.height() as f32 - 1.) && new_coord.1 > 0.0 && new_coord.1 < (win.width() as f32 - 1.) {
                     let new_coord_u = (new_coord.0 as usize, new_coord.1 as usize);
-                    if ((win[new_coord_u] as i16 - win[*px] as i16).abs() as u8) < px_tol {
+                    let is_match = if adaptive {
+                        let matched = ((win[new_coord_u] as i16 - win[old_coord] as i16).abs() as u8) < px_tol;
+                        old_coord = new_coord_u;
+                        matched
+                    } else {
+                        ((win[new_coord_u] as i16 - win[*px] as i16).abs() as u8) < px_tol
+                    };
+                    if is_match {
                         if expand == 1 {
                             changes.push((ix, (new_coord_u.0 as u16, new_coord_u.1 as u16)));
                         } else {
@@ -818,12 +839,37 @@ impl Patch {
         }
     }
 
+    pub fn outer_points_with_angle<N>(&self, min_angle : f64, max_angle : f64) -> Vec<(N, N)>
+    where
+        N : Clone + Copy + From<u16> + 'static
+    {
+        let angles = self.inner_angles().collect::<Vec<_>>();
+        let mut pxs = self.outer_points::<N>(ExpansionMode::Contour);
+        let mut ix = 0;
+        pxs.retain(|px| { let within = angles[ix] >= min_angle && angles[ix] <= max_angle; ix += 1; within });
+        pxs
+    }
+
     /// Returns all inner angles.
     pub fn inner_angles<'a>(&'a self) -> impl Iterator<Item=f64> +'a {
         let n = self.pxs.len();
+
+        let first = shape::vertex_angle(
+            (self.pxs[0].0 as usize, self.pxs[0].1 as usize),
+            (self.pxs[n-1].0 as usize, self.pxs[n-1].1 as usize),
+            (self.pxs[1].0 as usize, self.pxs[1].1 as usize),
+        ).unwrap_or(std::f64::consts::PI);
+
+        let last = shape::vertex_angle(
+            (self.pxs[n-1].0 as usize, self.pxs[n-1].1 as usize),
+            (self.pxs[n-2].0 as usize, self.pxs[n-2].1 as usize),
+            (self.pxs[0].0 as usize, self.pxs[0].1 as usize),
+        ).unwrap_or(std::f64::consts::PI);
+
         let triplet_iter = self.pxs.iter().take(n-2)
             .zip(self.pxs.iter().skip(1).take(n-1).zip(self.pxs.iter().skip(2)));
-        triplet_iter.map(|(ext1, (center, ext2))| {
+
+        let middle_iter = triplet_iter.map(|(ext1, (center, ext2))| {
 
             let opt_angle = shape::vertex_angle(
                 (center.0 as usize, center.1 as usize),
@@ -832,9 +878,11 @@ impl Patch {
             );
 
             // In the case the triplets are colinear, opt_angle will be None, and
-            // since they are collinear their angle is PI.
+            // since they are collinear their angle is PI (limit of a triangle
+            // that was stretched out over its vertices).
             opt_angle.unwrap_or(std::f64::consts::PI)
-        })
+        });
+        std::iter::once(first).chain(middle_iter).chain(std::iter::once(last))
     }
 
     pub fn inner_angle_stats(&self) -> (f64, f64) {

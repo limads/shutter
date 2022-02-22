@@ -527,6 +527,14 @@ where
     N : Scalar + Mul<Output=N> + MulAssign + Copy + Copy + Serialize + DeserializeOwned + Any
 {
 
+    pub fn as_ptr(&self) -> *const N {
+        self.win.as_ptr()
+    }
+
+    pub fn slice_len(&self) -> usize {
+        self.win.len()
+    }
+
     /// Returns a minimum number of overlapping windows of the informed shape,
     /// that completely cover the current window.
     pub fn minimum_inner_windows(&'a self, shape : (usize, usize)) -> Vec<Window<'a, N>> {
@@ -1270,6 +1278,11 @@ where
     N : Scalar + Copy + Debug
 {
 
+    pub unsafe fn from_ptr(ptr : *mut N, len : usize, full_ncols : usize, offset : (usize, usize), sz : (usize, usize)) -> Option<Self> {
+        let s = std::slice::from_raw_parts_mut(ptr, len);
+        Self::sub_from_slice(s, full_ncols, offset, sz)
+    }
+
     pub fn from_slice(src : &'a mut [N], ncols : usize) -> Option<Self> {
         if src.len() % ncols != 0 {
             return None;
@@ -1454,9 +1467,10 @@ impl WindowMut<'_, u8> {
                     self.draw(Mark::Line(*p1, *p2, col));
                 }
 
-                if crate::feature::shape::point_euclidian(pts[0], pts[pts.len()-1]) < 32.0 {
-                    self.draw(Mark::Line(pts[0], pts[pts.len()-1], col));
-                }
+                // Close point?
+                // if crate::feature::shape::point_euclidian(pts[0], pts[pts.len()-1]) < 32.0 {
+                //    self.draw(Mark::Line(pts[0], pts[pts.len()-1], col));
+                // }
             },
             Mark::Text(tl_pos, txt, color) => {
 

@@ -111,7 +111,8 @@ impl ExpansionFront {
 /// required to be non-overlapping, the SeedGrowth algorithm can be cleaned after each
 /// iteration, and the borders of the previous iteration can be used as information to
 /// where the next seed should be positioned, and the image should be trimmed taking only
-/// the regions not yet considered at the previous iteration. TODO rename to SeedSegmenter
+/// the regions not yet considered at the previous iteration. TODO rename to SeedSegmenter or
+/// FanSegmenter, since pixels are expanded in a fan-out fashion.
 #[derive(Debug, Clone)]
 pub struct SeedGrowth {
     front : ExpansionFront,

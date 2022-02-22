@@ -3,6 +3,8 @@ use crate::feature::edge::*;
 use std::cmp::{PartialEq, Ordering};
 use nalgebra::*;
 use away::{Manhattan, Metric};
+use nalgebra::geometry::Rotation2;
+use nalgebra::Vector2;
 
 /// Calculates the euclidian distance between two points. By convention the row coordinate will
 /// come first, but since the distance is scalar (not vector) quantity, the order of the coordinate
@@ -21,6 +23,23 @@ pub fn angle(side_a : f64, side_b : f64, opp_side : f64) -> f64 {
 	angle_cos.acos()
 }
 
+/*
+Convex hull (Graham's scan) after Klette & Rosenfeld (2004):
+(1) Start at a pivot point p that is known to be in the convex hull
+(2) Sort the remaining points p_i in order of increasing angles. If the angle is
+the same for more than one point, keep only the point furthest from p. Let the resulting
+sorted sequence of points be q1..qm.
+(3) Initialize the convex set C(S) by the edge between p and q1
+(4) Scan through the sorted sequence. At each left turn, add a new edge to C(S). If there
+is no turn (collinear points) skip the point. Backtrack at each right turn (i.e. remove the previous
+points).
+
+Rosenfeld-Pfaltz labeling algorithm labels all components of an image
+in two scans (label propagation step and class equivalence step). Algo 2.2. of Klette & Rosenfeld.
+This can be used for segmentation: (1) Median-filter an image (or max-filter, or min-filter, etc).
+(2) For each resulting median: Label it.
+
+*/
 // The convex polygon of a contour is calculated by:
 // (1) Iterate over all triplets of points
 // (2) Remove points with angle > 180.
@@ -729,6 +748,7 @@ pub fn join_col_ordered(pts : &[(usize, usize)], max_dist : f64) -> Vec<[(usize,
     join_pairs_col_ordered(&pairs[..], max_dist)
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct Ellipse {
     pub center : (usize, usize),
     pub large_axis : f64,
@@ -736,9 +756,77 @@ pub struct Ellipse {
     pub angle : f64
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct EllipseAxis {
+    pub major : (usize, usize),
+    pub minor : (usize, usize)
+}
+
 impl Ellipse {
 
-    fn major_axis_points(&self) -> (usize, usize) {
+    /// Returns radial distance of the given point. If r < 1.0, point is inside the ellipse. If r == 1, point is
+    /// exactly at edge of ellipse. If r > 1.0, point is outside ellipse.
+    pub fn point_dist_radii(&self, pt : (usize, usize), img_height : usize) -> Option<f64> {
+        let axis = self.axis()?;
+        let major = Vector2::from([
+            axis.major.1 as f64 - self.center.1 as f64,
+            img_height as f64 - axis.major.0 as f64 - self.center.0 as f64
+        ]);
+        let minor = Vector2::from([
+            axis.minor.1 as f64 - self.center.1 as f64,
+            img_height as f64 - axis.minor.0 as f64 - self.center.0 as f64
+        ]);
+        let rot = Rotation2::new(self.positive_angle().to_radians());
+        let rot_major = rot * &major;
+        let rot_minor = rot * &minor;
+        let pt = Vector2::from([
+            pt.1 as f64 - self.center.1 as f64,
+            img_height as f64 - pt.0 as f64 - self.center.0 as f64
+        ]);
+        let rot_pt = rot * &pt;
+
+        // Derived from ellipse equation, (x-xc)^2/semi_major^2 + (y-yc)^2/semi_minor^2 = 1
+        // (but ignoring (xc, yc) since everything was already centered at the conversion stage)
+        Some((rot_pt[0].powf(2.) / rot_major[0].powf(2.) + rot_pt[1].powf(2.) / rot_minor[1].powf(2.)))
+    }
+
+    pub fn positive_angle(&self) -> f64 {
+        let mut angle = self.angle;
+        while angle > 90.0 {
+            angle -= 90.;
+        }
+        angle
+    }
+
+    pub fn axis(&self) -> Option<EllipseAxis> {
+        // println!("{}", self.angle);
+        if self.angle <= 90. {
+            let major = (
+                self.center.0 + (-1. * (-self.angle).to_radians().sin() * (self.large_axis / 2.)) as usize,
+                self.center.1 + ((-self.angle).to_radians().cos() * (self.large_axis / 2.)) as usize
+            );
+            let minor = (
+                self.center.0.checked_sub((-1. * (-90. as f64 + self.angle).to_radians().sin() * (self.small_axis / 2.)) as usize)?,
+                self.center.1 + ( (-90. as f64 + self.angle).to_radians().cos() * (self.small_axis / 2.)) as usize
+            );
+            Some(EllipseAxis { major, minor })
+        } else {
+            let mut p = self.clone();
+            p.small_axis = self.large_axis;
+            p.large_axis = self.small_axis;
+            p.angle -= 90.;
+            p.axis()
+            // if self.angle > 90. && self.angle < 180.0 {
+            //    let mut p = self.clone();
+                //p.angle = p.angle - 90.;
+                //p.axis()
+            // } else {
+            //    panic!()
+            // }
+        }
+    }
+
+    /*fn major_axis_points(&self) -> (usize, usize) {
         // large_axis * angle.to_radians().sin()
         unimplemented!()
     }
@@ -746,7 +834,7 @@ impl Ellipse {
     fn minor_axis_points(&self) -> (usize, usize) {
         // small_axis * angle.to_radians().cos()
         unimplemented!()
-    }
+    }*/
 }
 
 pub fn outer_square_for_circle(center : (usize, usize), radius : usize) -> Option<(usize, usize, usize, usize)> {
@@ -839,7 +927,7 @@ pub mod cvellipse {
     }
 
     // TODO make WindowMut
-    pub fn draw_ellipse(window : Window<'_, u8>, el : &Ellipse) {
+    pub fn draw_ellipse(window : Window<'_, u8>, el : &Ellipse, color : u8) {
         let thickness = 1;
         let line_type = 8;
         let shift = 0;
@@ -851,7 +939,7 @@ pub mod cvellipse {
             el.angle,
             0.0,
             360.0,
-            core::Scalar::from((255f64, 0f64, 0f64)),
+            core::Scalar::from((color as f64, color as f64, color as f64)),
             thickness,
             line_type,
             shift
@@ -923,9 +1011,11 @@ pub mod cvellipse {
             }
             let w = rotated_rect.size().width as f64;
             let h = rotated_rect.size().height as f64;
-            let large_axis = w.max(h);
-            let small_axis = w.min(h);
-            assert!(large_axis >= small_axis);
+            //let large_axis = w.max(h);
+            //let small_axis = w.min(h);
+            let large_axis = w;
+            let small_axis = h;
+            // assert!(large_axis >= small_axis);
             Ok(Ellipse {
                 center,
                 large_axis,
