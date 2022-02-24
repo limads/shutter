@@ -30,7 +30,7 @@ where
                 if any_t.is::<f64>() {
                     core::CV_64FC1
                 } else {
-                    panic!("Invalid matrix type");        
+                    panic!("Invalid matrix type (expected u8, i16, f32 or f64)");
                 }
             }
         }

@@ -790,6 +790,10 @@ impl Ellipse {
         Some((rot_pt[0].powf(2.) / rot_major[0].powf(2.) + rot_pt[1].powf(2.) / rot_minor[1].powf(2.)))
     }
 
+    pub fn contains(&self, pt : (usize, usize), img_height : usize) -> Option<bool> {
+        self.point_dist_radii(pt, img_height).map(|dist| dist <= 1.0 )
+    }
+
     pub fn positive_angle(&self) -> f64 {
         let mut angle = self.angle;
         while angle > 90.0 {

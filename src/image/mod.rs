@@ -95,6 +95,32 @@ where
 
 }
 
+impl From<Image<u8>> for Image<f32> {
+
+    fn from(img : Image<u8>) -> Image<f32> {
+        #[cfg(feature="opencvlib")]
+        {
+            use opencv::prelude::MatTrait;
+            let mut out = Image::<f32>::new_constant(img.height(), img.width(), 0.);
+            let m : opencv::core::Mat = (&img).into();
+            m.convert_to(&mut out, opencv::core::CV_32F, 1.0, 0.0);
+            return out;
+        }
+        unimplemented!()
+    }
+
+}
+
+impl TryFrom<Image<f32>> for Image<u8> {
+
+    type Error = ();
+
+    fn try_from(img : Image<f32>) -> Result<Image<u8>, ()> {
+        unimplemented!()
+    }
+
+}
+
 impl<N> Image<N>
 where
     N : Scalar + Copy + Default + Zero + Copy + Serialize + DeserializeOwned + Any
@@ -115,6 +141,14 @@ where
                 self.buf[r*sparse_ncols + c] = content[r*sample_n*ncols + c*sample_n];
             }
         }
+    }
+
+    #[cfg(feature="opencvlib")]
+    pub fn equalize_inplace(&mut self) {
+        // assert!(self.shape() == dst.shape());
+        let src : core::Mat = self.full_window().into();
+        let mut dst : core::Mat = self.full_window_mut().into();
+        imgproc::equalize_hist(&src, &mut dst);
     }
 
     #[cfg(feature="opencvlib")]
@@ -1159,6 +1193,95 @@ where
 
 }
 
+#[cfg(feature="opencvlib")]
+impl<N> opencv::core::ToInputArray for Image<N>
+where
+    N : Scalar + Copy + Default + Zero + Serialize + DeserializeOwned + Any
+{
+
+    fn input_array(&self) -> opencv::Result<opencv::core::_InputArray> {
+        let out : opencv::core::Mat = (&*self).into();
+        out.input_array()
+    }
+
+}
+
+#[cfg(feature="opencvlib")]
+impl<N> opencv::core::ToOutputArray for Image<N>
+where
+    N : Scalar + Copy + Default + Zero + Serialize + DeserializeOwned + Any
+{
+
+    fn output_array(&mut self) -> opencv::Result<opencv::core::_OutputArray> {
+        let mut out : opencv::core::Mat = (&mut *self).into();
+        out.output_array()
+    }
+
+}
+
+#[cfg(feature="opencvlib")]
+impl<N> opencv::core::ToInputArray for Window<'_, N>
+where
+    N : Scalar + Copy + Default + Zero + Serialize + DeserializeOwned + Any
+{
+
+    fn input_array(&self) -> opencv::Result<opencv::core::_InputArray> {
+        let out : opencv::core::Mat = (self.clone()).into();
+        out.input_array()
+    }
+
+}
+
+#[cfg(feature="opencvlib")]
+impl<N> opencv::core::ToOutputArray for WindowMut<'_, N>
+where
+    N : Scalar + Copy + Default + Zero + Serialize + DeserializeOwned + Any
+{
+
+    fn output_array(&mut self) -> opencv::Result<opencv::core::_OutputArray> {
+        let mut out : opencv::core::Mat = (self).into();
+        out.output_array()
+    }
+
+}
+
+#[cfg(feature="opencvlib")]
+pub fn median_blur(win : &Window<'_, u8>, output : WindowMut<'_, u8>, kernel : usize) {
+
+    use opencv::{imgproc, core};
+
+    let input : core::Mat = win.clone().into();
+    let mut out : core::Mat = output.into();
+    imgproc::median_blur(&input, &mut out, kernel as i32).unwrap();
+
+}
+
+#[cfg(feature="opencvlib")]
+impl<N> From<core::Mat> for Image<N>
+where
+    N : Scalar + Copy + Default + Zero + Serialize + DeserializeOwned + Any + opencv::core::DataType
+{
+
+    fn from(m : core::Mat) -> Image<N> {
+
+        use opencv::prelude::MatTraitManual;
+        use opencv::prelude::MatTrait;
+        // assert!(m.is_contiguous().unwrap());
+
+        let sz = m.size().unwrap();
+        let h = sz.height as usize;
+        let w = sz.width as usize;
+        let mut img = Image::<N>::new_constant(h, w, N::zero());
+        for i in 0..h {
+            for j in 0..w {
+                img[(i, j)] = *m.at_2d::<N>(i as i32, j as i32).unwrap();
+            }
+        }
+        img
+    }
+
+}
+
 /// TODO mark as unsafe impl
 #[cfg(feature="opencvlib")]
 impl<N> Into<core::Mat> for &Image<N>
@@ -1167,9 +1290,10 @@ where
 {
 
     fn into(self) -> core::Mat {
-        let sub_slice = None;
+        /*let sub_slice = None;
         let stride = self.ncols;
-        unsafe{ cvutils::slice_to_mat(&self.buf[..], stride, sub_slice) }
+        unsafe{ cvutils::slice_to_mat(&self.buf[..], stride, sub_slice) }*/
+        self.full_window().into()
     }
 }
 
@@ -1180,9 +1304,10 @@ where
 {
 
     fn into(self) -> core::Mat {
-        let sub_slice = None;
+        /*let sub_slice = None;
         let stride = self.ncols;
-        unsafe{ cvutils::slice_to_mat(&self.buf[..], stride, sub_slice) }
+        unsafe{ cvutils::slice_to_mat(&self.buf[..], stride, sub_slice) }*/
+        self.full_window_mut().into()
     }
 }
 
@@ -1200,9 +1325,35 @@ where
     }
 }
 
+#[cfg(feature="opencvlib")]
+impl<N> Into<core::Mat> for &Window<'_, N>
+where
+    N : Scalar + Copy + Default
+{
+
+    fn into(self) -> core::Mat {
+        let sub_slice = Some((self.offset, self.win_sz));
+        let stride = self.orig_sz.1;
+        unsafe{ cvutils::slice_to_mat(self.win, stride, sub_slice) }
+    }
+}
+
 /// TODO mark as unsafe impl
 #[cfg(feature="opencvlib")]
 impl<N> Into<core::Mat> for WindowMut<'_, N>
+where
+    N : Scalar + Copy + Default
+{
+
+    fn into(self) -> core::Mat {
+        let sub_slice = Some((self.offset, self.win_sz));
+        let stride = self.orig_sz.1;
+        unsafe{ cvutils::slice_to_mat(self.win, stride, sub_slice) }
+    }
+}
+
+#[cfg(feature="opencvlib")]
+impl<N> Into<core::Mat> for &mut WindowMut<'_, N>
 where
     N : Scalar + Copy + Default
 {
@@ -1234,6 +1385,9 @@ pub enum Mark {
 
     // Center, radius and color
     Circle((usize, usize), usize, u8),
+
+    /// A dense circle
+    Dot((usize, usize), usize, u8),
 
     /// TL pos, size and color
     Rect((usize, usize), (usize, usize), u8),
@@ -1347,7 +1501,38 @@ where
 
 }
 
+impl<'a> WindowMut<'a, u8> {
+
+    // TODO also implement contrast_adjust_mut
+    pub fn brightness_adjust_mut(&'a mut self, k : i16) {
+
+        assert!(k <= 255 && k >= -255);
+        let abs_k = k.abs() as u8;
+        if k > 0 {
+            self.pixels_mut(1).for_each(|px| *px = px.saturating_add(abs_k) );
+        } else {
+            self.pixels_mut(1).for_each(|px| *px = px.saturating_sub(abs_k) );
+        }
+    }
+
+}
+
 impl WindowMut<'_, u8> {
+
+    /// For any pixel >= color, set it and its neighborhood to erase_color.
+    pub fn erase_speckles(&mut self, color : u8, neigh : usize, erase_color: u8) {
+        for i in 0..self.win_sz.0 {
+            for j in 0..self.win_sz.1 {
+                if self[(i, j)] >= color {
+                    for ni in i.saturating_sub(neigh)..((i + neigh).min(self.win_sz.0-1)) {
+                        for nj in j.saturating_sub(neigh)..((j + neigh).min(self.win_sz.1-1)) {
+                            self[(ni, nj)] = erase_color;
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     pub fn fill_with_byte<'a>(&'a mut self, byte : u8) {
         // self.rows_mut().for_each(|row| std::ptr::write_bytes(&mut row[0] as *mut _, byte, row.len()) );
@@ -1457,6 +1642,15 @@ impl WindowMut<'_, u8> {
                 }
 
                 panic!("Circle draw require 'opencvlib' feature");
+            },
+            Mark::Dot(pos, radius, color) => {
+                for i in 0..self.height() {
+                    for j in 0..self.width() {
+                        if crate::feature::shape::point_euclidian((i, j), pos) <= radius as f32 {
+                            self[(i, j)] = color;
+                        }
+                    }
+                }
             },
             Mark::Shape(pts, col) => {
                 let n = pts.len();
@@ -1743,14 +1937,37 @@ where
 
 impl<N> ripple::filter::Convolve for Image<N>
 where
-    N : Scalar + Copy + Default + Zero + Copy + Serialize + DeserializeOwned + Any
+    N : Scalar + Copy + Default + Zero + Copy + Serialize + DeserializeOwned + Any + std::ops::Mul<Output = N> + std::ops::AddAssign
 {
 
     fn convolve_mut(&self, filter : &Self, out : &mut Self) {
 
+        {
+            assert!(out.height() == self.height() + filter.height() - 1);
+            assert!(out.width() == self.width() + filter.width() - 1);
+            assert!(filter.width() % 2 == 1);
+            assert!(filter.height() % 2 == 1);
+            let half_kh = filter.height() / 2;
+            let half_kw = filter.width() / 2;
+
+            for (ix_ci, center_i) in (half_kh..(self.height() - half_kh)).enumerate() {
+                for (ix_cj, center_j) in (half_kw..(self.width() - half_kw)).enumerate() {
+                    out[(ix_ci, ix_cj)] = N::zero();
+                    for (ix_ki, ki) in ((center_i - half_kh)..(center_i + half_kh + 1)).enumerate() {
+                        for (ix_kj, kj) in ((center_j - half_kw)..(center_j + half_kw + 1)).enumerate() {
+                            out[(ix_ci, ix_cj)] += self[(ki, kj)] * filter[(ix_ki, ix_kj)];
+                        }
+                    }
+                }
+            }
+            return;
+        }
+
         #[cfg(feature="opencvlib")]
         {
             use opencv;
+
+            assert!(filter.height() % 2 != 0 && filter.width() % 2 != 0 );
             let input : opencv::core::Mat = self.into();
             let kernel : opencv::core::Mat = filter.into();
             let mut flip_kernel = kernel.clone();

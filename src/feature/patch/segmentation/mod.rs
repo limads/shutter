@@ -25,6 +25,27 @@ use std::ops::Add;
 use bayes;
 use serde::{Serialize, Deserialize};
 
+/*pub trait  PixelCompare<T>
+where
+    Self : Fn(T)-> bool
+{
+
+    fn px_cmp(T) -> bool;
+
+}
+
+// Compare using current value
+impl PixelCompare for fn(u8)->bool { }
+
+// Compare using current value and immediate 1d neighbor
+impl PixelCompare for fn((u8, u8))->bool { }
+
+// Compare using current value and immediate 4-neighborhood
+impl PixelCompare for fn((u8, [u8; 4]))->bool { }
+
+// Compare using current value and immediate 8-neighborhood
+impl PixelCompare for fn((u8, [u8; 8]))->bool { }*/
+
 /*
 (Klette & Rosenfeld (2004) For a binary image, a pair of pixels can be connected at the 4-neighborhood
 or 8-neighborhood. A set of connected pixel pairs where each pair is connected to
