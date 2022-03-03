@@ -19,7 +19,9 @@ pub struct RasterSegmenter {
 
     search : PatchSearch,
 
-    win_sz : (usize, usize)
+    win_sz : (usize, usize),
+
+    labels : Vec<(usize, usize)>
 }
 
 impl RasterSegmenter {
@@ -30,7 +32,8 @@ impl RasterSegmenter {
             prev_row_mask.push(false);
         }
         let search = PatchSearch::new(win_sz, px_spacing);
-        Self { patches : Vec::with_capacity(16), px_spacing, n_patches : 0, prev_row_mask, search, win_sz, /*n_matches_row, n_matches_col*/ }
+        let labels : Vec<(usize, usize)> = crate::image::labels(win_sz, px_spacing).collect();
+        Self { patches : Vec::with_capacity(16), px_spacing, n_patches : 0, prev_row_mask, search, win_sz, /*n_matches_row, n_matches_col*/labels }
     }
 
     // TODO use color mode to EXCLUDE a given color. Then, the struct should also hold a top
@@ -76,7 +79,6 @@ impl RasterSegmenter {
                 )
             }
         };
-
         self.n_patches = n_patches;
         &self.patches[0..self.n_patches]
     }
@@ -97,6 +99,7 @@ impl RasterSegmenter {
                         &mut self.prev_row_mask,
                         &mut self.patches,
                         &win,
+                        &self.labels,
                         self.px_spacing.try_into().unwrap(),
                         comp,
                         Patch::add_to_right_rect,
@@ -109,6 +112,7 @@ impl RasterSegmenter {
                         &mut self.prev_row_mask,
                         &mut self.patches,
                         &win,
+                        &self.labels,
                         self.px_spacing.try_into().unwrap(),
                         comp,
                         Patch::add_to_right_contour,
@@ -123,6 +127,7 @@ impl RasterSegmenter {
                         &mut self.prev_row_mask,
                         &mut self.patches,
                         &win,
+                        &self.labels,
                         self.px_spacing.try_into().unwrap(),
                         comp,
                         Patch::add_to_right_dense,
@@ -131,6 +136,25 @@ impl RasterSegmenter {
                 }
             }
         };
+
+        // Since rect expansion just expands the rect, now insert the border pixels and calculate area.
+        if exp_mode == ExpansionMode::Rect {
+            for mut patch in self.patches[0..n_patches].iter_mut() {
+                let rect = patch.outer_rect::<usize>();
+                for r in [rect.0, rect.0 + rect.2] {
+                    for c in rect.1..(rect.1 + rect.3) {
+                        patch.pxs.push((r as u16, c as u16));
+                    }
+                }
+                for c in [rect.1, rect.1 + rect.3] {
+                    for r in rect.0..(rect.0 + rect.2) {
+                        patch.pxs.push((r as u16, c as u16));
+                    }
+                }
+                patch.area = rect.2 * rect.3;
+            }
+        }
+
         self.n_patches = n_patches;
         assert!(self.patches[0..self.n_patches].iter().all(|patch| patch.pxs.len() > 0 ));
         &self.patches[0..self.n_patches]
@@ -315,6 +339,7 @@ unsafe fn single_color_patches<F, R, B>(
     prev_row_mask : &mut Vec<bool>,
     patches : &mut Vec<Patch>,
     win : &Window<'_, u8>,
+    labels : &[(usize, usize)],
     px_spacing : u16,
     comp : F,
     add_to_right : R,
@@ -330,17 +355,18 @@ where
     let mut color_match = false;
     let subsampled_ncols = win.width() / px_spacing as usize;
     let last_col = subsampled_ncols - 1;
-    for (r, c, px_color) in win.labeled_pixels::<usize, _>(px_spacing as usize) {
+    // for (r, c, px_color) in win.labeled_pixels::<usize, _>(px_spacing as usize) {
+    for ((r, c), px_color) in labels.iter().zip(win.pixels(px_spacing as usize)) {
 
-        if comp(px_color) {
-            if r >= 1 && *prev_row_mask.get_unchecked(c) {
+        if comp(*px_color) {
+            if *r >= 1 && *prev_row_mask.get_unchecked(*c) {
                 search.merges_top = true;
-                search.top_patch_ix = *search.prev_row_patch_ixs.get_unchecked(c);
+                search.top_patch_ix = *search.prev_row_patch_ixs.get_unchecked(*c);
             } else {
                 search.merges_top = false;
             }
             search.merges_left = if let Some(last_c) = last_matching_col {
-                c > 0 && c - last_c == 1
+                *c > 0 && *c - last_c == 1
             } else {
                 false
             };
@@ -350,23 +376,23 @@ where
                 search,
                 &mut n_patches,
                 win,
-                r,
-                c,
-                px_color,
+                *r,
+                *c,
+                *px_color,
                 px_spacing,
                 add_to_right,
                 add_to_bottom
             );
-            if c < last_col  {
+            if *c < last_col  {
                 last_matching_col = Some(c);
             } else {
                 last_matching_col = None;
             }
-            *prev_row_mask.get_unchecked_mut(c) = true;
+            *prev_row_mask.get_unchecked_mut(*c) = true;
 
         } else {
-            *prev_row_mask.get_unchecked_mut(c) = false;
-            if c == last_col {
+            *prev_row_mask.get_unchecked_mut(*c) = false;
+            if *c == last_col {
                 last_matching_col = None;
             }
         }
@@ -504,7 +530,7 @@ fn append_or_update_patch<R, B>(
             search.left_patch_ix = search.top_patch_ix;
         },
         (false, false) => {
-            add_patch(patches, search, n_patches, win, r, c, color, px_spacing);
+            add_patch(patches, search, n_patches, win, /*r, c,*/pos, color, px_spacing);
         }
     }
 
@@ -522,24 +548,25 @@ fn add_patch(
     search : &mut PatchSearch,
     n_patches : &mut usize,
     win : &Window<'_, u8>,
-    r : usize,
-    c : usize,
+    // r : usize,
+    // c : usize,
+    pos : (u16, u16),
     color : u8,
     px_spacing : u16
 ) {
     if *n_patches < patches.len() {
         patches[*n_patches].pxs.clear();
-        patches[*n_patches].pxs.push((r as u16, c as u16));
-        patches[*n_patches].outer_rect = (r as u16, c as u16, 1, 1);
+        patches[*n_patches].pxs.push(pos);
+        patches[*n_patches].outer_rect = (pos.0, pos.1, 1, 1);
         patches[*n_patches].color = color;
         patches[*n_patches].scale = px_spacing;
         patches[*n_patches].img_height = win.height();
         patches[*n_patches].area += 1;
     } else {
-        patches.push(Patch::new((r as u16, c as u16), color, px_spacing, win.height()));
+        patches.push(Patch::new(pos, color, px_spacing, win.height()));
     }
     *n_patches += 1;
-    search.prev_row_patch_ixs[c] = *n_patches - 1;
+    search.prev_row_patch_ixs[pos.1 as usize] = *n_patches - 1;
     search.left_patch_ix = *n_patches - 1;
     // search.contour_state.add_new(r, c, 0);
 }

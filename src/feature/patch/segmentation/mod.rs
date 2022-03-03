@@ -75,6 +75,8 @@ pub mod density;
 
 pub mod ray;
 
+pub mod pattern;
+
 // use nohash-hasher;
 
 // use crate::feature::shape;
@@ -1259,11 +1261,11 @@ impl Patch {
     }
 
     pub fn add_to_right_rect(&mut self, px : (u16, u16)) {
-        self.expand_rect_and_area(px);
+        self.expand_rect(&[px]);
     }
 
     pub fn add_to_bottom_rect(&mut self, px : (u16, u16)) {
-        self.expand_rect_and_area(px);
+        self.expand_rect(&[px]);
     }
 
     pub fn add_to_bottom(&mut self, px : (u16, u16), exp_mode : ExpansionMode) {
@@ -1374,6 +1376,7 @@ impl Patch {
     //    self.num_regions() * self.scale.pow(2)
     // }
 
+    // TODO return a Cow<[N, N]> here if the user asked for the points in u16 format and scale = 1.
     pub fn outer_points<N>(&self, mode : ExpansionMode) -> Vec<(N, N)>
     where
         N : Clone + Copy + From<u16> + 'static

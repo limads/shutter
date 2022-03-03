@@ -5,22 +5,50 @@ use nalgebra::*;
 use away::{Manhattan, Metric};
 use nalgebra::geometry::Rotation2;
 use nalgebra::Vector2;
+use std::cmp::Ord;
+use std::ops::Add;
+use nalgebra;
 
 /// Calculates the euclidian distance between two points. By convention the row coordinate will
 /// come first, but since the distance is scalar (not vector) quantity, the order of the coordinate
 /// isn't relevant.
 pub fn point_euclidian(a : (usize, usize), b : (usize, usize)) -> f32 {
-    ((a.0 as f32 - b.0 as f32).powf(2.) + (a.1 as f32 - b.1 as f32).powf(2.)).sqrt()
+    // ((a.0 as f32 - b.0 as f32).powf(2.) + (a.1 as f32 - b.1 as f32).powf(2.)).sqrt()
+    ((a.0 as f32 - b.0 as f32)).hypot((a.1 as f32 - b.1 as f32))
 }
 
 pub fn point_euclidian_u16(a : (u16, u16), b : (u16, u16)) -> f32 {
-    ((a.0 as f32 - b.0 as f32).powf(2.) + (a.1 as f32 - b.1 as f32).powf(2.)).sqrt()
+    //((a.0 as f32 - b.0 as f32).powf(2.) + (a.1 as f32 - b.1 as f32).powf(2.)).sqrt()
+    ((a.0 as f32 - b.0 as f32)).hypot((a.1 as f32 - b.1 as f32))
 }
 
 /// Calculate the angle formed by side_a and side_b given the opposite side using the law of cosines.
 pub fn angle(side_a : f64, side_b : f64, opp_side : f64) -> f64 {
 	let angle_cos = (side_a.powf(2.) + side_b.powf(2.) - opp_side.powf(2.)) / (2. * side_a * side_b);
 	angle_cos.acos()
+}
+
+pub fn circle_points(center : Vector2<f64>, theta_diff : f64, radius : f64) -> Vec<Vector2<f64>> {
+    assert!(theta_diff > 0. && theta_diff < 2.*std::f64::consts::PI);
+    let mut unit_points = Vec::new();
+    let n_angles = (2. * std::f64::consts::PI / theta_diff) as usize;
+    for theta in (0..n_angles).map(|n| n as f64 * theta_diff) {
+        unit_points.push(Vector2::from([theta.cos()*radius + center[0], theta.sin()*radius + center[1]]));
+    }
+    unit_points
+}
+
+pub fn circle_indices(center : (usize, usize), img_height : usize, theta_diff : f64, radius : f64) -> Vec<(usize, usize)> {
+    let mut pts = circle_points(Vector2::from([center.1 as f64, (img_height - center.0) as f64]), theta_diff, radius);
+    points_to_indices_dp(pts, img_height)
+}
+
+pub fn points_to_indices_dp(mut pts : Vec<Vector2<f64>>, img_height : usize) -> Vec<(usize, usize)> {
+    pts.drain(..).map(|pt| (img_height as usize - pt[1] as usize, pt[0] as usize) ).collect()
+}
+
+pub fn points_to_indices_sp(mut pts : Vec<Vector2<f32>>, img_height : usize) -> Vec<(usize, usize)> {
+    pts.drain(..).map(|pt| (img_height as usize - pt[1] as usize, pt[0] as usize) ).collect()
 }
 
 /*
@@ -199,15 +227,24 @@ pub fn rect_contacts(r1 : &(usize, usize, usize, usize), r2 : &(usize, usize, us
     ((tl_1.1 as i32 - br_2.1 as i32 <= 1) && horizontally_aligned(r1, r2))
 }
 
-pub fn top_left_coordinate(r : &(usize, usize, usize, usize)) -> (usize, usize) {
+pub fn top_left_coordinate<N>(r : &(N, N, N, N)) -> (N, N)
+where
+    N : Add<Output=N> + Copy
+{
     (r.0, r.1)
 }
 
-pub fn bottom_right_coordinate(r : &(usize, usize, usize, usize)) -> (usize, usize) {
+pub fn bottom_right_coordinate<N>(r : &(N, N, N, N)) -> (N, N)
+where
+    N : Add<Output=N> + Copy
+{
     (r.0 + r.2, r.1 + r.3)
 }
 
-pub fn rect_overlaps(r1 : &(usize, usize, usize, usize), r2 : &(usize, usize, usize, usize)) -> bool {
+pub fn rect_overlaps<N>(r1 : &(N, N, N, N), r2 : &(N, N, N, N)) -> bool
+where
+    N : Ord + Add<Output=N> + Copy
+{
     /*let tl_vdist = (r1.0 as i32 - r2.0 as i32).abs();
     let tl_hdist = (r1.1 as i32 - r2.1 as i32).abs();
     let (h1, w1) = (r1.2 as i32, r1.3 as i32);
@@ -762,20 +799,70 @@ pub struct EllipseAxis {
     pub minor : (usize, usize)
 }
 
+impl EllipseAxis {
+
+    pub fn vectors(&self, center : (usize, usize), img_height : usize) -> (Vector2<f64>, Vector2<f64>) {
+        let major = Vector2::from([
+            self.major.1 as f64 - center.1 as f64,
+            img_height as f64 - self.major.0 as f64 - center.0 as f64
+        ]);
+        let minor = Vector2::from([
+            self.minor.1 as f64 - center.1 as f64,
+            img_height as f64 - self.minor.0 as f64 - center.0 as f64
+        ]);
+        (major, minor)
+    }
+
+}
+
 impl Ellipse {
+
+    /* Returns the affine matrix that maps points (assumed to be centered relative to this
+    ellipse center) according to the major and minor axis of the ellipse. If the points are
+    in the unit circe centered at the ellipise, this matrix gives the ellipse edges. */
+    pub fn affine_matrix(&self, img_height : usize) -> Option<Matrix2<f64>> {
+        let axis = self.axis()?;
+        let (major, minor) = axis.vectors(self.center, img_height);
+        Some(Matrix2::from_columns(&[major, minor]))
+    }
+
+    pub fn center_vector(&self, img_height : usize) -> Vector2<f64> {
+        Vector2::from([self.center.1 as f64, (img_height - self.center.0) as f64])
+    }
+
+    pub fn from_axis(center : (usize, usize), axis : EllipseAxis, img_height : usize) -> Self {
+        let (major, minor) = axis.vectors(center, img_height);
+
+        // The angle in Opencv rotated rect is defined as the clockwise angle
+        // between one of the axis and the horizontal axis. Adding 90 degrees
+        // generates the other axis.
+        let unit_x = Vector2::from([1.0, 0.0]);
+        let angle = unit_x.angle(&major).to_degrees();
+        Ellipse {
+            center,
+            large_axis : major.magnitude_squared(),
+            small_axis : major.magnitude_squared(),
+            angle
+        }
+    }
+
+    pub fn edge(&self, img_height : usize, theta_diff : f64) -> Option<Vec<(usize, usize)>> {
+        let mut unit_pts = circle_points(Vector2::from([0.0, 0.0]), theta_diff, 1.0);
+        let center = self.center_vector(img_height);
+        let mtx = self.affine_matrix(img_height)?;
+        let out : Vec<_> = unit_pts
+            .drain(..)
+            .map(|pt| mtx * pt + center )
+            .map(|pt| (img_height - pt[1] as usize, pt[0] as usize) )
+            .collect();
+        Some(out)
+    }
 
     /// Returns radial distance of the given point. If r < 1.0, point is inside the ellipse. If r == 1, point is
     /// exactly at edge of ellipse. If r > 1.0, point is outside ellipse.
     pub fn point_dist_radii(&self, pt : (usize, usize), img_height : usize) -> Option<f64> {
         let axis = self.axis()?;
-        let major = Vector2::from([
-            axis.major.1 as f64 - self.center.1 as f64,
-            img_height as f64 - axis.major.0 as f64 - self.center.0 as f64
-        ]);
-        let minor = Vector2::from([
-            axis.minor.1 as f64 - self.center.1 as f64,
-            img_height as f64 - axis.minor.0 as f64 - self.center.0 as f64
-        ]);
+        let (major, minor) = axis.vectors(self.center, img_height);
         let rot = Rotation2::new(self.positive_angle().to_radians());
         let rot_major = rot * &major;
         let rot_minor = rot * &minor;
@@ -908,7 +995,80 @@ pub fn circumference_iter(circ : ((usize, usize), f32), step_rad : f32) -> impl 
     })
 }
 
-#[cfg(feature="opencvlib")]
+/*
+Explores the projection matrix that explains the best projective transform between two planes.
+See https://docs.opencv.org/3.4/d9/dab/tutorial_homography.html
+*/
+#[cfg(feature="opencv")]
+pub fn find_homography(flat : &[(usize, usize)], proj : &[(usize, usize)], img_height : usize) -> Result<nalgebra::Matrix3<f64>, String> {
+
+    use opencv::calib3d;
+    use opencv::prelude::MatTrait;
+
+    // Position y axis on the analytical plane.
+    let flat : Vec<_> = flat.iter().map(|pt| (img_height - pt.0, pt.1) ).collect();
+    let proj : Vec<_> = proj.iter().map(|pt| (img_height - pt.0, pt.1) ).collect();
+    let mut flat = convert_points_to_opencv_float(&flat);
+    let mut proj = convert_points_to_opencv_float(&proj);
+
+    let mat = calib3d::find_homography(
+        &flat,
+        &proj,
+        &mut opencv::core::no_array().unwrap(),
+        calib3d::RANSAC,
+        1.0
+    ).map_err(|e| format!("{}",e ) )?;
+
+    let mut out = nalgebra::Matrix3::zeros();
+
+    for i in 0..3 {
+        for j in 0..3 {
+            out[(i, j)] = *mat.at_2d::<f64>(i as i32, j as i32).unwrap();
+        }
+    }
+
+    /*let mut rotations = core::Vector::<core::Mat>::new();
+    let mut translations = core::Vector::<core::Mat>::new();
+    let mut normals = core::Vector::<core::Mat>::new();
+    let dec_ans = calib3d::decompose_homography_mat(
+        &homography_mat,
+        &intrinsic_mat,
+        &mut rotations,
+        &mut translations,
+        &mut normals
+    );
+    let mut possible_solutions = core::Vector::<i32>::new();
+    calib3d::filter_homography_decomp_by_visible_refpoints(
+        &rotations,
+        &normals,
+        &circ_pts,
+        &ellipse_pts,
+        &mut possible_solutions,
+        &core::no_array().unwrap()
+    ) -> Result<()>;*/
+
+    Ok(out)
+}
+
+#[cfg(feature="opencv")]
+pub fn convert_points_to_opencv_int(pts : &[(usize, usize)]) -> opencv::core::Vector<opencv::core::Point2i> {
+    let mut pt_vec = opencv::core::Vector::new();
+    for pt in pts.iter() {
+        pt_vec.push(opencv::core::Point2i::new(pt.1 as i32, pt.0 as i32));
+    }
+    pt_vec
+}
+
+#[cfg(feature="opencv")]
+pub fn convert_points_to_opencv_float(pts : &[(usize, usize)]) -> opencv::core::Vector<opencv::core::Point2f> {
+    let mut pt_vec = opencv::core::Vector::new();
+    for pt in pts.iter() {
+        pt_vec.push(opencv::core::Point2f::new(pt.1 as f32, pt.0 as f32));
+    }
+    pt_vec
+}
+
+#[cfg(feature="opencv")]
 pub mod cvellipse {
 
     use super::*;

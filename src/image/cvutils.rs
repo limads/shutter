@@ -19,16 +19,28 @@ where
     let any_t = &t as &dyn Any;
     
     if any_t.is::<u8>() {
+
+        assert!(core::CV_8UC1 == core::CV_8U);
         core::CV_8UC1
+        // core::CV_8U
     } else {
         if any_t.is::<i16>() {
+
+            assert!(core::CV_16S == core::CV_16SC1);
+
             core::CV_16SC1
         } else {
             if any_t.is::<f32>() {
-                core::CV_32FC1
+
+                assert!(core::CV_32FC1 == core::CV_32F);
+
+                core::CV_32FC1 // Or CV_32F?
             } else {
                 if any_t.is::<f64>() {
-                    core::CV_64FC1
+
+                    assert!(core::CV_64FC1 == core::CV_64F);
+
+                    core::CV_64FC1 // // Or CV_64F?
                 } else {
                     panic!("Invalid matrix type (expected u8, i16, f32 or f64)");
                 }

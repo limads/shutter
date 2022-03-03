@@ -1,4 +1,4 @@
-#[cfg(feature="opencvlib")]
+#[cfg(feature="opencv")]
 pub mod kmeans;
 
 #[cfg(feature="vlfeatlib")]

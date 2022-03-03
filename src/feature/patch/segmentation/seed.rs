@@ -119,14 +119,31 @@ pub struct SeedGrowth {
     patch : Patch,
     px_spacing : usize,
     max_area : Option<usize>,
-    exp_mode : ExpansionMode
+    exp_mode : ExpansionMode,
+    grown : bool
 }
 
 impl SeedGrowth {
 
+    pub fn last_patch(&self) -> Option<&Patch> {
+        if self.grown {
+            Some(&self.patch)
+        } else {
+            None
+        }
+    }
+
+    pub fn last_patch_mut(&mut self) -> Option<&mut Patch> {
+        if self.grown {
+            Some(&mut self.patch)
+        } else {
+            None
+        }
+    }
+
     pub fn new(px_spacing : usize, max_area : Option<usize>, exp_mode : ExpansionMode) -> Self {
         let patch = Patch::new_empty();
-        Self { front : ExpansionFront::new_empty(), px_spacing, patch, max_area, exp_mode }
+        Self { front : ExpansionFront::new_empty(), px_spacing, patch, max_area, exp_mode, grown : false }
     }
 
     pub fn grow<F>(&mut self, win : &Window<'_, u8>, seed : (u16, u16), comp : F) -> Option<&Patch>
@@ -136,6 +153,7 @@ impl SeedGrowth {
 
         if seed.0 / self.px_spacing as u16 > (win.height() - 1) as u16 || seed.1 as u16 / self.px_spacing as u16 > (win.width() - 1)  as u16 {
             // println!("Warning: Seed extrapolate image area");
+            self.grown = false;
             return None;
         }
 
@@ -159,8 +177,10 @@ impl SeedGrowth {
         }
 
         if grow(&mut self.patch, &mut self.front, &win, seed, self.px_spacing, comp, ReferenceMode::Constant, self.max_area, self.exp_mode) {
+            self.grown = true;
             Some(&self.patch)
         } else {
+            self.grown = false;
             None
         }
     }

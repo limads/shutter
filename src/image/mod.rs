@@ -16,10 +16,10 @@ use tempfile;
 use std::fs;
 use std::io::Write;
 
-#[cfg(feature="opencvlib")]
+#[cfg(feature="opencv")]
 use opencv::core;
 
-#[cfg(feature="opencvlib")]
+#[cfg(feature="opencv")]
 use opencv::imgproc;
 
 //#[cfg(feature="mkl")]
@@ -45,7 +45,7 @@ use crate::io;
 #[cfg(feature="ipp")]
 pub mod ipp;
 
-#[cfg(feature="opencvlib")]
+#[cfg(feature="opencv")]
 pub mod cvutils;
 
 pub mod index;
@@ -76,6 +76,7 @@ pub(crate) mod iter;
 /// the matrix convention.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(bound = "")]
+#[repr(C)]
 pub struct Image<N> 
 where
     N : Scalar + Clone + Copy + Serialize + DeserializeOwned + Any
@@ -98,7 +99,7 @@ where
 impl From<Image<u8>> for Image<f32> {
 
     fn from(img : Image<u8>) -> Image<f32> {
-        #[cfg(feature="opencvlib")]
+        #[cfg(feature="opencv")]
         {
             use opencv::prelude::MatTrait;
             let mut out = Image::<f32>::new_constant(img.height(), img.width(), 0.);
@@ -143,7 +144,7 @@ where
         }
     }
 
-    #[cfg(feature="opencvlib")]
+    #[cfg(feature="opencv")]
     pub fn equalize_inplace(&mut self) {
         // assert!(self.shape() == dst.shape());
         let src : core::Mat = self.full_window().into();
@@ -151,7 +152,7 @@ where
         imgproc::equalize_hist(&src, &mut dst);
     }
 
-    #[cfg(feature="opencvlib")]
+    #[cfg(feature="opencv")]
     pub fn equalize_mut(&mut self, dst : &mut Image<N>) {
         assert!(self.shape() == dst.shape());
         let src : core::Mat = self.full_window().into();
@@ -233,11 +234,11 @@ where
         let src_ncols = src.orig_sz.1;
         let dst_ncols = self.ncols;
         
-        #[cfg(feature="opencvlib")]
+        #[cfg(feature="opencv")]
         unsafe {
             cvutils::resize(
                 src.win,
-                &mut self.buf[..], 
+                &mut self.buf[..],
                 src_ncols, 
                 None,
                 dst_ncols,
@@ -320,7 +321,7 @@ where
     {
         let ncols = self.ncols;
         
-        #[cfg(feature="opencvlib")]
+        #[cfg(feature="opencv")]
         unsafe {
             cvutils::convert(
                 other.win, 
@@ -340,7 +341,7 @@ where
             return;
         }
         
-        panic!("Either opencvlib or ipp feature should be enabled for image conversion");
+        panic!("Either opencv or ipp feature should be enabled for image conversion");
     }
     
     /*pub fn iter(&self) -> impl Iterator<Item=&N> {
@@ -560,6 +561,38 @@ impl<'a, N> Window<'a, N>
 where
     N : Scalar + Mul<Output=N> + MulAssign + Copy + Copy + Serialize + DeserializeOwned + Any
 {
+
+    pub unsafe fn get_unchecked(&self, index : (usize, usize)) -> &N {
+        let off_ix = (self.offset.0 + index.0, self.offset.1 + index.1);
+        let (limit_row, limit_col) = (self.offset.0 + self.win_sz.0, self.offset.1 + self.win_sz.1);
+        unsafe { self.win.get_unchecked(index::linear_index(off_ix, self.orig_sz.1)) }
+    }
+
+    /*pub unsafe fn get_unchecked_u16(&self, index : (u16, u16)) -> &N {
+        let off_ix = (self.offset.0 + index.0, self.offset.1 + index.1);
+        let (limit_row, limit_col) = (self.offset.0 + self.win_sz.0, self.offset.1 + self.win_sz.1);
+        unsafe { self.win.get_unchecked(index::linear_index(off_ix, self.orig_sz.1)) }
+    }*/
+
+    // pub unsafe fn linear_index(&self, ix : usize) -> N {
+    //    self.win.get_unchecked(ix)
+    // }
+
+    /// Returns a set of linear indices to the underlying slice that can
+    /// be used to iterate over this window.
+    pub fn linear_indices(&self, spacing : usize) -> Vec<usize> {
+        unimplemented!()
+    }
+
+    pub fn subsampled_indices(&self, spacing : usize) -> Vec<(usize, usize)> {
+        let mut ixs = Vec::new();
+        for i in 0..(self.height() / spacing) {
+            for j in 0..(self.width() / spacing) {
+                ixs.push((i, j));
+            }
+        }
+        ixs
+    }
 
     pub fn as_ptr(&self) -> *const N {
         self.win.as_ptr()
@@ -937,9 +970,36 @@ impl<'a> Iterator for PackedIterator<'a, u8> {
     }
 }*/
 
+pub fn labels<L, E>((height, width) : (usize, usize), px_spacing : usize) -> impl Iterator<Item=(L, L)> + Clone
+where
+    L : TryFrom<usize, Error=E> + Div<Output=L> + Mul<Output=L> + Rem<Output=L> + Clone + Copy + 'static,
+    E : Debug,
+    Range<L> : Iterator<Item=L>
+{
+    let spacing = L::try_from(px_spacing).unwrap();
+    let w = (L::try_from(width).unwrap() / spacing );
+    let h = (L::try_from(height).unwrap() / spacing );
+    let range = Range { start : L::try_from(0usize).unwrap(), end : (w*h) };
+    range.map(move |ix| (ix / w, ix % w) )
+}
+
 impl<'a> Window<'a, u8> {
 
-    #[cfg(feature="opencvlib")]
+    #[cfg(feature="opencv")]
+    pub fn resize_mut(&self, other : WindowMut<'_, u8>) {
+        use opencv::{core, imgproc};
+        use opencv::prelude::MatTraitManual;
+        let this_shape = self.shape();
+        let other_shape = other.shape();
+        let src : core::Mat = self.into();
+        let mut dst : core::Mat = other.into();
+        let dst_sz = dst.size().unwrap();
+
+        println!("{:?} {:?} {:?} {:?}", this_shape, other_shape, src.size().unwrap(), dst_sz);
+        imgproc::resize(&src, &mut dst, dst_sz, 0.0, 0.0, imgproc::INTER_NEAREST);
+    }
+
+    #[cfg(feature="opencv")]
     pub fn copy_scale_mut_within(&self, src : (usize, usize), src_sz : (usize, usize), dst : (usize, usize), dst_sz : (usize, usize)) {
 
         use opencv::{core, imgproc};
@@ -1001,8 +1061,7 @@ impl<'a> Window<'a, u8> {
         range
             .zip(self.pixels(px_spacing))
             .map(move |(ix, px)| {
-                let (r, c) = (ix / w, ix % w); // TODO verify if width/height should be divided by px_spacing
-                // win[(r*px_spacing, c*px_spacing)]) )
+                let (r, c) = (ix / w, ix % w);
                 (r, c, *px)
             })
     }
@@ -1031,9 +1090,9 @@ impl<'a> Window<'a, u8> {
     pub fn threshold_mut(&self, dst : &mut Image<u8>, thresh : u8, higher : bool) {
         assert!(self.shape() == dst.shape());
 
-        #[cfg(feature="opencvlib")]
+        #[cfg(feature="opencv")]
         {
-            crate::threshold::threshold_window(self, dst, thresh as f64, 255.0, higher);
+            // crate::threshold::threshold_window(self, dst, thresh as f64, 255.0, higher);
         }
 
         for (src, mut dst) in self.pixels(1).zip(dst.full_window_mut().pixels_mut(1)) {
@@ -1193,7 +1252,7 @@ where
 
 }
 
-#[cfg(feature="opencvlib")]
+#[cfg(feature="opencv")]
 impl<N> opencv::core::ToInputArray for Image<N>
 where
     N : Scalar + Copy + Default + Zero + Serialize + DeserializeOwned + Any
@@ -1206,7 +1265,7 @@ where
 
 }
 
-#[cfg(feature="opencvlib")]
+#[cfg(feature="opencv")]
 impl<N> opencv::core::ToOutputArray for Image<N>
 where
     N : Scalar + Copy + Default + Zero + Serialize + DeserializeOwned + Any
@@ -1219,7 +1278,7 @@ where
 
 }
 
-#[cfg(feature="opencvlib")]
+#[cfg(feature="opencv")]
 impl<N> opencv::core::ToInputArray for Window<'_, N>
 where
     N : Scalar + Copy + Default + Zero + Serialize + DeserializeOwned + Any
@@ -1232,7 +1291,7 @@ where
 
 }
 
-#[cfg(feature="opencvlib")]
+#[cfg(feature="opencv")]
 impl<N> opencv::core::ToOutputArray for WindowMut<'_, N>
 where
     N : Scalar + Copy + Default + Zero + Serialize + DeserializeOwned + Any
@@ -1245,7 +1304,7 @@ where
 
 }
 
-#[cfg(feature="opencvlib")]
+#[cfg(feature="opencv")]
 pub fn median_blur(win : &Window<'_, u8>, output : WindowMut<'_, u8>, kernel : usize) {
 
     use opencv::{imgproc, core};
@@ -1256,7 +1315,7 @@ pub fn median_blur(win : &Window<'_, u8>, output : WindowMut<'_, u8>, kernel : u
 
 }
 
-#[cfg(feature="opencvlib")]
+#[cfg(feature="opencv")]
 impl<N> From<core::Mat> for Image<N>
 where
     N : Scalar + Copy + Default + Zero + Serialize + DeserializeOwned + Any + opencv::core::DataType
@@ -1283,36 +1342,36 @@ where
 }
 
 /// TODO mark as unsafe impl
-#[cfg(feature="opencvlib")]
+#[cfg(feature="opencv")]
 impl<N> Into<core::Mat> for &Image<N>
 where
     N : Scalar + Copy + Default + Zero + Serialize + DeserializeOwned + Any
 {
 
     fn into(self) -> core::Mat {
-        /*let sub_slice = None;
+        let sub_slice = None;
         let stride = self.ncols;
-        unsafe{ cvutils::slice_to_mat(&self.buf[..], stride, sub_slice) }*/
-        self.full_window().into()
+        unsafe{ cvutils::slice_to_mat(&self.buf[..], stride, sub_slice) }
+        // self.full_window().into()
     }
 }
 
-#[cfg(feature="opencvlib")]
+#[cfg(feature="opencv")]
 impl<N> Into<core::Mat> for &mut Image<N>
 where
     N : Scalar + Copy + Default + Zero + Serialize + DeserializeOwned + Any
 {
 
     fn into(self) -> core::Mat {
-        /*let sub_slice = None;
+        let sub_slice = None;
         let stride = self.ncols;
-        unsafe{ cvutils::slice_to_mat(&self.buf[..], stride, sub_slice) }*/
-        self.full_window_mut().into()
+        unsafe{ cvutils::slice_to_mat(&self.buf[..], stride, sub_slice) }
+        // self.full_window_mut().into()
     }
 }
 
 /// TODO mark as unsafe impl
-#[cfg(feature="opencvlib")]
+#[cfg(feature="opencv")]
 impl<N> Into<core::Mat> for Window<'_, N>
 where
     N : Scalar + Copy + Default
@@ -1325,7 +1384,7 @@ where
     }
 }
 
-#[cfg(feature="opencvlib")]
+#[cfg(feature="opencv")]
 impl<N> Into<core::Mat> for &Window<'_, N>
 where
     N : Scalar + Copy + Default
@@ -1339,7 +1398,7 @@ where
 }
 
 /// TODO mark as unsafe impl
-#[cfg(feature="opencvlib")]
+#[cfg(feature="opencv")]
 impl<N> Into<core::Mat> for WindowMut<'_, N>
 where
     N : Scalar + Copy + Default
@@ -1352,7 +1411,7 @@ where
     }
 }
 
-#[cfg(feature="opencvlib")]
+#[cfg(feature="opencv")]
 impl<N> Into<core::Mat> for &mut WindowMut<'_, N>
 where
     N : Scalar + Copy + Default
@@ -1395,7 +1454,9 @@ pub enum Mark {
     /// Arbitrary shape
     Shape(Vec<(usize, usize)>, u8),
 
-    Text((usize, usize), String, u8)
+    Text((usize, usize), String, u8),
+
+    Arrow((usize, usize), (usize, usize), usize, u8)
     
 }
 
@@ -1519,6 +1580,19 @@ impl<'a> WindowMut<'a, u8> {
 
 impl WindowMut<'_, u8> {
 
+    /// Gamma-corrects, i.e. multiplies input by input^(1/gamma) and normalize.
+    pub fn gamma_correct_inplace(&mut self, gamma : f32) {
+
+        // Using gamma < 1.0 avoids saturating the image. Perhaps offer a version that
+        // does just that, without normalization.
+        assert!(gamma <= 1.0);
+        for i in 0..self.win_sz.0 {
+            for j in 0..self.win_sz.1 {
+                self[(i,j)] = (self[(i,j)] as f32).powf(1. / gamma).max(0.0).min(255.0) as u8
+            }
+        }
+    }
+
     /// For any pixel >= color, set it and its neighborhood to erase_color.
     pub fn erase_speckles(&mut self, color : u8, neigh : usize, erase_color: u8) {
         for i in 0..self.win_sz.0 {
@@ -1587,7 +1661,7 @@ impl WindowMut<'_, u8> {
                 let src_pos = (self.offset.0 + src.0, self.offset.1 + src.1);
                 let dst_pos = (self.offset.0 + dst.0, self.offset.1 + dst.1);
                 
-                #[cfg(feature="opencvlib")]
+                #[cfg(feature="opencv")]
                 unsafe {
                     cvutils::draw_line(self.win, self.orig_sz.1, src_pos, dst_pos, color);
                     return;
@@ -1613,7 +1687,7 @@ impl WindowMut<'_, u8> {
             Mark::Digit(pos, val, sz, color) => {
                 let tl_pos = (self.offset.0 + pos.0, self.offset.1 + pos.1);
 
-                #[cfg(feature="opencvlib")]
+                #[cfg(feature="opencv")]
                 unsafe {
                     cvutils::write_text(self.win, self.orig_sz.1, tl_pos, &val.to_string()[..], color);
                     return;
@@ -1624,24 +1698,24 @@ impl WindowMut<'_, u8> {
             /*Mark::Label(pos, msg, sz, color) => {
                 let tl_pos = (self.offset.0 + pos.0, self.offset.1 + pos.1);
 
-                #[cfg(feature="opencvlib")]
+                #[cfg(feature="opencv")]
                 unsafe {
                     cvutils::write_text(self.win, self.orig_sz.1, tl_pos, msg, color);
                     return;
                 }
 
-                panic!("Label draw require 'opencvlib' feature");
+                panic!("Label draw require 'opencv' feature");
             },*/
             Mark::Circle(pos, radius, color) => {
                 let center_pos = (self.offset.0 + pos.0, self.offset.1 + pos.1);
 
-                #[cfg(feature="opencvlib")]
+                #[cfg(feature="opencv")]
                 unsafe {
                     cvutils::draw_circle(self.win, self.orig_sz.1, center_pos, radius, color);
                     return;
                 }
 
-                panic!("Circle draw require 'opencvlib' feature");
+                panic!("Circle draw require 'opencv' feature");
             },
             Mark::Dot(pos, radius, color) => {
                 for i in 0..self.height() {
@@ -1668,7 +1742,7 @@ impl WindowMut<'_, u8> {
             },
             Mark::Text(tl_pos, txt, color) => {
 
-                #[cfg(feature="opencvlib")]
+                #[cfg(feature="opencv")]
                 {
                     unsafe { 
                         cvutils::write_text(
@@ -1683,6 +1757,26 @@ impl WindowMut<'_, u8> {
                 }
 
                 println!("Warning: Text drawing require opencv feature");
+            },
+            Mark::Arrow(from, to, thickness, color) => {
+
+                #[cfg(feature="opencv")]
+                {
+                    let mut out : opencv::core::Mat = self.into();
+                    opencv::imgproc::arrowed_line(
+                        &mut out,
+                        opencv::core::Point2i::new(from.1 as i32, from.0 as i32),
+                        opencv::core::Point2i::new(to.1 as i32, to.0 as i32),
+                        opencv::core::Scalar::from(color as f64),
+                        thickness as i32,
+                        opencv::imgproc::LINE_8,
+                        0,
+                        0.1
+                    );
+                    return;
+                }
+
+                println!("Warning: Arrow drawing require opencv feature");
             }
         }
     }
@@ -1943,8 +2037,8 @@ where
     fn convolve_mut(&self, filter : &Self, out : &mut Self) {
 
         {
-            assert!(out.height() == self.height() + filter.height() - 1);
-            assert!(out.width() == self.width() + filter.width() - 1);
+            assert!(out.height() == self.height() - filter.height() + 1);
+            assert!(out.width() == self.width() - filter.width() + 1);
             assert!(filter.width() % 2 == 1);
             assert!(filter.height() % 2 == 1);
             let half_kh = filter.height() / 2;
@@ -1963,7 +2057,7 @@ where
             return;
         }
 
-        #[cfg(feature="opencvlib")]
+        #[cfg(feature="opencv")]
         {
             use opencv;
 
@@ -2433,3 +2527,56 @@ impl deft::Interactive for Image<u8> {
 
 }*/
 
+#[cfg(feature="opencv")]
+pub fn to_nalgebra3_vec(m : opencv::core::Mat) -> nalgebra::Vector3<f64> {
+
+    use opencv::core;
+    use opencv::prelude::MatTraitManual;
+    use opencv::prelude::MatTrait;
+
+    let mut out = Vector3::zeros();
+    unsafe {
+        for i in 0..3 {
+            out[i as usize] = *m.at_unchecked::<f64>(i).unwrap();
+        }
+    }
+    out
+}
+
+#[cfg(feature="opencv")]
+pub fn to_nalgebra3_mat(m : opencv::core::Mat) -> nalgebra::Matrix3<f64> {
+
+    use opencv::core;
+    use opencv::prelude::MatTraitManual;
+    use opencv::prelude::MatTrait;
+
+    let mut out = Matrix3::zeros();
+    unsafe {
+        for i in 0..3 {
+            for j in 0..3 {
+                out[(i as usize, j as usize)] = *m.at_2d_unchecked::<f64>(i, j).unwrap();
+            }
+        }
+    }
+    out
+}
+
+#[cfg(feature="opencv")]
+pub fn from_nalgebra3(m : nalgebra::Matrix3<f64>) -> opencv::core::Mat {
+
+    use opencv::core;
+    use opencv::prelude::MatTraitManual;
+    use opencv::prelude::MatTrait;
+
+    let mut mat = core::Mat::default();
+    unsafe {
+        mat.create_rows_cols(3, 3, core::CV_64F);
+        for i in 0..3 {
+            for j in 0..3 {
+                *mat.at_2d_unchecked_mut::<f64>(i, j).unwrap() = m[(i as usize, j as usize)];
+            }
+        }
+    }
+
+    mat
+}

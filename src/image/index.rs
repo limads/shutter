@@ -1,6 +1,6 @@
 // use nalgebra::*;
 
-use std::ops::Sub;
+use std::ops::{Sub, Add, Mul};
 use num_traits::ToPrimitive;
 
 /// Returns position relative to the current linear index in the image with the given number of columns.
@@ -8,7 +8,10 @@ pub fn coordinate_index(lin_ix : usize, ncol : usize) -> (usize, usize) {
     (lin_ix / ncol, lin_ix % ncol)
 }
 
-pub fn linear_index(coord_ix : (usize, usize), ncol : usize) -> usize {
+pub fn linear_index<N>(coord_ix : (N, N), ncol : N) -> N
+where
+    N : Mul<Output=N> + Add<Output=N>
+{
     coord_ix.0 * ncol + coord_ix.1
 }
 
