@@ -85,6 +85,10 @@ where
     ncols : usize
 }
 
+pub type ByteImage = Image<u8>;
+
+pub type FloatImage = Image<f32>;
+
 impl<N> fmt::Display for Image<N>
 where
     N : Scalar + Clone + Copy + Serialize + DeserializeOwned + Any + Default + num_traits::Zero
@@ -122,10 +126,38 @@ impl TryFrom<Image<f32>> for Image<u8> {
 
 }
 
+/*impl<N> Sub<Rhs=Image> for Image<N> {
+
+    pub fn sub() -> {
+
+    }
+}*/
+
 impl<N> Image<N>
 where
     N : Scalar + Copy + Default + Zero + Copy + Serialize + DeserializeOwned + Any
 {
+
+    pub unsafe fn unchecked_linear_index(&self, ix : usize) -> &N {
+        self.buf.get_unchecked(ix)
+    }
+
+    pub unsafe fn unchecked_linear_index_mut(&mut self, ix : usize) -> &mut N {
+        self.buf.get_unchecked_mut(ix)
+    }
+
+    pub fn linear_index(&self, ix : usize) -> &N {
+        &self.buf[ix]
+    }
+
+    pub fn linear_index_mut(&mut self, ix : usize) -> &mut N {
+        &mut self.buf[ix]
+    }
+
+    pub fn from_iter(iter : impl Iterator<Item=N>, ncols : usize) -> Self {
+        let buf : Vec<N> = iter.collect();
+        Self::from_vec(buf, ncols)
+    }
 
     pub fn subsample_from(&mut self, content : &[N], ncols : usize, sample_n : usize) {
         assert!(ncols < content.len(), "ncols smaller than content length");
@@ -168,9 +200,10 @@ where
     }
 
     pub fn from_vec(buf : Vec<N>, ncols : usize) -> Self {
-        if buf.len() as f64 % ncols as f64 != 0.0 {
-            panic!("Invalid image lenght");
-        }
+        //if buf.len() as f64 % ncols as f64 != 0.0 {
+        //    panic!("Invalid image lenght");
+        //}
+        assert!(buf.len() % ncols == 0);
         Self { buf, ncols }
     }
 
@@ -306,7 +339,14 @@ where
         self.buf.as_slice_mut().copy_from(other.buf.as_slice());
     }*/
     
-    pub fn windows(&self, sz : (usize, usize)) -> impl Iterator<Item=Window<'_, N>> 
+    pub fn windows_mut(&mut self, sz : (usize, usize)) -> impl Iterator<Item=WindowMut<'_, N>>
+    where
+        N : Mul<Output=N> + MulAssign
+    {
+        self.full_window_mut().windows_mut(sz)
+    }
+
+    pub fn windows(&self, sz : (usize, usize)) -> impl Iterator<Item=Window<'_, N>>
     where
         N : Mul<Output=N> + MulAssign
     {
@@ -507,6 +547,19 @@ where
     N : Scalar
 {
 
+    /// The cartesian index is defined as (img.height() - pt[1], pt[0]).
+    /// It indexes the image by imposing the cartesian analytical plane over it,
+    /// an converting it as specified.
+    pub fn cartesian_index<T>(&self, pt : Vector2<T>) -> &N
+    where
+        usize : From<T>,
+        T : Copy,
+        N : Mul<Output=N> + MulAssign + Copy + Serialize + DeserializeOwned
+    {
+        let ix = (self.height() - usize::from(pt[1]), usize::from(pt[0]));
+        &self[ix]
+    }
+
     pub fn offset(&self) -> (usize, usize) {
         self.offset
     }
@@ -555,6 +608,23 @@ fn shrink_to_divisor(mut n : usize, by : usize) -> Option<usize> {
     } else {
         None
     }
+}
+
+
+impl<'a, N> Window<'a, N>
+where
+    N : Scalar + Copy
+{
+
+    pub fn rows(&self) -> impl Iterator<Item=&[N]> + Clone {
+        let stride = self.orig_sz.1;
+        let tl = self.offset.0 * stride + self.offset.1;
+        (0..self.win_sz.0).map(move |i| {
+            let start = tl + i*stride;
+            &self.win[start..(start+self.win_sz.1)]
+        })
+    }
+
 }
 
 impl<'a, N> Window<'a, N>
@@ -855,17 +925,8 @@ where
             )
     }
 
-    pub fn rows(&self) -> impl Iterator<Item=&[N]> + Clone {
-        let stride = self.orig_sz.1;
-        let tl = self.offset.0 * stride + self.offset.1;
-        (0..self.win_sz.0).map(move |i| {
-            let start = tl + i*stride;
-            &self.win[start..(start+self.win_sz.1)]
-        })
-    }
-
     /// Iterate over all image pixels if spacing=1; or over pixels spaced
-    /// horizontally and verticallly by spacing.
+    /// horizontally and verticallly by spacing. Iteration proceeds row-wise.
     pub fn pixels(&self, spacing : usize) -> impl Iterator<Item=&N> + Clone {
         assert!(spacing > 0, "Spacing should be at least one");
         assert!(self.width() % spacing == 0 && self.height() % spacing == 0, "Spacing should be integer divisor of width and height");
@@ -1201,6 +1262,83 @@ pub fn iterate_row_wise<N>(
     }).flatten()
 }
 
+trait BorrowedRegion {
+
+    type Slice;
+
+    fn create(offset : (usize, usize), win_sz : (usize, usize), orig_sz : (usize, usize), win : Self::Slice) -> Self;
+
+    fn offset(&self) -> &(usize, usize);
+
+    fn size(&self) -> &(usize, usize);
+
+    fn original_size(&self) -> &(usize, usize);
+
+    // This takes the implementor because for mutable windows,
+    // the only way to safely give the slice is to let go of the
+    // current object.
+    unsafe fn original_slice(&mut self) -> Self::Slice;
+
+}
+
+impl<'a, T> BorrowedRegion for Window<'a, T>
+where
+    T : Scalar + Copy
+{
+
+    type Slice = &'a [T];
+
+    fn create(offset : (usize, usize), win_sz : (usize, usize), orig_sz : (usize, usize), win : Self::Slice) -> Self {
+        Window { offset, win_sz, orig_sz, win }
+    }
+
+    fn offset(&self) -> &(usize, usize) {
+        &self.offset
+    }
+
+    fn size(&self) -> &(usize, usize) {
+        &self.win_sz
+    }
+
+    fn original_size(&self) -> &(usize, usize) {
+        &self.orig_sz
+    }
+
+    unsafe fn original_slice(&mut self) -> Self::Slice {
+        self.win
+    }
+
+}
+
+impl<'a, T> BorrowedRegion for WindowMut<'a, T>
+where
+    T : Scalar + Copy //+ Serialize + DeserializeOwned + Any + Zero + From<u8>
+{
+
+    type Slice = &'a mut [T];
+
+    fn create(offset : (usize, usize), win_sz : (usize, usize), orig_sz : (usize, usize), win : Self::Slice) -> Self {
+        WindowMut { offset, win_sz, orig_sz, win }
+    }
+
+    fn offset(&self) -> &(usize, usize) {
+        &self.offset
+    }
+
+    fn size(&self) -> &(usize, usize) {
+        &self.win_sz
+    }
+
+    fn original_size(&self) -> &(usize, usize) {
+        &self.orig_sz
+    }
+
+    unsafe fn original_slice(&mut self) -> Self::Slice {
+        std::slice::from_raw_parts_mut(self.win.as_mut_ptr(), self.win.len())
+    }
+
+}
+
 pub struct WindowIterator<'a, N>
 where
     N : Scalar,
@@ -1223,13 +1361,13 @@ where
 
 impl<'a, N> Iterator for WindowIterator<'a, N>
 where
-    N : Scalar
+    N : Scalar + Copy //+ Clone + Copy + Serialize + Zero + From<u8>
 {
 
     type Item = Window<'a, N>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let within_horiz = self.curr_pos.0  + self.size.0 <= (self.source.offset.0 + self.source.win_sz.0);
+        /*let within_horiz = self.curr_pos.0  + self.size.0 <= (self.source.offset.0 + self.source.win_sz.0);
         let within_vert = self.curr_pos.1 + self.size.1 <= (self.source.offset.1 + self.source.win_sz.1);
         let within_bounds = within_horiz && within_vert;
         let win = if within_bounds {
@@ -1247,9 +1385,70 @@ where
             self.curr_pos.1 = self.source.offset.1;
             self.curr_pos.0 += self.step_v;
         }
-        win
+        win*/
+        iterate_windows(&mut self.source, &mut self.curr_pos, self.size, (self.step_h, self.step_v))
     }
 
+}
+
+pub struct WindowIteratorMut<'a, N>
+where
+    N : Scalar + Copy,
+{
+
+    source : WindowMut<'a, N>,
+
+    // This child window size
+    size : (usize, usize),
+
+    // Index the most ancestral window possible.
+    curr_pos : (usize, usize),
+
+    /// Vertical increment. Either U1 or Dynamic.
+    step_v : usize,
+
+    /// Horizontal increment. Either U1 or Dynamic.
+    step_h : usize,
+
+}
+
+impl<'a, N> Iterator for WindowIteratorMut<'a, N>
+where
+    N : Scalar + Copy
+{
+
+    type Item = WindowMut<'a, N>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        iterate_windows(&mut self.source, &mut self.curr_pos, self.size, (self.step_h, self.step_v))
+    }
+
+}
+
+fn iterate_windows<R, S>(
+    s : &mut R,
+    curr_pos : &mut (usize, usize),
+    size : (usize, usize),
+    (step_h, step_v) : (usize, usize)
+) -> Option<R>
+where
+    R : BorrowedRegion<Slice=S>
+{
+    let (offset, win_sz) = (*s.offset(), *s.size());
+    let within_horiz = curr_pos.0  + size.0 <= (offset.0 + win_sz.0);
+    let within_vert = curr_pos.1 + size.1 <= (offset.1 + win_sz.1);
+    let within_bounds = within_horiz && within_vert;
+    let win = if within_bounds {
+        Some(BorrowedRegion::create(*curr_pos, size, *s.original_size(), unsafe { s.original_slice() }))
+    } else {
+        None
+    };
+    curr_pos.1 += step_h;
+    if curr_pos.1 + size.1 > (offset.1 + win_sz.1) {
+        curr_pos.1 = offset.1;
+        curr_pos.0 += step_v;
+    }
+    win
 }
 
 #[cfg(feature="opencv")]
@@ -1560,6 +1759,27 @@ where
         Self::from_slice(src, (src.len() as f64).sqrt() as usize)
     }
 
+    pub fn windows_mut(mut self, sz : (usize, usize)) -> impl Iterator<Item=WindowMut<'a, N>>
+    where
+        N : Mul<Output=N> + MulAssign
+    {
+        let (step_v, step_h) = sz;
+        if sz.0 >= self.win_sz.0 || sz.1 >= self.win_sz.1 {
+            panic!("Child window size bigger than parent window size");
+        }
+        if self.height() % sz.0 != 0 || self.width() % sz.1 != 0 {
+            panic!("Image size should be a multiple of window size (Required window {:?} over parent window {:?})", sz, self.win_sz);
+        }
+        let offset = self.offset;
+        WindowIteratorMut::<'a, N> {
+            source : self,
+            size : sz,
+            curr_pos : offset,
+            step_v,
+            step_h
+        }
+    }
+
 }
 
 impl<'a> WindowMut<'a, u8> {
@@ -1834,8 +2054,12 @@ where
 
 impl<'a, N> WindowMut<'a, N>
 where
-    N : Scalar + Copy + Mul<Output=N> + MulAssign + PartialOrd + Serialize + DeserializeOwned
+    N : Scalar + Copy
 {
+
+    pub fn shape(&self) -> (usize, usize) {
+        self.win_sz
+    }
 
     pub fn orig_sz(&self) -> (usize, usize) {
         self.orig_sz
@@ -1848,6 +2072,38 @@ where
     pub fn offset(&self) -> (usize, usize) {
         self.offset
     }
+
+    pub fn width(&self) -> usize {
+        self.shape().1
+    }
+
+    pub fn height(&self) -> usize {
+        self.shape().0
+    }
+
+}
+
+impl<'a, N> WindowMut<'a, N>
+where
+    N : Scalar + Copy
+{
+
+    pub fn rows_mut(&'a mut self) -> impl Iterator<Item=&'a mut [N]> {
+        let stride = self.orig_sz.1;
+        let tl = self.offset.0 * stride + self.offset.1;
+        (0..self.win_sz.0).map(move |i| {
+            let start = tl + i*stride;
+            let slice = &self.win[start..(start+self.win_sz.1)];
+            unsafe { std::slice::from_raw_parts_mut(slice.as_ptr() as *mut _, slice.len()) }
+        })
+    }
+
+}
+
+impl<'a, N> WindowMut<'a, N>
+where
+    N : Scalar + Copy + Mul<Output=N> + MulAssign + PartialOrd + Serialize + DeserializeOwned
+{
 
     pub fn fill(&'a mut self, color : N) {
         self.pixels_mut(1).for_each(|px| *px = color );
@@ -1897,16 +2153,6 @@ where
         self.sub_window_mut(dst, dim).unwrap().copy_from(&src_win);
     }
 
-    pub fn rows_mut(&'a mut self) -> impl Iterator<Item=&'a mut [N]> {
-        let stride = self.orig_sz.1;
-        let tl = self.offset.0 * stride + self.offset.1;
-        (0..self.win_sz.0).map(move |i| {
-            let start = tl + i*stride;
-            let slice = &self.win[start..(start+self.win_sz.1)];
-            unsafe { std::slice::from_raw_parts_mut(slice.as_ptr() as *mut _, slice.len()) }
-        })
-    }
-
     pub fn row_mut(&'a mut self, i : usize) -> &'a mut [N] {
         let stride = self.orig_sz.1;
         let tl = self.offset.0 * stride + self.offset.1;
@@ -1918,18 +2164,6 @@ where
     pub fn copy_from(&'a mut self, other : &Window<N>) {
         assert!(self.shape() == other.shape(), "Mutable windows differ in shape");
         self.rows_mut().zip(other.rows()).for_each(|(this, other)| this.copy_from_slice(other) );
-    }
-
-    pub fn shape(&self) -> (usize, usize) {
-        self.win_sz
-    }
-
-    pub fn width(&self) -> usize {
-        self.shape().1
-    }
-
-    pub fn height(&self) -> usize {
-        self.shape().0
     }
 
 }
@@ -2526,6 +2760,24 @@ impl deft::Interactive for Image<u8> {
     // to the user.
 
 }*/
+
+#[cfg(feature="opencv")]
+pub fn from_nalgebra3_vec(v : nalgebra::Vector3<f64>) -> opencv::core::Mat {
+
+    use opencv::core;
+    use opencv::prelude::MatTraitManual;
+    use opencv::prelude::MatTrait;
+
+    let mut mat = core::Mat::default();
+    unsafe {
+        mat.create_rows_cols(3, 1, core::CV_64F);
+        for i in 0..3 {
+            *mat.at_mut::<f64>(i).unwrap() = v[i as usize];
+        }
+    }
+
+    mat
+}
 
 #[cfg(feature="opencv")]
 pub fn to_nalgebra3_vec(m : opencv::core::Mat) -> nalgebra::Vector3<f64> {

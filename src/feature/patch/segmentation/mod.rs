@@ -24,6 +24,7 @@ use std::ops::Div;
 use std::ops::Add;
 use bayes;
 use serde::{Serialize, Deserialize};
+use std::borrow::Cow;
 
 /*pub trait  PixelCompare<T>
 where
@@ -741,12 +742,30 @@ impl Patch {
         }
     }
 
-    pub fn radial_expansion(&mut self, win : &Window<'_, u8>, px_tol : u8, adaptive : bool, seed : (u16, u16), limit : usize) -> usize {
+    pub fn radial_expansion(
+        &mut self,
+        win : &Window<'_, u8>,
+        px_tol : u8,
+        adaptive : bool,
+        seed : (u16, u16),
+        limit : usize,
+        min_angle : f32,
+        max_angle : f32
+    ) -> usize {
         let mut changes = Vec::new();
         for (ix, px) in self.pxs.iter().enumerate() {
-            let coord = (px.0 as f32 - seed.0 as f32, px.1 as f32 - seed.1 as f32);
+
             let dist = crate::feature::shape::point_euclidian_u16(*px, seed);
+
+            // Automatically invert y axis
+            let coord = (seed.0 as f32 - px.0 as f32, px.1 as f32 - seed.1 as f32);
+
             let theta = coord.0.atan2(coord.1);
+
+            if theta < min_angle || theta > max_angle {
+                continue;
+            }
+
             let cos_theta = theta.cos();
             let sin_theta = theta.sin();
             let mut expand = 1;
@@ -760,7 +779,8 @@ impl Patch {
                         old_coord = new_coord_u;
                         matched
                     } else {
-                        ((win[new_coord_u] as i16 - win[*px] as i16).abs() as u8) < px_tol
+                        let matched = ((win[new_coord_u] as i16 - win[*px] as i16).abs() as u8) < px_tol;
+                        matched
                     };
                     if is_match {
                         if expand == 1 {
@@ -769,7 +789,7 @@ impl Patch {
                             *changes.last_mut().unwrap() = ((ix, (new_coord_u.0 as u16, new_coord_u.1 as u16)));
                         }
                         expand += 1;
-                        if expand == limit {
+                        if expand >= limit {
                             break;
                         }
                     } else {
@@ -1375,6 +1395,11 @@ impl Patch {
     // pub fn area(&self) -> usize {
     //    self.num_regions() * self.scale.pow(2)
     // }
+
+    pub fn outer_points_ref(&self) -> &[(u16, u16)] {
+        assert!(self.scale == 1);
+        &self.pxs[..]
+    }
 
     // TODO return a Cow<[N, N]> here if the user asked for the points in u16 format and scale = 1.
     pub fn outer_points<N>(&self, mode : ExpansionMode) -> Vec<(N, N)>

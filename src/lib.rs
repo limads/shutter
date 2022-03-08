@@ -2,6 +2,8 @@
 
 #![doc(html_logo_url = "https://raw.githubusercontent.com/limads/shutter/master/assets/logo.png")]
 
+pub mod ffi;
+
 pub mod io;
 
 // pub(crate) mod foreign;
@@ -21,6 +23,8 @@ pub mod image;
 
 pub mod path;
 
+pub mod raster;
+
 // #[cfg(feature="opencvlib")]
 // pub mod tracking;
 
@@ -35,6 +39,8 @@ pub mod path;
 
 #[cfg(feature="opencv")]
 pub mod contour;
+
+pub mod integral;
 
 // pub mod edge;
 
@@ -70,7 +76,7 @@ pub mod foreign;
 #[cfg(feature="gstreamer-video")]
 pub mod processor;
 
-#[cfg(feature="mlua")]
+/*#[cfg(feature="mlua")]
 impl mlua::UserData for crate::image::Image<u8> {
 
     fn add_methods<'lua, M: mlua::UserDataMethods<'lua, Self>>(methods: &mut M) {
@@ -102,6 +108,6 @@ fn libshutter(lua : &mlua::Lua) -> mlua::Result<mlua::Table> {
     })?)?;
 
     Ok(exports)
-}
+}*/
 
 

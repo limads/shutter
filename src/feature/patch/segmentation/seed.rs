@@ -31,6 +31,8 @@ use super::*;
 #[derive(Default, Clone, Debug)]
 struct RowPair {
     curr : Vec<(u16, u16)>,
+    past_contiguous : Vec<(usize, usize)>,
+    curr_contiguous : Vec<(usize, usize)>,
     past : Vec<(u16, u16)>
 }
 
@@ -40,22 +42,28 @@ impl RowPair {
     fn new_empty() -> Self {
         Self {
             curr : Vec::with_capacity(32),
-            past : Vec::with_capacity(32)
+            past : Vec::with_capacity(32),
+            past_contiguous : Vec::with_capacity(32),
+            curr_contiguous : Vec::with_capacity(32),
         }
     }
 
     /// Starts a new row pair with a seed pixel value at the past row.
     fn new(px : (u16, u16)) -> Self {
-        let (curr, mut past) = (Vec::with_capacity(32), Vec::with_capacity(32));
+        let (curr, curr_contiguous, mut past, mut past_contiguous) = (Vec::with_capacity(32), Vec::with_capacity(32), Vec::with_capacity(32), Vec::with_capacity(32));
         past.push(px);
-        Self { curr, past }
+        past_contiguous.push((0, 0));
+        Self { curr, past, past_contiguous, curr_contiguous }
     }
 
     /// Starts a row pair for a new image seed, preserving the old allocations.
     pub fn reset(&mut self, px : (u16, u16)) {
         self.curr.clear();
         self.past.clear();
+        self.past_contiguous.clear();
+        self.curr_contiguous.clear();
         self.past.push(px);
+        self.past_contiguous.push((0, 0));
     }
 
 }
@@ -146,7 +154,7 @@ impl SeedGrowth {
         Self { front : ExpansionFront::new_empty(), px_spacing, patch, max_area, exp_mode, grown : false }
     }
 
-    pub fn grow<F>(&mut self, win : &Window<'_, u8>, seed : (u16, u16), comp : F) -> Option<&Patch>
+    pub fn grow<F>(&mut self, win : &Window<'_, u8>, seed : (u16, u16), comp : F, close_at_end : bool) -> Option<&Patch>
     where
         F : Fn(u8)->bool
     {
@@ -176,7 +184,7 @@ impl SeedGrowth {
             assert!(self.patch.pxs.len() == 1);
         }
 
-        if grow(&mut self.patch, &mut self.front, &win, seed, self.px_spacing, comp, ReferenceMode::Constant, self.max_area, self.exp_mode) {
+        if grow(&mut self.patch, &mut self.front, &win, seed, self.px_spacing, comp, ReferenceMode::Constant, self.max_area, self.exp_mode, close_at_end) {
             self.grown = true;
             Some(&self.patch)
         } else {
@@ -190,13 +198,17 @@ impl SeedGrowth {
 fn expand_rect(ext : &mut RowPair, patch : &mut Patch, outer_rect : (u16, u16, u16, u16), fst_corner : bool, snd_corner : bool) {
     ext.past.clear();
     patch.area = (outer_rect.2 * outer_rect.3) as usize;
+    ext.past_contiguous.clear();
     mem::swap(&mut ext.curr, &mut ext.past);
+    mem::swap(&mut ext.curr_contiguous, &mut ext.past_contiguous);
 }
 
 fn expand_dense(ext : &mut RowPair, patch : &mut Patch, outer_rect : (u16, u16, u16, u16), fst_corner : bool, snd_corner : bool) {
     patch.area += ext.past.len();
     patch.pxs.extend(ext.past.drain(..));
+    ext.past_contiguous.clear();
     mem::swap(&mut ext.curr, &mut ext.past);
+    mem::swap(&mut ext.curr_contiguous, &mut ext.past_contiguous);
 }
 
 fn expand_contour(ext : &mut RowPair, patch : &mut Patch, outer_rect : (u16, u16, u16, u16), fst_corner : bool, snd_corner : bool) {
@@ -225,7 +237,9 @@ fn expand_contour(ext : &mut RowPair, patch : &mut Patch, outer_rect : (u16, u16
         patch.area += ext.past.len();
         patch.pxs.extend(ext.past.drain(..));
     }
+    ext.past_contiguous.clear();
     mem::swap(&mut ext.curr, &mut ext.past);
+    mem::swap(&mut ext.curr_contiguous, &mut ext.past_contiguous);
 }
 
 /// Computes a single iteration of the seed expansion algorithm.
@@ -338,24 +352,52 @@ fn expand_rect_with_front(rect : &mut (u16, u16, u16, u16), exp : &ExpansionFron
     rect.3 = max_right - rect.1;
 }
 
+fn pixel_neighbors_row_contiguous(front_part : &RowPair, px : (u16, u16)) -> bool {
+    front_part.past_contiguous.iter()
+        .any(|(from, to)| px.0 >= front_part.past[*from].0.saturating_sub(1) && px.0 <= front_part.past[*to].0 + 1 )
+}
+
+fn pixel_neighbors_col_contiguous(front_part : &RowPair, px : (u16, u16)) -> bool {
+    front_part.past_contiguous.iter()
+        .any(|(from, to)| px.1 >= front_part.past[*from].1.saturating_sub(1) && px.1 <= front_part.past[*to].1 + 1 )
+}
+
 fn pixel_neighbors_top(exp_patch : &ExpansionFront, px : (u16, u16)) -> bool {
     pixel_neighbors_last_at_row(&exp_patch.top.curr[..], px) ||
-        pixel_neighbors_row(&exp_patch.top.past[..], px)
+    //pixel_neighbors_row(&exp_patch.top.past[..], px)
+    pixel_neighbors_row_contiguous(&exp_patch.top, px)
 }
 
 fn pixel_neighbors_left(exp_patch : &ExpansionFront, px : (u16, u16)) -> bool {
     pixel_neighbors_last_at_col(&exp_patch.left.curr[..], px) ||
-        pixel_neighbors_col(&exp_patch.left.past[..], px)
+    //pixel_neighbors_col(&exp_patch.left.past[..], px)
+    pixel_neighbors_col_contiguous(&exp_patch.left, px)
 }
 
 fn pixel_neighbors_bottom(exp_patch : &ExpansionFront, px : (u16, u16)) -> bool {
     pixel_neighbors_last_at_row(&exp_patch.bottom.curr[..], px) ||
-        pixel_neighbors_row(&exp_patch.bottom.past[..], px)
+    //pixel_neighbors_row(&exp_patch.bottom.past[..], px)
+    pixel_neighbors_row_contiguous(&exp_patch.bottom, px)
 }
 
 fn pixel_neighbors_right(exp_patch : &ExpansionFront, px : (u16, u16)) -> bool {
     pixel_neighbors_last_at_col(&exp_patch.right.curr[..], px) ||
-        pixel_neighbors_col(&exp_patch.right.past[..], px)
+    //pixel_neighbors_col(&exp_patch.right.past[..], px)
+    pixel_neighbors_col_contiguous(&exp_patch.right, px)
+}
+
+fn update_contiguous(front_part : &mut RowPair, px : &(u16, u16)) {
+    if let Some(last) = front_part.curr.last() {
+        if px.0 - last.0 == 1 {
+            front_part.curr_contiguous.last_mut().unwrap().1 += 1;
+        } else {
+            let ix = front_part.curr.len()-1;
+            front_part.curr_contiguous.push((ix, ix));
+        }
+    } else {
+        let ix = front_part.curr.len()-1;
+        front_part.curr_contiguous.push((ix, ix));
+    }
 }
 
 /// Grows a patch from a pixel seed.
@@ -369,7 +411,8 @@ fn grow<F>(
     comp : F,
     ref_mode : ReferenceMode,
     max_area : Option<usize>,
-    exp_mode : ExpansionMode
+    exp_mode : ExpansionMode,
+    close_at_end : bool
 ) -> bool
 where
     F : Fn(u8)->bool
@@ -477,6 +520,8 @@ where
                             grows_top = true;
                         }
                         exp_patch.top.curr.push(px);
+                        update_contiguous(&mut exp_patch.top, &px);
+
                         // update_stats(&mut mode, &mut n_px, &mut sum, &mut sum_abs_dev, ref_mode, win[px]);
                     }
                 }
@@ -497,6 +542,8 @@ where
                             grows_left = true;
                         }
                         exp_patch.left.curr.push(px);
+                        update_contiguous(&mut exp_patch.left, &px);
+
                         // update_stats(&mut mode, &mut n_px, &mut sum, &mut sum_abs_dev, ref_mode, win[px]);
                     }
                 }
@@ -516,6 +563,8 @@ where
                             grows_bottom = true;
                         }
                         exp_patch.bottom.curr.push(px);
+                        update_contiguous(&mut exp_patch.bottom, &px);
+
                         // update_stats(&mut mode, &mut n_px, &mut sum, &mut sum_abs_dev, ref_mode, win[px]);
                     }
                 }
@@ -534,7 +583,10 @@ where
                             // outer_rect.3 += px_spacing;
                             grows_right = true;
                         }
+
                         exp_patch.right.curr.push(px);
+                        update_contiguous(&mut exp_patch.right, &px);
+
                         // update_stats(&mut mode, &mut n_px, &mut sum, &mut sum_abs_dev, ref_mode, win[px]);
                     }
                 }
@@ -564,7 +616,10 @@ where
                     return false;
                 }
 
-                close_contour(patch, win);
+                if close_at_end {
+                    close_contour(patch, win);
+                }
+
             }
             // return Some(patch);
             return true;
@@ -575,10 +630,10 @@ where
 
     debug_assert!(patch.pxs.len() > 0);
 
-    if exp_mode == ExpansionMode::Contour {
-        // Just make sure seed isn't inserted
-        debug_assert!(patch.pxs.iter().find(|px| **px == seed ).is_none());
-    }
+    //if exp_mode == ExpansionMode::Contour {
+    // Just make sure seed isn't inserted
+    //    debug_assert!(patch.pxs.iter().find(|px| **px == seed ).is_none());
+    //}
 
     // Some(patch)
     true

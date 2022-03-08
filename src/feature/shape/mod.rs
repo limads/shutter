@@ -9,6 +9,35 @@ use std::cmp::Ord;
 use std::ops::Add;
 use nalgebra;
 
+#[cfg(feature="opencv")]
+pub fn convex_hull(pts : &[(u16, u16)]) -> Option<Vec<(u16, u16)>> {
+
+    use opencv::{core, imgproc};
+
+    let mut pts_vec : core::Vector<core::Point2i> = core::Vector::new();
+    for pt in pts.iter() {
+        pts_vec.push(core::Point2i::new(pt.1 as i32, pt.0 as i32));
+    }
+
+    let mut pts_ix : core::Vector<i32> = core::Vector::new();
+    let ans = imgproc::convex_hull(
+        &pts_vec,
+        &mut pts_ix,
+        true,
+        false
+    );
+
+    if let Ok(_) = ans {
+        let mut out = Vec::new();
+        for i in 0..pts_ix.len() {
+            out.push(pts[pts_ix.get(i).unwrap() as usize]);
+        }
+        Some(out)
+    } else {
+        None
+    }
+}
+
 /// Calculates the euclidian distance between two points. By convention the row coordinate will
 /// come first, but since the distance is scalar (not vector) quantity, the order of the coordinate
 /// isn't relevant.
@@ -1076,13 +1105,13 @@ pub mod cvellipse {
     use opencv::imgproc;
     use opencv::prelude::RotatedRectTrait;
 
-    pub fn convert_points(pts : &[(usize, usize)]) -> core::Vector<core::Point2i> {
+    /*pub fn convert_points(pts : &[(usize, usize)]) -> core::Vector<core::Point2i> {
         let mut pt_vec = core::Vector::new();
         for pt in pts.iter() {
             pt_vec.push(core::Point2i::new(pt.1 as i32, pt.0 as i32));
         }
         pt_vec
-    }
+    }*/
 
     pub fn fit_circle(pts : &[(usize, usize)], method : Method) -> Result<((usize, usize), usize), String> {
         let ellipse = EllipseFitting::new().fit_ellipse(pts, method)?;
@@ -1130,7 +1159,7 @@ pub mod cvellipse {
 
     #[derive(Debug)]
     pub struct EllipseFitting {
-        pt_vec : core::Vector<core::Point2i>
+        pt_vec : core::Vector<core::Point2f>
     }
 
     impl EllipseFitting {
@@ -1141,13 +1170,23 @@ pub mod cvellipse {
 
         /// Returns position and radius of fitted circle. Also see fit_ellipse_ams; fit_ellipse_direct.
         pub fn fit_ellipse(&mut self, pts : &[(usize, usize)], method : Method) -> Result<Ellipse, String> {
-
-            // let pt_vec = convert_points(pts);
             self.pt_vec.clear();
             for pt in pts.iter() {
-                self.pt_vec.push(core::Point2i::new(pt.1 as i32, pt.0 as i32));
+                self.pt_vec.push(core::Point2f::new(pt.1 as f32, pt.0 as f32));
             }
+            self.fit_from_current(method)
+        }
 
+        pub fn fit_ellipse_u16(&mut self, pts : &[(u16, u16)], method : Method) -> Result<Ellipse, String> {
+            self.pt_vec.clear();
+            for pt in pts.iter() {
+                self.pt_vec.push(core::Point2f::new(pt.1 as f32, pt.0 as f32));
+            }
+            self.fit_from_current(method)
+        }
+
+        fn fit_from_current(&mut self, method : Method) -> Result<Ellipse, String> {
+            assert!(self.pt_vec.len() >= 5);
             let rotated_rect = match method {
                 Method::LeastSquares => {
                     imgproc::fit_ellipse(&self.pt_vec)
@@ -1187,6 +1226,7 @@ pub mod cvellipse {
                 angle : angle as f64
             })
         }
+
     }
 
     #[derive(Debug)]

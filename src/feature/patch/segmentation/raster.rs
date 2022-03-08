@@ -141,6 +141,7 @@ impl RasterSegmenter {
         if exp_mode == ExpansionMode::Rect {
             for mut patch in self.patches[0..n_patches].iter_mut() {
                 let rect = patch.outer_rect::<usize>();
+                patch.pxs.clear();
                 for r in [rect.0, rect.0 + rect.2] {
                     for c in rect.1..(rect.1 + rect.3) {
                         patch.pxs.push((r as u16, c as u16));
@@ -355,18 +356,18 @@ where
     let mut color_match = false;
     let subsampled_ncols = win.width() / px_spacing as usize;
     let last_col = subsampled_ncols - 1;
-    // for (r, c, px_color) in win.labeled_pixels::<usize, _>(px_spacing as usize) {
-    for ((r, c), px_color) in labels.iter().zip(win.pixels(px_spacing as usize)) {
+    for (r, c, px_color) in win.labeled_pixels::<usize, _>(px_spacing as usize) {
+    // for ((r, c), px_color) in labels.iter().zip(win.pixels(px_spacing as usize)) {
 
-        if comp(*px_color) {
-            if *r >= 1 && *prev_row_mask.get_unchecked(*c) {
+        if comp(px_color) {
+            if r >= 1 && *prev_row_mask.get_unchecked(c) {
                 search.merges_top = true;
-                search.top_patch_ix = *search.prev_row_patch_ixs.get_unchecked(*c);
+                search.top_patch_ix = *search.prev_row_patch_ixs.get_unchecked(c);
             } else {
                 search.merges_top = false;
             }
             search.merges_left = if let Some(last_c) = last_matching_col {
-                *c > 0 && *c - last_c == 1
+                c > 0 && c - last_c == 1
             } else {
                 false
             };
@@ -376,23 +377,23 @@ where
                 search,
                 &mut n_patches,
                 win,
-                *r,
-                *c,
-                *px_color,
+                r,
+                c,
+                px_color,
                 px_spacing,
                 add_to_right,
                 add_to_bottom
             );
-            if *c < last_col  {
+            if c < last_col  {
                 last_matching_col = Some(c);
             } else {
                 last_matching_col = None;
             }
-            *prev_row_mask.get_unchecked_mut(*c) = true;
+            *prev_row_mask.get_unchecked_mut(c) = true;
 
         } else {
-            *prev_row_mask.get_unchecked_mut(*c) = false;
-            if *c == last_col {
+            *prev_row_mask.get_unchecked_mut(c) = false;
+            if c == last_col {
                 last_matching_col = None;
             }
         }
