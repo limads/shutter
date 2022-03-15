@@ -1171,6 +1171,9 @@ pub mod cvellipse {
         /// Returns position and radius of fitted circle. Also see fit_ellipse_ams; fit_ellipse_direct.
         pub fn fit_ellipse(&mut self, pts : &[(usize, usize)], method : Method) -> Result<Ellipse, String> {
             self.pt_vec.clear();
+            if pts.len() < 5 {
+                return Err(String::from("Insufficient points"));
+            }
             for pt in pts.iter() {
                 self.pt_vec.push(core::Point2f::new(pt.1 as f32, pt.0 as f32));
             }
@@ -1179,6 +1182,9 @@ pub mod cvellipse {
 
         pub fn fit_ellipse_u16(&mut self, pts : &[(u16, u16)], method : Method) -> Result<Ellipse, String> {
             self.pt_vec.clear();
+            if pts.len() < 5 {
+                return Err(String::from("Insufficient points"));
+            }
             for pt in pts.iter() {
                 self.pt_vec.push(core::Point2f::new(pt.1 as f32, pt.0 as f32));
             }

@@ -154,7 +154,7 @@ impl SeedGrowth {
         Self { front : ExpansionFront::new_empty(), px_spacing, patch, max_area, exp_mode, grown : false }
     }
 
-    pub fn grow<F>(&mut self, win : &Window<'_, u8>, seed : (u16, u16), comp : F, close_at_end : bool) -> Option<&Patch>
+    pub fn grow<F>(&mut self, win : &Window<'_, u8>, seed : (u16, u16), comp : F, close_at_end : bool, adaptive : bool) -> Option<&Patch>
     where
         F : Fn(u8)->bool
     {
@@ -184,7 +184,7 @@ impl SeedGrowth {
             assert!(self.patch.pxs.len() == 1);
         }
 
-        if grow(&mut self.patch, &mut self.front, &win, seed, self.px_spacing, comp, ReferenceMode::Constant, self.max_area, self.exp_mode, close_at_end) {
+        if grow(&mut self.patch, &mut self.front, &win, seed, self.px_spacing, comp, ReferenceMode::Constant, self.max_area, self.exp_mode, close_at_end, adaptive) {
             self.grown = true;
             Some(&self.patch)
         } else {
@@ -286,15 +286,17 @@ fn expand_patch(
     }
 }
 
-fn update_stats(mode : &mut ColorMode, n_px : &mut u16, sum : &mut u64, sum_abs_dev : &mut u64, ref_mode : ReferenceMode, new : u8) {
-    if ref_mode == ReferenceMode::Adaptive {
-        *sum += new as u64;
-        *n_px += 1;
-        let mean = *sum / *n_px as u64;
-        // let abs_dev = (mean as i64 - new as i64).abs() as u64;
-        // *sum_abs_dev += abs_dev;
-        mode.set_reference_color(mean as u8);
-    }
+fn update_stats(n_px : &mut u16, sum : &mut u64, mean : &mut u64, sum_abs_dev : &mut u64, abs_dev : &mut u64, new : u8) {
+    //if ref_mode == ReferenceMode::Adaptive {
+    *sum += new as u64;
+    *n_px += 1;
+    *mean = *sum / *n_px as u64;
+    let dev = (*mean as i64 - new as i64).abs() as u64;
+    *sum_abs_dev += dev;
+    *abs_dev = *sum_abs_dev / *n_px as u64;
+
+    // mode.set_reference_color(mean as u8);
+    // }
 }
 
 fn expand_rect_with_front(rect : &mut (u16, u16, u16, u16), exp : &ExpansionFront) {
@@ -412,7 +414,8 @@ fn grow<F>(
     ref_mode : ReferenceMode,
     max_area : Option<usize>,
     exp_mode : ExpansionMode,
-    close_at_end : bool
+    close_at_end : bool,
+    adaptive : bool
 ) -> bool
 where
     F : Fn(u8)->bool
@@ -441,7 +444,9 @@ where
 
     let mut n_px = 0;
     let mut sum_abs_dev : u64 = 0;
+    let mut abs_dev : u64 = 0;
     let mut sum : u64 = win[seed] as u64;
+    let mut mean : u64 = 0;
 
     let (h, w) = (win.height() as u16, win.width() as u16);
 
@@ -513,7 +518,8 @@ where
                 for c in top_range.clone() {
                     let px = (r, c);
                     let is_corner = (c == top_range.start || c == top_range.end-1);
-                    if comp(win[px]) && (is_corner || ( /*pixel_above_rect(&outer_rect, px) &&*/ pixel_neighbors_top(&exp_patch, px))) {
+                    let match_adaptive = abs_dist / px_spacing as u16 > 2 && (win[px] as i16 - (mean as i16)).abs() < 12;
+                    if (comp(win[px]) || (adaptive && match_adaptive)) && (is_corner || (pixel_neighbors_top(&exp_patch, px))) {
                         if !grows_top {
                             // outer_rect.0 = r;
                             // outer_rect.2 += px_spacing;
@@ -521,8 +527,9 @@ where
                         }
                         exp_patch.top.curr.push(px);
                         update_contiguous(&mut exp_patch.top, &px);
-
-                        // update_stats(&mut mode, &mut n_px, &mut sum, &mut sum_abs_dev, ref_mode, win[px]);
+                        if adaptive {
+                            update_stats(&mut n_px, &mut sum, &mut mean, &mut sum_abs_dev, &mut abs_dev, win[px]);
+                        }
                     }
                 }
             }
@@ -535,7 +542,8 @@ where
                 for r in left_range.clone() {
                     let px = (r, c);
                     let is_corner = (r == left_range.start || r == left_range.end-1);
-                    if comp(win[px]) && ( is_corner || ( /*pixel_to_left_of_rect(&outer_rect, px) &&*/ pixel_neighbors_left(&exp_patch, px))) {
+                    let match_adaptive = abs_dist / px_spacing as u16 > 2 && (win[px] as i16 - (mean as i16)).abs() < 12;
+                    if (comp(win[px]) || (adaptive && match_adaptive)) && ( is_corner || (pixel_neighbors_left(&exp_patch, px))) {
                         if !grows_left {
                             // outer_rect.1 = c;
                             // outer_rect.3 += px_spacing;
@@ -543,8 +551,9 @@ where
                         }
                         exp_patch.left.curr.push(px);
                         update_contiguous(&mut exp_patch.left, &px);
-
-                        // update_stats(&mut mode, &mut n_px, &mut sum, &mut sum_abs_dev, ref_mode, win[px]);
+                        if adaptive {
+                            update_stats(&mut n_px, &mut sum, &mut mean, &mut sum_abs_dev, &mut abs_dev, win[px]);
+                        }
                     }
                 }
             }
@@ -557,7 +566,8 @@ where
                 for c in bottom_range.clone() {
                     let px = (r, c);
                     let is_corner = (r == bottom_range.start || r == bottom_range.end-1);
-                    if comp(win[px]) && (is_corner || ( pixel_neighbors_bottom(&exp_patch, px))) {
+                    let match_adaptive = abs_dist / px_spacing as u16 > 2 && (win[px] as i16 - (mean as i16)).abs() < 12;
+                    if (comp(win[px]) || (adaptive && match_adaptive)) && (is_corner || ( pixel_neighbors_bottom(&exp_patch, px))) {
                         if !grows_bottom {
                             // outer_rect.2 += px_spacing;
                             grows_bottom = true;
@@ -565,7 +575,9 @@ where
                         exp_patch.bottom.curr.push(px);
                         update_contiguous(&mut exp_patch.bottom, &px);
 
-                        // update_stats(&mut mode, &mut n_px, &mut sum, &mut sum_abs_dev, ref_mode, win[px]);
+                        if adaptive {
+                            update_stats(&mut n_px, &mut sum, &mut mean, &mut sum_abs_dev, &mut abs_dev, win[px]);
+                        }
                     }
                 }
             }
@@ -578,7 +590,8 @@ where
                 for r in right_range.clone() {
                     let px = (r, c);
                     let is_corner = (r == right_range.start || r == right_range.end-1);
-                    if comp(win[px]) && (is_corner || ( pixel_neighbors_right(&exp_patch, px))) {
+                    let match_adaptive = abs_dist / px_spacing as u16 > 2 && (win[px] as i16 - (mean as i16)).abs() < 12;
+                    if (comp(win[px]) || (adaptive && match_adaptive)) && (is_corner || ( pixel_neighbors_right(&exp_patch, px))) {
                         if !grows_right {
                             // outer_rect.3 += px_spacing;
                             grows_right = true;
@@ -587,7 +600,9 @@ where
                         exp_patch.right.curr.push(px);
                         update_contiguous(&mut exp_patch.right, &px);
 
-                        // update_stats(&mut mode, &mut n_px, &mut sum, &mut sum_abs_dev, ref_mode, win[px]);
+                        if adaptive {
+                            update_stats(&mut n_px, &mut sum, &mut mean, &mut sum_abs_dev, &mut abs_dev, win[px]);
+                        }
                     }
                 }
             }
