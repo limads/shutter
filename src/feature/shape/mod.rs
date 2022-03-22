@@ -51,6 +51,11 @@ pub fn point_euclidian_u16(a : (u16, u16), b : (u16, u16)) -> f32 {
     ((a.0 as f32 - b.0 as f32)).hypot((a.1 as f32 - b.1 as f32))
 }
 
+pub fn point_euclidian_float(a : (f64, f64), b : (f64, f64)) -> f32 {
+    //((a.0 as f32 - b.0 as f32).powf(2.) + (a.1 as f32 - b.1 as f32).powf(2.)).sqrt()
+    ((a.0 - b.0)).hypot((a.1 - b.1)) as f32
+}
+
 /// Calculate the angle formed by side_a and side_b given the opposite side using the law of cosines.
 pub fn angle(side_a : f64, side_b : f64, opp_side : f64) -> f64 {
 	let angle_cos = (side_a.powf(2.) + side_b.powf(2.) - opp_side.powf(2.)) / (2. * side_a * side_b);
@@ -802,7 +807,7 @@ pub fn outer_ellipse(pts : &[(usize, usize)]) -> Option<Ellipse> {
     let angle = vertex_angle(center, major_pt2, (center.0, center.1 + small_axis as usize)).unwrap();
 
     Some(Ellipse {
-        center,
+        center : (center.0 as f64, center.1 as f64),
         large_axis,
         small_axis,
         angle
@@ -816,7 +821,7 @@ pub fn join_col_ordered(pts : &[(usize, usize)], max_dist : f64) -> Vec<[(usize,
 
 #[derive(Debug, Clone, Copy)]
 pub struct Ellipse {
-    pub center : (usize, usize),
+    pub center : (f64, f64),
     pub large_axis : f64,
     pub small_axis : f64,
     pub angle : f64
@@ -824,13 +829,13 @@ pub struct Ellipse {
 
 #[derive(Debug, Clone, Copy)]
 pub struct EllipseAxis {
-    pub major : (usize, usize),
-    pub minor : (usize, usize)
+    pub major : (f64, f64),
+    pub minor : (f64, f64)
 }
 
 impl EllipseAxis {
 
-    pub fn vectors(&self, center : (usize, usize), img_height : usize) -> (Vector2<f64>, Vector2<f64>) {
+    pub fn vectors(&self, center : (f64, f64), img_height : usize) -> (Vector2<f64>, Vector2<f64>) {
         let major = Vector2::from([
             self.major.1 as f64 - center.1 as f64,
             img_height as f64 - self.major.0 as f64 - center.0 as f64
@@ -856,10 +861,10 @@ impl Ellipse {
     }
 
     pub fn center_vector(&self, img_height : usize) -> Vector2<f64> {
-        Vector2::from([self.center.1 as f64, (img_height - self.center.0) as f64])
+        Vector2::from([self.center.1 as f64, (img_height as f64 - self.center.0) as f64])
     }
 
-    pub fn from_axis(center : (usize, usize), axis : EllipseAxis, img_height : usize) -> Self {
+    pub fn from_axis(center : (f64, f64), axis : EllipseAxis, img_height : usize) -> Self {
         let (major, minor) = axis.vectors(center, img_height);
 
         // The angle in Opencv rotated rect is defined as the clockwise angle
@@ -922,12 +927,12 @@ impl Ellipse {
         // println!("{}", self.angle);
         if self.angle <= 90. {
             let major = (
-                self.center.0 + (-1. * (-self.angle).to_radians().sin() * (self.large_axis / 2.)) as usize,
-                self.center.1 + ((-self.angle).to_radians().cos() * (self.large_axis / 2.)) as usize
+                self.center.0 + (-1. * (-self.angle).to_radians().sin() * (self.large_axis / 2.)),
+                self.center.1 + ((-self.angle).to_radians().cos() * (self.large_axis / 2.))
             );
             let minor = (
-                self.center.0.checked_sub((-1. * (-90. as f64 + self.angle).to_radians().sin() * (self.small_axis / 2.)) as usize)?,
-                self.center.1 + ( (-90. as f64 + self.angle).to_radians().cos() * (self.small_axis / 2.)) as usize
+                self.center.0 - (-1. * (-90. as f64 + self.angle).to_radians().sin() * (self.small_axis / 2.)),
+                self.center.1 + ( (-90. as f64 + self.angle).to_radians().cos() * (self.small_axis / 2.))
             );
             Some(EllipseAxis { major, minor })
         } else {
@@ -1116,7 +1121,12 @@ pub mod cvellipse {
     pub fn fit_circle(pts : &[(usize, usize)], method : Method) -> Result<((usize, usize), usize), String> {
         let ellipse = EllipseFitting::new().fit_ellipse(pts, method)?;
         let radius = ((ellipse.large_axis*0.5 + ellipse.small_axis*0.5) / 2.) as usize;
-        Ok((ellipse.center, radius))
+
+        if ellipse.center.0 < 0. || ellipse.center.1 < 0. {
+            return Err(format!("Invalid value"));
+        }
+
+        Ok(((ellipse.center.0 as usize, ellipse.center.1 as usize), radius))
     }
 
     // TODO make WindowMut
@@ -1212,7 +1222,7 @@ pub mod cvellipse {
             if center_pt.y < 0.0 || center_pt.x < 0.0 {
                 return Err(format!("Circle outside image boundaries"));
             }
-            let center = (center_pt.y as usize, center_pt.x as usize);
+            let center = (center_pt.y as f64, center_pt.x as f64);
             let angle = rotated_rect.angle();
             let size = rotated_rect.size();
             if rotated_rect.size().width as i32 <= 0 || rotated_rect.size().height as i32 <= 0 {
@@ -1275,3 +1285,59 @@ pub mod cvellipse {
 
 // pub enum EllipseError {
 // }
+
+pub struct CircleFit {
+    pub center : Vector2<f64>,
+    pub radius : f64
+}
+
+impl CircleFit {
+
+    pub fn calculate_from_points(ptsf : &[Vector2<f64>]) -> Option<Self> {
+        let n = ptsf.len() as f64;
+        let (mut center_x, mut center_y) = ptsf.iter().fold((0.0, 0.0), |acc, pt| (acc.0 + pt[0], acc.1 + pt[1]) );
+        center_x /= n;
+        center_y /= n;
+        let centered_ptsf : Vec<_> = ptsf.iter().map(|pt| Vector2::new(pt[0] - center_x, pt[1] - center_y)).collect();
+        let x_sq = centered_ptsf.iter().fold(0., |acc, pt| acc + pt[0].powf(2.) );
+        let y_sq = centered_ptsf.iter().fold(0., |acc, pt| acc + pt[1].powf(2.) );
+        let x_cub = centered_ptsf.iter().fold(0., |acc, pt| acc + pt[0].powf(3.) );
+        let y_cub = centered_ptsf.iter().fold(0., |acc, pt| acc + pt[1].powf(3.) );
+        let xy = centered_ptsf.iter().fold(0., |acc, pt| acc + pt[0] * pt[1] );
+        let xyy = centered_ptsf.iter().fold(0., |acc, pt| acc + pt[0] * pt[1].powf(2.) );
+        let xxy = centered_ptsf.iter().fold(0., |acc, pt| acc + pt[0].powf(2.) * pt[1] );
+        let m = Matrix2::from_rows(&[RowVector2::new(x_sq, xy), RowVector2::new(xy, y_sq)]);
+        let b = Vector2::new(
+            0.5 * (x_cub + xyy),
+            0.5 * (y_cub + xxy)
+        );
+        let ans = LU::new(m).solve(&b)?;
+        let center = Vector2::new(ans[0] + center_x, ans[1] + center_y);
+        let radius = (ans[0].powf(2.) + ans[1].powf(2.) + (x_sq + y_sq) / n).sqrt();
+        Some(Self { center, radius })
+    }
+
+    pub fn calculate(pts : &[(u16, u16)], img_height : u16) -> Option<Self> {
+        let ptsf : Vec<Vector2<f64>> = pts.iter().map(|pt| Vector2::new(pt.1 as f64, (img_height - pt.0) as f64) ).collect();
+        Self::calculate_from_points(&ptsf[..])
+    }
+
+    pub fn center_coord(&self, img_height : u16) -> Option<(u16, u16)> {
+        if (self.center[0] > 0. && self.center[1] > 0.) && (self.center[1] as u16) < img_height {
+            Some((img_height - self.center[1] as u16, self.center[0] as u16))
+        } else {
+            None
+        }
+    }
+
+    // variance of the random variable (dist(pt, center) - radius), which is a measure of fit quality.
+    pub fn radius_variance(&self, pts : &[(u16, u16)], img_height : u16) -> f64 {
+        let ptsf : Vec<Vector2<f64>> = pts.iter().map(|pt| Vector2::new(pt.1 as f64, (img_height - pt.0) as f64) ).collect();
+        let n = ptsf.len() as f64;
+        ptsf.iter().fold(0.0, |acc, pt| acc + ((pt - &self.center).magnitude() - self.radius).powf(2.)  ) / n
+    }
+
+}
+
+
+

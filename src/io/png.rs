@@ -6,6 +6,17 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::iter::FromIterator;
 
+pub fn file_dimensions(path : &str) -> Option<(usize, usize)> {
+    let mut f = File::open(path).ok()?;
+    let dec = png::PngDecoder::new(f).ok()?;
+    let dims = dec.dimensions();
+    if dims.0 > 0 && dims.1 > 0 {
+        Some((dims.0 as usize, dims.1 as usize))
+    } else {
+        None
+    }
+}
+
 pub fn encode_to_file(dec : Image<u8>, path : &str) -> Result<(),&'static str> {
     let mut f = File::create(path)
         .map_err(|_| { "Error creating file." })?;

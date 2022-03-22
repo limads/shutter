@@ -67,3 +67,6 @@ ipp=[]
 # opencvlib=[]
 vlfeatlib=[]
 # processor=[]
+
+[package.metadata]
+numerics = "scripts/shutter.lua"

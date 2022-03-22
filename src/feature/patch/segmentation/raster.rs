@@ -165,6 +165,23 @@ impl RasterSegmenter {
         &self.patches[0..self.n_patches]
     }
 
+    /// Segments the image into separate nonoverlapping colors. The color to which a
+    /// patch is attributed is stored in patch.color as the midpoint of each interval.
+    pub fn segment_grouped_colors<'a>(&'a self, win : &'a Window<'_, u8>, colors : &'a [(u8, u8)], exp_mode : ExpansionMode) -> &'a [Patch] {
+
+        // Verify colors are disjoint.
+        assert!(colors.iter().all(|c| c.0 < c.1 ));
+        for (ix, c1) in colors.iter().enumerate() {
+            for c2 in colors[ix+1..].iter() {
+                assert!((c1.0 < c2.0 && c1.1 < c2.1) || (c2.0 < c1.0 && c2.1 < c1.1));
+            }
+        }
+
+        panic!()
+
+        // &self.patches[0..self.n_patches]
+    }
+
 }
 
 /*impl deft::Interactive for RasterSegmenter {

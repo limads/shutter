@@ -632,6 +632,14 @@ where
     N : Scalar + Mul<Output=N> + MulAssign + Copy + Copy + Serialize + DeserializeOwned + Any
 {
 
+    pub fn get(&self, index : (usize, usize)) -> Option<&N> {
+        if index.0 < self.height() && index.1 < self.width() {
+            unsafe { Some(self.get_unchecked(index)) }
+        } else {
+            None
+        }
+    }
+
     pub unsafe fn get_unchecked(&self, index : (usize, usize)) -> &N {
         let off_ix = (self.offset.0 + index.0, self.offset.1 + index.1);
         let (limit_row, limit_col) = (self.offset.0 + self.win_sz.0, self.offset.1 + self.win_sz.1);
@@ -1077,11 +1085,14 @@ impl<'a> Window<'a, u8> {
     }
 
     /// Gets pos or the nearest pixel to it that satisfies a condition.
-    pub fn nearest_matching(&self, pos : (usize, usize), px_spacing : usize, f : impl Fn(u8)->bool) -> Option<(usize, usize)> {
-        if f(self[pos]) {
-            Some(pos)
+    pub fn nearest_matching(&self, seed : (usize, usize), px_spacing : usize, f : impl Fn(u8)->bool, max_dist : usize) -> Option<(usize, usize)> {
+        if f(self[seed]) {
+            Some(seed)
         } else {
-            self.expanding_pixels(pos, px_spacing).find(|(_, px)| f(**px) ).map(|(pos, _)| pos )
+            self.expanding_pixels(seed, px_spacing)
+                .take_while(|(pos, _)| ((pos.0 as i64 - seed.0 as i64).abs() as usize) < max_dist && ((pos.1 as i64 - seed.1 as i64).abs() as usize) < max_dist)
+                .find(|(_, px)| f(**px) )
+                .map(|(pos, _)| pos )
         }
     }
 
@@ -1849,6 +1860,16 @@ impl WindowMut<'_, u8> {
         color::full_color_patches(&mut patches, &src_win, px_spacing as u16, ColorMode::Exact(0), color::ExpansionMode::Dense);
         patches*/
         unimplemented!()
+    }
+
+    pub fn draw_patch_contour(&mut self, patch : &Patch, color : u8) {
+        let pxs = patch.outer_points::<usize>(crate::feature::patch::ExpansionMode::Contour);
+        self.draw(Mark::Shape(pxs, color));
+    }
+
+    pub fn draw_patch_rect(&mut self, patch : &Patch, color : u8) {
+        let rect = patch.outer_rect::<usize>();
+        self.draw(Mark::Rect((rect.0, rect.1), (rect.2, rect.3), color));
     }
 
     pub fn draw(&mut self, mark : Mark) {

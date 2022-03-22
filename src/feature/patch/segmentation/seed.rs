@@ -611,6 +611,7 @@ where
         let grows_any = grows_left || grows_right || grows_bottom || grows_top;
         expand_rect_with_front(&mut outer_rect, &exp_patch);
         patch.outer_rect = outer_rect;
+        patch.color = mean as u8;
         expand_patch(exp_patch, patch, outer_rect, win, seed, extension_func);
 
         if let Some(area) = max_area {

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::ops::Range;
 use crate::image::WindowMut;
 // use crate::segmentation;
-use bayes::fit::{cluster::KMeans, cluster::KMeansSettings, Estimator};
+use bayes::fit::{cluster::center::KMeans, cluster::center::KMeansSettings, Estimator};
 use away::space::SpatialClustering;
 use std::cmp::Ordering;
 
@@ -250,6 +250,29 @@ impl ColorProfile {
         // println!("{}", n_pxs);
         bump_modes(&mut modes, &mut discrs, &self.0[..], 0..256, win_sz, min_width, min_rel, n_pxs);
         (modes, discrs)
+    }
+
+    pub fn unsupervised_modes_ordered(&self, win_sz : usize, min_dist : usize, min_rel : f32) -> Vec<Mode> {
+        let mut vals : Vec<(usize, f32)> = self.0.iter()
+            .map(|v| *v as f32 / self.1 as f32 )
+            .enumerate()
+            .collect();
+        vals.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal) );
+        let mut modes = Vec::new();
+        for (ix, v) in vals.iter() {
+
+            if *ix >= 1 && vals[0..(*ix-1)].iter().any(|prev_v| ((prev_v.0 as i64 - *ix as i64).abs() as usize) < min_dist ) {
+                continue;
+            }
+
+            if *v >= min_rel {
+                modes.push(Mode { color : *ix as u8, n_pxs : (v * self.1 as f32) as usize });
+            } else {
+                break;
+            }
+
+        }
+        modes
     }
 
     /// Finds the k-1 smallest values between each pair of the k modes. Might contain

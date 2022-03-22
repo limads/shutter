@@ -78,6 +78,8 @@ pub mod ray;
 
 pub mod pattern;
 
+pub mod edge;
+
 // use nohash-hasher;
 
 // use crate::feature::shape;
@@ -684,6 +686,32 @@ pub struct PatchBorder {
 }
 
 impl Patch {
+
+    pub fn inner_pixels<'a>(
+        &'a self,
+        win : &'a Window<'_, u8>,
+        px_spacing : usize
+    ) -> impl Iterator<Item=((u16, u16), u8)> + 'a {
+        let mut pxs = self.pxs.clone();
+        pxs.sort_by(|a, b| a.0.cmp(&b.0) );
+
+        let mut rows = Vec::new();
+        let mut inner = Vec::new();
+        for (row, row_px) in &pxs.into_iter().group_by(|px| px.0 ) {
+
+            // Sort by cols within rows
+            inner.clear();
+            inner.extend(row_px);
+            inner.sort_by(|a, b| a.1.cmp(&b.1) );
+
+            // Pairs of pixels within row (now sorted by col) must be contiguous in the patch.
+            for (p1, p2) in inner.iter().clone().zip(inner.iter().skip(1)) {
+                rows.push((p1.1..p2.1).map(move |c| ((row, c), win[(row, c)]) ));
+            }
+        }
+
+        rows.into_iter().flatten()
+    }
 
     pub fn rect_border_color(&self, win : &Window<'_, u8>) -> Option<u8> {
         let mut out : u64 = 0;
@@ -1401,6 +1429,11 @@ impl Patch {
         &self.pxs[..]
     }
 
+    pub fn outer_points_mut(&mut self) -> &mut [(u16, u16)] {
+        assert!(self.scale == 1);
+        &mut self.pxs[..]
+    }
+
     // TODO return a Cow<[N, N]> here if the user asked for the points in u16 format and scale = 1.
     pub fn outer_points<N>(&self, mode : ExpansionMode) -> Vec<(N, N)>
     where
@@ -1957,7 +1990,7 @@ pub fn extract_extreme_colors(
     km : &KMeans,
     sample : impl Iterator<Item=impl Borrow<[f64]>> + Clone
 ) -> Vec<(u8, u8)> {
-    (0..km.means().count()).map(|ix| bayes::fit::cluster::extremes(&km, sample.clone(), ix).unwrap() )
+    (0..km.means().count()).map(|ix| bayes::fit::cluster::center::extremes(&km, sample.clone(), ix).unwrap() )
         .map(|(low, high)| (flatten_to_8bit(&low), flatten_to_8bit(&high)) )
         .collect::<Vec<_>>()
 }

@@ -3,6 +3,8 @@ use super::Patch;
 use std::cmp::{PartialEq, Eq};
 use crate::feature::shape;
 
+// TODO rename to RadialSegmenter
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
     Inward,
