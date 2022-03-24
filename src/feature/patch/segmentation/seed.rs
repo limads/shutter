@@ -15,7 +15,7 @@ use crate::feature::point;
 use crate::feature::edge::euclidian;
 use crate::image::index::index_distance;
 use super::*;
-use away::space::SpatialClustering;
+// use away::space::SpatialClustering;
 use std::ops::Range;
 use std::convert::TryInto;
 use std::convert::TryFrom;

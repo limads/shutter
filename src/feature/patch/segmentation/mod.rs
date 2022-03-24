@@ -16,7 +16,7 @@ use crate::feature::point;
 use crate::feature::edge::euclidian;
 use crate::image::index::index_distance;
 use super::*;
-use away::space::SpatialClustering;
+// use away::space::SpatialClustering;
 use std::ops::Range;
 use std::convert::TryInto;
 use std::convert::TryFrom;
@@ -1490,7 +1490,8 @@ impl Patch {
         let float_pts : Vec<_> = pts.iter()
             .map(|pt| Point2::new(pt.1 as f32, pt.0 as f32 ) )
             .collect();
-        ConvexPolygon::from_convex_hull(&float_pts[..])
+        // ConvexPolygon::from_convex_hull(&float_pts[..])
+        unimplemented!()
     }
 
     pub fn contains(&self, other : &Self) -> Option<bool> {

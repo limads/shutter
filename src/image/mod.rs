@@ -213,6 +213,13 @@ where
         Self{ buf, ncols }
     }
     
+    /// Initializes an image with allocated, but undefined content.
+    pub unsafe fn new_empty(nrows : usize, ncols : usize) -> Self {
+        let mut buf = Vec::with_capacity(nrows * ncols);
+        buf.set_len(nrows * ncols);
+        Self { buf, ncols }
+    }
+
     pub fn shape(&self) -> (usize, usize) {
         (self.buf.len() / self.ncols, self.ncols)
     }

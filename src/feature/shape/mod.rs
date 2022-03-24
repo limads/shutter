@@ -2,7 +2,7 @@ use crate::image::*;
 use crate::feature::edge::*;
 use std::cmp::{PartialEq, Ordering};
 use nalgebra::*;
-use away::{Manhattan, Metric};
+use bayes::fit::cluster::{Manhattan, Metric};
 use nalgebra::geometry::Rotation2;
 use nalgebra::Vector2;
 use std::cmp::Ord;
@@ -275,17 +275,37 @@ where
     (r.0 + r.2, r.1 + r.3)
 }
 
+#[test]
+fn test_overlap() {
+    let rects = [
+        ((0, 0, 10, 10), (11, 11, 10, 10)),
+        ((0, 0, 10, 10), (5, 5, 10, 10)),
+        ((0, 0, 10, 10), (0, 5, 10, 10)),
+        ((0, 0, 10, 10), (5, 0, 10, 10)),
+        ((11, 11, 10, 10), (0, 0, 10, 10)),
+        ((5, 5, 10, 10), (0, 0, 10, 10)),
+        ((0, 5, 10, 10), (0, 0, 10, 10),),
+        ((5, 0, 10, 10), (0, 0, 10, 10)),
+    ];
+    for (r1, r2) in rects {
+        println!("{:?} {:?} = {:?}", &r1, &r2, shutter::feature::shape::rect_overlaps(&r1, &r2));
+    }
+}
+
 pub fn rect_overlaps<N>(r1 : &(N, N, N, N), r2 : &(N, N, N, N)) -> bool
 where
     N : Ord + Add<Output=N> + Copy
 {
+
+    r1.1 < (r2.1 + r2.3) && (r1.1 + r1.3) > r2.1 && (r1.0 < r2.0 + r2.2) && (r1.0 + r1.2) > r2.0
+
     /*let tl_vdist = (r1.0 as i32 - r2.0 as i32).abs();
     let tl_hdist = (r1.1 as i32 - r2.1 as i32).abs();
     let (h1, w1) = (r1.2 as i32, r1.3 as i32);
     let (h2, w2) = (r2.2 as i32, r2.3 as i32);
     (tl_vdist < h1 || tl_vdist < h2) && (tl_hdist < w1 || tl_hdist < w2)*/
 
-    let tl_1 = top_left_coordinate(r1);
+    /*let tl_1 = top_left_coordinate(r1);
     let tl_2 = top_left_coordinate(r2);
     let br_1 = bottom_right_coordinate(r1);
     let br_2 = bottom_right_coordinate(r2);
@@ -295,7 +315,7 @@ where
     let to_top = br_2.0 < tl_1.0;
     let to_bottom = tl_2.0 > br_1.0;
 
-    !(to_left || to_top || to_right || to_bottom)
+    !(to_left || to_top || to_right || to_bottom)*/
 
     /*if tl_1.1 >= br_2.1 || tl_2.1 >= br_1.1 {
         return false;

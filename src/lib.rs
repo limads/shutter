@@ -71,6 +71,7 @@ pub mod geom;
 
 pub mod foreign;
 
+#[cfg(feature="glib")]
 #[cfg(feature="gstreamer")]
 #[cfg(feature="gstreamer-base")]
 #[cfg(feature="gstreamer-video")]

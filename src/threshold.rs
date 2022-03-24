@@ -69,6 +69,14 @@ pub fn threshold_slice(src : &[u8], ncol : usize, dst : &mut [u8], thresh : f64,
     }
 }
 
+//pub fn positive_truncate_abs<'a>(src : &'a Window<'a, i16>, dst : &'a mut WindowMut<'a, u8>) {
+//    dst.pixels_mut(1).zip(src.pixels(1)).for_each(move |(d, s)| *d = *s as u8 );
+//}
+
+pub fn truncate_abs<'a>(src : &'a Window<'a, i16>, dst : &'a mut WindowMut<'a, u8>) {
+    dst.pixels_mut(1).zip(src.pixels(1)).for_each(move |(d, s)| *d = s.abs() as u8 );
+}
+
 pub fn invert_colors_inplace(win : &mut WindowMut<'_, u8>) {
     // win.pixels_mut(1).for_each(|px| *px = 255 - *px );
     for i in 0..win.height() {
@@ -92,9 +100,9 @@ pub fn binarize_bytes_below(win : &Window<'_,u8>, out : &mut WindowMut<'_, u8>, 
     }
 }
 
-/* Binarization sets all pixels below val to 0, all pixels at or above val to 1. If out is
+/* Binarization sets all pixels below val to 0, all pixels at or above val to 'to' value. If out is
 smaller than self, every ith pixel of input is taken */
-pub fn binarize_bytes_mut(win : &Window<'_, u8>, out : &mut WindowMut<'_, u8>, val : u8) {
+pub fn binarize_bytes_mut(win : &Window<'_, u8>, out : &mut WindowMut<'_, u8>, val : u8, to : u8) {
     assert!(win.width() % out.width() == 0 && win.height() % out.height() == 0 );
     assert!(win.width() / out.width() == win.height() / out.height());
     let scale = win.width() / out.width();
@@ -103,7 +111,7 @@ pub fn binarize_bytes_mut(win : &Window<'_, u8>, out : &mut WindowMut<'_, u8>, v
             if win[(i * scale, j * scale)] < val {
                 out[(i, j)] = 0;
             } else {
-                out[(i, j)] = 1;
+                out[(i, j)] = to;
             }
         }
     }

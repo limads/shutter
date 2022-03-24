@@ -5,7 +5,7 @@ use std::ops::Range;
 use crate::image::WindowMut;
 // use crate::segmentation;
 use bayes::fit::{cluster::center::KMeans, cluster::center::KMeansSettings, Estimator};
-use away::space::SpatialClustering;
+use bayes::fit::cluster::space::SpatialClustering;
 use std::cmp::Ordering;
 
 /*IppStatus ippiHistogram_<mod>(const Ipp<dataType>* pSrc, int srcStep, IppiSize roiSize,
