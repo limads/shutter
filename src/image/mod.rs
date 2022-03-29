@@ -15,6 +15,9 @@ use std::any::Any;
 use tempfile;
 use std::fs;
 use std::io::Write;
+use num_traits::cast::FromPrimitive;
+use num_traits::cast::AsPrimitive;
+use num_traits::float::Float;
 
 #[cfg(feature="opencv")]
 use opencv::core;
@@ -553,6 +556,35 @@ impl<'a, N> Window<'a, N>
 where
     N : Scalar
 {
+
+    /// Converts this image from the range[0, 1] (floating-point) to the quantized range defined by max
+    pub fn quantize<M : Scalar + >(&self, mut out : WindowMut<'_, M>)
+    where
+        N : Copy + Mul<Output=N> + num_traits::float::Float + num_traits::cast::AsPrimitive<M>,
+        M : num_traits::cast::AsPrimitive<N> + Copy + num_traits::Bounded
+    {
+        let max : N = M::max_value().as_();
+        for i in 0..out.height() {
+            for j in 0..out.width() {
+                out[(i, j)] = (self[(i, j)] * max).min(max).as_();
+            }
+        }
+    }
+
+    /// Converts this image to the range [0, 1] (floating-point) by dividing by its maximum
+    /// attainable value.
+    pub fn smoothen<M : Scalar + >(&self, mut out : WindowMut<'_, M>)
+    where
+        N : num_traits::Bounded + Copy + num_traits::cast::AsPrimitive<M>,
+        M : Copy + Div<Output=M>
+    {
+        let max : M = N::max_value().as_();
+        for i in 0..out.height() {
+            for j in 0..out.width() {
+                out[(i, j)] = (self[(i, j)]).as_() / max;
+            }
+        }
+    }
 
     /// The cartesian index is defined as (img.height() - pt[1], pt[0]).
     /// It indexes the image by imposing the cartesian analytical plane over it,
@@ -2126,20 +2158,6 @@ where
         })
     }
 
-}
-
-impl<'a, N> WindowMut<'a, N>
-where
-    N : Scalar + Copy + Mul<Output=N> + MulAssign + PartialOrd + Serialize + DeserializeOwned
-{
-
-    pub fn fill(&'a mut self, color : N) {
-        self.pixels_mut(1).for_each(|px| *px = color );
-    }
-
-    pub fn paint(&'a mut self, min : N, max : N, color : N) {
-        self.pixels_mut(1).for_each(|px| if *px >= min && *px <= max { *px = color; } );
-    }
 
     pub fn pixels_mut(&'a mut self, spacing : usize) -> impl Iterator<Item=&'a mut N> {
         self.rows_mut().step_by(spacing).map(move |r| r.iter_mut().step_by(spacing) ).flatten()
@@ -2153,6 +2171,22 @@ where
                 let (r, c) = (ix / w, ix % w);
                 (r, c, px)
             })
+    }
+
+
+}
+
+impl<'a, N> WindowMut<'a, N>
+where
+    N : Scalar + Copy + Mul<Output=N> + MulAssign + PartialOrd + Serialize + DeserializeOwned
+{
+
+    pub fn fill(&'a mut self, color : N) {
+        self.pixels_mut(1).for_each(|px| *px = color );
+    }
+
+    pub fn paint(&'a mut self, min : N, max : N, color : N) {
+        self.pixels_mut(1).for_each(|px| if *px >= min && *px <= max { *px = color; } );
     }
 
     /*/// Applies closure to sub_window. Useful when you need to apply an operation

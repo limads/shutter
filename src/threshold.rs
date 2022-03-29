@@ -126,6 +126,147 @@ pub fn binarize_bytes_mut(win : &Window<'_, u8>, out : &mut WindowMut<'_, u8>, v
     }*/
 }
 
+use crate::feature::patch::ColorProfile;
+
+/// Otsu's method determine the best discriminant for a bimodal intensity distribution.
+/// It explores the fact that for 2 classes, minimizing intra-class variance is the same
+/// as maximizing inter-class variance.
+#[derive(Debug, Clone)]
+pub struct Otsu {
+
+}
+
+pub fn partial_mean(min : usize, max : usize, probs : &[f32]) -> f32 {
+    (min..max).map(|ix| ix as f32 * probs[ix] ).sum::<f32>()
+}
+
+impl Otsu {
+
+    pub fn new() -> Self {
+        Self { }
+    }
+
+    // From https://en.wikipedia.org/wiki/Otsu%27s_method
+    pub fn estimate(&self, profile : &ColorProfile, step : usize) -> u8 {
+
+        let num_pixels = profile.num_pxs();
+        let mut max_th = 0;
+        let mut max_inter_var = 0.;
+
+        let probs = profile.probabilities();
+
+        // Class probabilities (integrate histogram bins below and above current th)
+        let mut prob_a = 0.;
+        let mut prob_b = 0.;
+
+        let mut mean_a = 0.;
+        let mut mean_b = 0.;
+        let mut mean_total = partial_mean(0, 256, &probs[..]);
+        let mut inter_var = 0.;
+
+        for th in (0..256).step_by(step) {
+
+            prob_a = probs[0..th].iter().copied().sum::<f32>();
+            prob_b = 1. - prob_a;
+
+            mean_a = partial_mean(0, th, &probs[..]);
+            mean_b = partial_mean(th, 256, &probs[..]);
+
+            if prob_a == 0. || prob_b == 0. {
+                continue;
+            }
+
+            inter_var = prob_a * prob_b * (mean_a - mean_b).powf(2.);
+            if inter_var > max_inter_var {
+                max_th = th;
+                max_inter_var = inter_var;
+            }
+        }
+
+        max_th as u8
+    }
+
+}
+
+// From https://en.wikipedia.org/wiki/Balanced_histogram_thresholding. This is
+// much faster than Otsu's method.
+#[derive(Debug, Clone)]
+pub struct BalancedHist {
+
+    // Binds below this value at either end of the histogram won't count towards histogram equilibrium point
+    // (but values below this that are not at extreme values will).
+    min_count : usize,
+
+}
+
+impl BalancedHist {
+
+    pub fn new(min_count : usize) -> Self {
+        Self { min_count }
+    }
+
+    pub fn estimate(&self, profile : &ColorProfile, step : usize) -> u8 {
+        let bins = profile.bins();
+
+        // Those delimit the left region if the histogram follows a bimodal distribution.
+        let mut left_limit = 0;
+        let mut right_limit = 255;
+
+        while bins[left_limit] < self.min_count && left_limit < (right_limit - step) {
+            left_limit += step;
+        }
+
+        while bins[right_limit] < self.min_count && right_limit > left_limit {
+            right_limit -= step;
+        }
+
+        // Take histogram expected value as first center guess.
+        let mut center = partial_mean(0, 256, &profile.probabilities()[..]) as usize;
+
+        // TODO propagate step to increment/decrement
+        // for th in (start..end) /*.step_by(step)*/ {
+
+        let mut weight_a = bins[..center].iter().copied().sum::<usize>();
+        let mut weight_b = bins[center..].iter().copied().sum::<usize>();
+
+        while left_limit < right_limit {
+
+            if weight_a > weight_b {
+                // Left part heavier (skew left limit towars histogram end)
+                weight_a -= bins[left_limit];
+                left_limit += step;
+            } else {
+                // Right part heavier (skew right limit towards histogram beginning)
+                weight_b -= bins[right_limit];
+                right_limit -= step;
+            }
+
+            // Calculate new center as an average of left and right limits
+            let new_center = ((left_limit as f32 + right_limit as f32) / 2.) as usize;
+
+            if new_center < center {
+
+                // Move bin at center from left to right
+                weight_a -= bins[center];
+                weight_b += bins[center];
+            } else {
+                if new_center > center {
+
+                    // Move bin at center from right to left
+                    weight_a += bins[center];
+                    weight_b -= bins[center];
+                }
+
+                // If new_center = center, do nothing
+            }
+
+            center = new_center;
+        }
+        center as u8
+    }
+
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum GlobalThreshold {
     Fixed(u8),

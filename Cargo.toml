@@ -25,6 +25,8 @@ serde_json = "1.0.55"
 opencv = { version = "0.53.0", features=["clang-runtime"], optional=true }
 
 # gstreamer-app = { version = "0.17.0" }
+# rustdct = "0.7.0"
+# rustfft = "0.7.0"
 
 gstreamer = { version = "0.17.0", optional=true }
 gstreamer-base = {version = "0.17.0", optional=true }

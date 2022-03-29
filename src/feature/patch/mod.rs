@@ -179,6 +179,10 @@ impl Default for ColorProfile {
 
 impl ColorProfile {
 
+    pub fn num_pxs(&self) -> usize {
+        self.1
+    }
+
     pub fn calculate_from_pixels<'a>(px_iter : impl Iterator<Item=&'a u8>) -> Self {
         let mut hist = [0; 256];
         let mut n_pxs = 0;
@@ -308,6 +312,11 @@ impl ColorProfile {
             limits.push((clust[0][0] as u8, clust[clust.len()-1][0] as u8));
         }
         limits
+    }
+
+    pub fn probabilities(&self) -> Vec<f32> {
+        let max = self.1 as f32;
+        self.0.iter().map(move |count| *count as f32 / max ).collect()
     }
 
 }
