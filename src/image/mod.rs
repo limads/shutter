@@ -141,6 +141,23 @@ where
     N : Scalar + Copy + Default + Zero + Copy + Serialize + DeserializeOwned + Any
 {
 
+    // Splits this image over S owning, memory-contiguous blocks. This does not
+    // copy the underlying data and is useful to split the work across multiple threads
+    // using ownership-based mechanisms (such as channels).
+    pub fn split<const S : usize>(mut self) -> [Image<N>; S] {
+        unimplemented!()
+    }
+
+    // Join S blocks of same size into an image again. This is useful to recover an image
+    // after it has been split across different blocks with Image::split to process an image
+    // in multithreaded algorithms. Passing images
+    // whose buffers are not memory-contigous returns None, since the underlying vector
+    // is built assuming zero-copy by just reclaiming ownership of the blocks, and this
+    // cannot be done with images with non-contiguous memory blocks.
+    pub fn join(s : &[Image<N>]) -> Option<Image<N>> {
+        unimplemented!()
+    }
+
     pub unsafe fn unchecked_linear_index(&self, ix : usize) -> &N {
         self.buf.get_unchecked(ix)
     }
@@ -1700,8 +1717,8 @@ pub enum Mark {
     /// TL pos, size and color
     Rect((usize, usize), (usize, usize), u8),
 
-    /// Arbitrary shape
-    Shape(Vec<(usize, usize)>, u8),
+    /// Arbitrary shape coordinates; whether to close it; and color
+    Shape(Vec<(usize, usize)>, bool, u8),
 
     Text((usize, usize), String, u8),
 
@@ -1903,7 +1920,7 @@ impl WindowMut<'_, u8> {
 
     pub fn draw_patch_contour(&mut self, patch : &Patch, color : u8) {
         let pxs = patch.outer_points::<usize>(crate::feature::patch::ExpansionMode::Contour);
-        self.draw(Mark::Shape(pxs, color));
+        self.draw(Mark::Shape(pxs, false, color));
     }
 
     pub fn draw_patch_rect(&mut self, patch : &Patch, color : u8) {
@@ -2006,7 +2023,7 @@ impl WindowMut<'_, u8> {
                     }
                 }
             },
-            Mark::Shape(pts, col) => {
+            Mark::Shape(pts, close, col) => {
                 let n = pts.len();
                 if n < 2 {
                     return;
@@ -2015,10 +2032,9 @@ impl WindowMut<'_, u8> {
                     self.draw(Mark::Line(*p1, *p2, col));
                 }
 
-                // Close point?
-                // if crate::feature::shape::point_euclidian(pts[0], pts[pts.len()-1]) < 32.0 {
-                //    self.draw(Mark::Line(pts[0], pts[pts.len()-1], col));
-                // }
+                if close {
+                    self.draw(Mark::Line(pts[0], pts[pts.len()-1], col));
+                }
             },
             Mark::Text(tl_pos, txt, color) => {
 
