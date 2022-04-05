@@ -6,6 +6,19 @@ use num_traits::Zero;
 use serde::{Serialize, Deserialize, de::DeserializeOwned};
 use std::any::Any;
 
+/*pub trait Morphology {
+
+}
+
+impl Morphology for Erosion {
+
+}
+
+impl Morphology for Dilation {
+
+}
+*/
+
 #[derive(Clone, Debug)]
 pub enum MorphShape {
     Rectangle,

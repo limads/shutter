@@ -9,6 +9,130 @@ use std::cmp::Ord;
 use std::ops::Add;
 use nalgebra;
 
+/* The area is the zeroth moment. The first moment is the pixel sum divided by area, or average. */
+pub fn point_centroid(pts : &[(usize, usize)]) -> (f32, f32) {
+    let sum : (f32, f32) = pts.iter().fold((0.0, 0.0), |avg, pt| (avg.0 + pt.0 as f32, avg.1 + pt.1 as f32) );
+    let n = pts.len() as f32;
+    (sum.0 / n, sum.1 / n)
+}
+
+// The central moments are translation invariant. Moments can be calculated over the
+// shape edge only, since the edge is equivalent to a binary image giving weight 1
+// to pixels at the edge and weight zero for pixels outside it.
+pub struct CentralMoments {
+
+    pub xx : f32,
+
+    pub yy : f32,
+
+    pub xy : f32,
+
+    pub xxx : f32,
+
+    pub yyy : f32,
+
+    pub xxy : f32,
+
+    pub yyx : f32
+
+}
+
+impl CentralMoments {
+
+    pub fn calculate(pts : &[(usize, usize)], centroid : Option<(f32, f32)>) -> Self {
+        let centroid = centroid.unwrap_or(point_centroid(pts));
+        let diffs : Vec<(f32, f32)> = pts.iter()
+            .map(|pt| (pt.0 as f32 - centroid.0 as f32, pt.1 as f32 - centroid.1 as f32) )
+            .collect();
+        let xx = diffs.iter().fold(0.0, |m, d| m + d.1.powf(2.) );
+        let yy = diffs.iter().fold(0.0, |m, d| m + d.0.powf(2.) );
+        let xy = diffs.iter().fold(0.0, |m, d| m + (d.0 * d.1) );
+        let xxx = diffs.iter().fold(0.0, |m, d| m + d.1.powf(3.) );
+        let yyy = diffs.iter().fold(0.0, |m, d| m + d.0.powf(3.) );
+        let xxy = diffs.iter().fold(0.0, |m, d| m + (d.1 * d.1 * d.0) );
+        let yyx = diffs.iter().fold(0.0, |m, d| m + (d.0 * d.0 * d.1) );
+        Self { xx, yy, xy, xxx, yyy, xxy, yyx }
+    }
+
+}
+
+// Calculate scaled moments by dividing them by the zero-th moment
+pub struct NormalizedMoments {
+
+    pub xx : f32,
+
+    pub yy : f32,
+
+    pub xy : f32,
+
+    pub xxx : f32,
+
+    pub yyy : f32,
+
+    pub xxy : f32,
+
+    pub yyx : f32
+
+}
+
+impl NormalizedMoments {
+
+    // norm moment: mu_pq * (1/area)^((p + q + 2)/2.) for p+q >= 2
+    pub fn calculate(pts : &[(usize, usize)], centroid : Option<(f32, f32)>, area : f32) -> Self {
+        let CentralMoments { mut xx, mut xy, mut yy, mut xxx, mut yyy, mut xxy, mut yyx } = CentralMoments::calculate(pts, centroid);
+        let area2 = (1. / area).powf((0. + 2. + 2.) / 2.);
+        let area3 = (1. / area).powf((1. + 2. + 2.) / 2.);
+        xx /= area2;
+        xy /= area2;
+        yy /= area2;
+        xxx /= area3;
+        yyy /= area3;
+        xxy /= area3;
+        yyx /= area3;
+        Self { xx, yy, xy, xxx, yyy, xxy, yyx }
+    }
+
+}
+
+// Calculate translation, scale and orientation-invariant moments from basic shapes (aka. Hu moments).
+// Usually, the log of the moments is used.
+pub struct IsotropicMoments {
+
+    pub h1 : f32,
+
+    pub h2 : f32,
+
+    pub h3 : f32,
+
+    pub h4 : f32,
+
+    pub h5 : f32,
+
+    pub h6 : f32,
+
+    pub h7 : f32
+
+}
+
+impl IsotropicMoments {
+
+    pub fn calculate(pts : &[(usize, usize)], centroid : Option<(f32, f32)>, area : f32) -> Self {
+        let NormalizedMoments{ xx, xy, yy, xxx, yyy, xxy, yyx } = NormalizedMoments::calculate(pts, centroid, area);
+        let h1 = xx + yy;
+        let h2 = (xx - yy).powf(2.) + 4. * xy.powf(2.);
+        let h3 = (xxx - 3.*yyx).powf(2.) + (3.*xxy - yyy).powf(2.);
+        let h4 = (xxx + yyx).powf(2.) + (xxy + yyy).powf(2.);
+        let h5 = (xxx - 3.*yyx) * (xxx + yyx) * ((xxx + yyx).powf(2.) - 3.*(xxy + yyy).powf(2.)) +
+            (3.*xxy - yyy) * (xxy + yyy) * (3.*(xxx + yyx).powf(2.) - (xxy + yyy).powf(2.));
+        let h6 = (xx - yy) * ((xxx + yyx).powf(2.) - (xxy + yyy).powf(2.)) +
+            4.*xy*(xxx + yyx)*(xxy + yyy);
+        let h7 = (3.*xxy - yyy)*(xxx + yyx)*((xxx+yyx).powf(2.) - 3.*(xxy+yyy).powf(2.)) +
+            (3.*yyx - xxx)*(xxy + yyy)*(3.*(xxx + yyx).powf(2.) - (xxy + yyy).powf(2.));
+        Self { h1, h2, h3, h4, h5, h6, h7 }
+    }
+
+}
+
 #[cfg(feature="opencv")]
 pub fn convex_hull(pts : &[(u16, u16)]) -> Option<Vec<(u16, u16)>> {
 
@@ -49,6 +173,11 @@ pub fn point_euclidian(a : (usize, usize), b : (usize, usize)) -> f32 {
 pub fn point_euclidian_u16(a : (u16, u16), b : (u16, u16)) -> f32 {
     //((a.0 as f32 - b.0 as f32).powf(2.) + (a.1 as f32 - b.1 as f32).powf(2.)).sqrt()
     ((a.0 as f32 - b.0 as f32)).hypot((a.1 as f32 - b.1 as f32))
+}
+
+pub fn point_euclidian_f32(a : (f32, f32), b : (f32, f32)) -> f32 {
+    //((a.0 as f32 - b.0 as f32).powf(2.) + (a.1 as f32 - b.1 as f32).powf(2.)).sqrt()
+    ((a.0 - b.0)).hypot((a.1 - b.1))
 }
 
 pub fn point_euclidian_float(a : (f64, f64), b : (f64, f64)) -> f32 {
@@ -1324,11 +1453,11 @@ impl CircleFit {
         let x_cub = centered_ptsf.iter().fold(0., |acc, pt| acc + pt[0].powf(3.) );
         let y_cub = centered_ptsf.iter().fold(0., |acc, pt| acc + pt[1].powf(3.) );
         let xy = centered_ptsf.iter().fold(0., |acc, pt| acc + pt[0] * pt[1] );
-        let xyy = centered_ptsf.iter().fold(0., |acc, pt| acc + pt[0] * pt[1].powf(2.) );
+        let yyx = centered_ptsf.iter().fold(0., |acc, pt| acc + pt[0] * pt[1].powf(2.) );
         let xxy = centered_ptsf.iter().fold(0., |acc, pt| acc + pt[0].powf(2.) * pt[1] );
         let m = Matrix2::from_rows(&[RowVector2::new(x_sq, xy), RowVector2::new(xy, y_sq)]);
         let b = Vector2::new(
-            0.5 * (x_cub + xyy),
+            0.5 * (x_cub + yyx),
             0.5 * (y_cub + xxy)
         );
         let ans = LU::new(m).solve(&b)?;

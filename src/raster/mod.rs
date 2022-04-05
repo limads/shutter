@@ -4,16 +4,66 @@ use std::cmp::Ordering;
 use std::convert::AsRef;
 use std::collections::HashMap;
 
-// TODO create struct Boundary, to represent a contour that is not necessarily ordered
+/*pub struct RegionCache {
+
+    area : RefCell<usize>,
+
+    bbox : RefCell<(usize, usize, usize, usize)>,
+
+}*/
+
+pub trait Segmenter<'a> {
+
+    type Output;
+
+    fn segment(&'a mut self) -> &'a Self::Output;
+
+}
+
+/* impl Segmenter<&[RasterLine]> for RasterSegmenter */
+/* impl Segmenter<&[Boundary]> for RasterSegmenter */
+/* impl Segmenter<&[Contour]> for RasterSegmenter */
+/* impl Segmenter<&[Patch]> for RasterSegmenter */
+
+// Represent a contour that is not necessarily ordered
 // (which cannot necessarily be drawn by tracing the positions). If you aim to just calcualte statistics
 // such as central moments or view the segment limits, the boundary gives the same
 // results as the contour without the computational cost of re-ordering the array.
 // Every contour is also a boundary, so impl From<Contour> for Boundary is a simple vector move.
+#[derive(Debug, Clone)]
+pub struct Boundary(Vec<(usize, usize)>);
 
+// Represents the limits of a segmented region that is ordered in such a way
+// so that a line can be traced between the points.
 #[derive(Debug, Clone)]
 pub struct Contour(Vec<(usize, usize)>);
 
 impl Contour {
+
+    /*pub fn bounding_box(&self) -> (usize, usize, usize, usize) {
+        let n = self.0.len();
+        let top = self.0[0].0;
+        let bottom = self.0[n-1].0;
+        let left = self.0.iter().min_by(|pt| pt.1 ).copied().unwrap().1;
+        let right = self.0.iter().max_by(|pt| pt.1 ).copied().unwrap().1;
+        (top, left, bottom - top, right - left)
+    }
+
+    pub fn area(&self) -> usize {
+
+    }
+
+    pub fn perimeter(&self) -> usize {
+        let n = self.0.len();
+        let top_perim = self.0[1].1 - self.0[0].1;
+        let bottom_perim = self.0[n-2].1 - self.0[n-1].1;
+        let mut perim = top_perim + bottom_perim;
+        for ix in 0..n {
+            perim += crate::shape::point_euclidian(pt1, pt2);
+            perim += crate::shape::point_euclidian(pt3, pt4);
+        }
+        perim
+    }*/
 
     // Since the RasterSegmenter organizes the image contour
     //
@@ -42,6 +92,13 @@ impl AsRef<[(usize, usize)]> for Contour {
 
 }
 
+/// Represents a short section of the image rasterization process.
+pub struct RasterLines {
+    line : usize,
+    cols : (usize, usize),
+    color : u8
+}
+
 /// Holds a run-length encoding (RLE) of an image. Each inner vector at index i
 /// represents row i of the image. The elements of the inner vectors represent
 /// the start column, end column and a dominant pixel color of the raster scan,
@@ -51,7 +108,7 @@ impl AsRef<[(usize, usize)]> for Contour {
 #[derive(Debug, Clone)]
 pub struct Raster(Vec<Vec<(usize, usize, u8)>>);
 
-fn raster_overlap(a : (usize, usize), b : (usize, usize)) -> bool {
+pub fn interval_overlap(a : (usize, usize), b : (usize, usize)) -> bool {
     /*(a.0 <= b.0 && a.1 >= b.0) ||
         (a.0 <= b.1 && a.1 >= b.1) ||
         (a.0 >= b.0 && a.1 <= b.1) ||
@@ -71,6 +128,7 @@ pub struct OpenContour {
 fn innaugurate_contour(contours : &mut Vec<OpenContour>, row : usize, c1 : usize, c2 : usize, color : u8) {
     let mut pxs = Vec::new();
     pxs.push((row, c1));
+    assert!(c2 >= c1);
     if c1 != c2 {
         pxs.push((row, c2));
     }
@@ -84,7 +142,7 @@ fn innaugurate_contour(contours : &mut Vec<OpenContour>, row : usize, c1 : usize
 }
 
 fn overlap_open_contour(open : &OpenContour, this_c1 : usize, this_c2 : usize, this_color : u8, abs_diff : u8) -> Ordering {
-    let overlaps = raster_overlap((open.fst_col_last_row, open.lst_col_last_row), (this_c1, this_c2));
+    let overlaps = interval_overlap((open.fst_col_last_row, open.lst_col_last_row), (this_c1, this_c2));
     if overlaps {
         Ordering::Equal
     } else {
@@ -95,6 +153,130 @@ fn overlap_open_contour(open : &OpenContour, this_c1 : usize, this_c2 : usize, t
 }
 
 impl Raster {
+
+    // As an object moves through the screen, assume the change in the segmented boundaries
+    // can be reasonably modelled by just updating the left and right columns of each raster
+    // scan. This means big computational savings, since there is no need to iterate
+    // over pixels at the segment middle for segments that stay static across frames, such as background
+    // or static objects. This is a reasonable assumption, since objects usually change by being translated in front or
+    // outside the screen, and don't usually "pop-in". Objects that "pop-in" wouldn't be
+    // captured in situations when they fall exactly in the middle of a segment and don't touch
+    // any segmented boundaries.
+    // For row r:
+    // For segment i of row r:
+    // (1) If color start[fst+1] = past color, do nothing
+    //     Else while color start[fst+j] != color { start +=1; if !(past_segment) { create_past_segment(color of fst+j) } else { past_segment.end += 1 } j += 1
+    // (2) If color[end-1] = past color, do nothing
+    //     Else while color of end-j != color { end-=1; if !(next_segment) { create next segment(color of end-j) } else { next_segment.start -= 1} j += 1 }.
+    // if len(segment i) == 0 remove it from raster vector.
+    //
+    // And of course now re-calculate all contours.
+    /*pub fn update(&mut self, win : &Window<'_, u8>, abs_diff : u8) {
+
+        for r in 0..self.0.len() {
+
+            // Holds the position where edition will happen insertion and a list of items that will be
+            // inserted there instead. If this is empty, just remove the segment at this position.
+            let mut new_segs : Vec<(usize, Vec<(usize, usize, u8)>)> = Vec::new();
+
+            for seg in 0..(self.0[r].len()) {
+                let curr_start = self.0[r][seg].0;
+                let curr_end = self.0[r][seg].1;
+                let curr_color = self.0[r][seg].2;
+
+                let color_mismatch_start = (win[(r,curr_start)] as i16 - curr_color as i16).abs() > abs_diff;
+                let color_mismatch_end = (win[(r,curr_end)] as i16 - curr_color as i16).abs() > abs_diff;
+
+                if color_mismatch_start && seg == 0 {
+                    // If color mismatch at first pixel of first segment
+
+                    if color_mismatch_end {
+                        // If mismatch is also at end, re-classify whole segment.
+
+                    } else {
+                        // If mismatch is at start but not at end, shrink segment until a match is
+                        // found (guaranteed to have at least the end pixel) and re-classify all of the start.
+
+                    }
+
+                } else if color_mismatch_start && seg == self.0[r].len()-1 {
+                    // If color mismatch at first pixel of last segment
+
+                    if color_mismatch_end {
+                        // If mismatch also at end, re-classify whole segment.
+                    } else {
+                        // If mismatch at start but not at end, shrink segment until a match
+                        // is found (guaranteed to have at least the end pixel) and re-classify
+                        // until this match is found.
+                    }
+
+                } else if color_mismatch_start {
+                    // If color mismatch for any segment in the middle
+
+                    if color_mismatch_end {
+                        // Re-classify whole segment.
+                    } else {
+                        //
+                    }
+                }
+
+                // If the alteration was not called previously by being tiggered by a start
+                // color change, also verify an end change.
+                if !color_mismatch_start && color_mismatch_end && seg == self.0[r].len()-1 {
+                    // If color mismatch at last pixel of last segment
+                }
+
+                /*let mut decrement = 1;
+                let mut prev_matches = false;
+                if seg > 0 {
+                    let prev_color = self.0[r][seg-1].2;
+                    loop {
+                        if (curr_start as i32 - decrement as i32) < 0 {
+                            break;
+                        }
+
+                        let this_matches = (win[(r, curr_start-decrement)] as i16 - curr_color as i16).abs() < abs_diff;
+                        let prev_matches = (win[(r, curr_start-decrement)] as i16 - prev_color as i16).abs() < abs_diff;
+
+                        match (this_matches, prev_matches) {
+                            (false, true) => {
+                                decrement += 1;
+                            },
+                            (false, false) => {
+                                // Create new segment
+                                let new_seg = ()
+                                new_segs.push(new_seg);
+                            },
+                            (true, false) => {
+                                self.0[r][seg].0 -= decrement;
+                                self.0[r][seg-1].1 += decrement;
+                                break;
+                            },
+                            (true, true) => {
+                                // merge segments
+                            }
+                        }
+
+                        // Did not match previvous segment; create new in this case.
+                        if prev_matches {
+                            new_segs.push(curr_start-1);
+                        } else {
+
+                        }
+                            }
+                        }
+
+                if seg < self.0[r].len() - 1 {
+                    let post_color = self.0[r][seg+1].2;
+                    loop {
+
+                    }
+                }*/
+
+
+            }
+        }
+    }*/
 
     pub fn new(height : usize) -> Self {
         Raster((0..height).map(|_| Vec::<(usize, usize, u8)>::new() ).collect())
@@ -212,7 +394,7 @@ impl Raster {
 
                     // Start from right-most overlap
                     while let Some(open) = open_contours.get(prev_ix+1) {
-                        if raster_overlap((open.fst_col_last_row, open.lst_col_last_row), (*this_c1, *this_c2)) {
+                        if interval_overlap((open.fst_col_last_row, open.lst_col_last_row), (*this_c1, *this_c2)) {
                             prev_ix +=1 ;
                         } else {
                             break;
@@ -225,7 +407,7 @@ impl Raster {
                     let mut matched_color = false;
                     while let Some(prev) = prev_ix.checked_sub(search_back) {
                         if let Some(open) = open_contours.get(prev) {
-                            if raster_overlap((open.fst_col_last_row, open.lst_col_last_row), (*this_c1, *this_c2)) {
+                            if interval_overlap((open.fst_col_last_row, open.lst_col_last_row), (*this_c1, *this_c2)) {
                                 let color_match = (open_contours[prev].col as i16 - *this_color as i16).abs() <= abs_diff as i16;
                                 if color_match {
                                     best_offset = search_back;
@@ -273,11 +455,13 @@ impl Raster {
                 // swap odd entries at 0..n/2 to n/2..n to avoid moving
                 // so much data.
 
-                // Insert new left col at beginning to preserve contour order
+                // Insert new left col at even index to preserve contour order
                 open_contours[ix].pxs.insert(0, (r, c1));
+                // open_contours[ix].pxs.push((r, c1));
 
-                // Insert new right col at end to preserve contour order
+                // Insert new right col at odd index to preserve contour order
                 open_contours[ix].pxs.push((r, c2));
+                // open_contours[ix].pxs.push((r, c2));
 
                 open_contours[ix].last_row = r;
                 open_contours[ix].fst_col_last_row = c1;
@@ -324,7 +508,23 @@ impl Raster {
             closed_contours.push(Contour(open.pxs));
         }
 
-        // TODO rearrange pixel order here.
+        /*// Rearrange pixel order here. Give the option to deliver
+        // them unordered as a Boundary.
+        for cont in closed_contours.iter_mut() {
+            let n = cont.0.len();
+
+            if n > 2 {
+
+                // This will work for contours with even number of elements.
+                // But contours might have odd number of elements, since the
+                // raster might return a single pixel at the first row to be
+                // combined with more pixels at the rows below.
+                for i in (1..(n/2)).step_by(2) {
+                    assert!(i % 2 != 0);
+                    cont.0.swap(i, n - i - 1);
+                }
+            }
+        }*/
 
         (closed_contours, closed_colors)
     }

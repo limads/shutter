@@ -1,6 +1,49 @@
 use crate::image::*;
 use std::default::Default;
 
+/*pub trait Thresholding {
+
+    fn threshold_mut(&mut self, win : WindowMut<'_, u8>);
+
+    fn threshold_to(&mut self, win : &Window<'_, u8>, dst : &mut WindowMut<'_, u8>);
+
+    fn threshold(&mut self, win : &Window<'_, u8>) -> Image<u8> {
+        let mut img = Image::new_constant(win.height(), win.width(), 0);
+        self.threshold_to(win, img.full_window_mut());
+        img
+    }
+
+}
+
+pub enum Foreground {
+    Below(u8),
+    Above(u8),
+    Between(u8,u8)
+}
+
+pub struct FixedThresholding {
+    for : Foreground,
+
+}
+
+impl FixedThresholding {
+
+}
+
+impl Thresholding for FixedThresholding {
+
+}
+
+impl Thresholding for OtsuThresholding {
+
+}
+
+impl Thresholding for BalancedThresholding {
+
+}
+
+*/
+
 /// Represents an interval over the 8-bit intensity level.
 #[derive(Clone, Debug, Copy)]
 pub struct Threshold {
