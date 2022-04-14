@@ -36,9 +36,41 @@ pub struct Boundary(Vec<(usize, usize)>);
 // Represents the limits of a segmented region that is ordered in such a way
 // so that a line can be traced between the points.
 #[derive(Debug, Clone)]
-pub struct Contour(Vec<(usize, usize)>);
+pub struct Contour {
+
+    pxs : Vec<(usize, usize)>,
+
+    bbox : (usize, usize, usize, usize)
+
+}
 
 impl Contour {
+
+    pub fn bounding_box(&self) -> &(usize, usize, usize, usize) {
+        &self.bbox
+    }
+
+    pub fn contacts(&self, other : &Self) -> bool {
+        // crate::feature::shape::rect_contacts(self, other.bbox)
+        unimplemented!()
+    }
+
+    pub fn center(&self) -> (usize, usize) {
+        let bbox = &self.bbox;
+        (bbox.0 + bbox.2 / 2, bbox.1 + bbox.3 / 2)
+    }
+
+    pub fn width(&self) -> usize {
+        self.bbox.3
+    }
+
+    pub fn height(&self) -> usize {
+        self.bbox.2
+    }
+
+    pub fn points(&self) -> &[(usize, usize)] {
+        &self.pxs
+    }
 
     /*pub fn bounding_box(&self) -> (usize, usize, usize, usize) {
         let n = self.0.len();
@@ -67,30 +99,27 @@ impl Contour {
 
     // Since the RasterSegmenter organizes the image contour
     //
-    //    r1 l1
+    //    l1 r1
     //   l2   r2
     //  l3      r3
     //
-    // as l3 l2 l1 r1 r2 r3, we can iterate over the inner pixels without furter
+    // as l3 l2 l1 r1 r2 r3 (i.e. left pixels in decreasing order; right pixels in increasing order),
+    // we can iterate over the inner pixels without furter
     // calculations by just iterating over this natural order from the middle
     // to the extremities.
-    pub fn inner_pixels<'a>(&'a self, win : &'a Window<'a, u8>) -> impl Iterator<Item=u8> +'a {
-        let n = self.0.len();
+    /*pub fn inner_pixels<'a>(&'a self, win : &'a Window<'a, u8>) -> impl Iterator<Item=u8> +'a {
+        /*let n = self.pxs.len();
         assert!(n % 2 == 0);
         (0..(n/2+1)).rev().zip((n/2+1)..n)
-            .map(move |(left, right)| { assert!(self.0[left].0 == self.0[right].0); win.row(self.0[left].0).unwrap()[self.0[left].1..self.0[right].1].iter().copied() })
-            .flatten()
-    }
+            .map(move |(left, right)| { assert!(self.pxs[left].0 == self.pxs[right].0); win.row(self.pxs[left].0).unwrap()[self.pxs[left].1..self.pxs[right].1].iter().copied() })
+            .flatten()*/
+            unimplemented!()
+    }*/
 
 }
 
-impl AsRef<[(usize, usize)]> for Contour {
-
-    fn as_ref(&self) -> &[(usize, usize)] {
-        &self.0
-    }
-
-}
+/*impl AsRef<[(usize, usize)]> for Contour {
+}*/
 
 /// Represents a short section of the image rasterization process.
 pub struct RasterLines {
@@ -106,7 +135,7 @@ pub struct RasterLines {
 /// pixel; the central rule the color of the center-most pixel; the mean rule the
 /// running average of the pixel color values (at a slightly higher computational cost).
 #[derive(Debug, Clone)]
-pub struct Raster(Vec<Vec<(usize, usize, u8)>>);
+pub struct Rasterizer(Vec<Vec<(usize, usize, u8)>>);
 
 pub fn interval_overlap(a : (usize, usize), b : (usize, usize)) -> bool {
     /*(a.0 <= b.0 && a.1 >= b.0) ||
@@ -118,26 +147,63 @@ pub fn interval_overlap(a : (usize, usize), b : (usize, usize)) -> bool {
 
 #[derive(Debug, Clone)]
 pub struct OpenContour {
+
+    // Holds left and (if applicable) right pixel for each row
     pxs : Vec<(usize, usize)>,
+
+    pxs_back : Vec<(usize, usize)>,
+
     fst_col_last_row : usize,
+
     lst_col_last_row : usize,
+
+    fst_row : usize,
+
     last_row : usize,
+
+    min_col : usize,
+
+    max_col : usize,
+
+    // Updates the color at each raster line. The final color
+    // will be the color of the last raster line (which might
+    // be undesirable, since it might be an edge).
     col : u8
+}
+
+impl OpenContour {
+
+    fn close(mut self) -> Contour {
+        let bbox = (self.fst_row, self.min_col, self.last_row - self.fst_row + 1, self.max_col - self.min_col + 1);
+        let mut pxs_back = std::mem::take(&mut self.pxs_back);
+        let mut pxs = self.pxs;
+        pxs.extend(pxs_back.drain(..).rev());
+        Contour {
+            bbox,
+            pxs
+        }
+    }
+
 }
 
 fn innaugurate_contour(contours : &mut Vec<OpenContour>, row : usize, c1 : usize, c2 : usize, color : u8) {
     let mut pxs = Vec::new();
+    let mut pxs_back = Vec::new();
     pxs.push((row, c1));
     assert!(c2 >= c1);
     if c1 != c2 {
-        pxs.push((row, c2));
+        pxs_back.push((row, c2));
     }
     contours.push(OpenContour {
-        fst_col_last_row : pxs[0].1,
-        lst_col_last_row : pxs.last().unwrap().1,
+        fst_col_last_row : c1,
+        lst_col_last_row : c2,
         col : color,
+        fst_row : row,
+        last_row : row,
+        min_col : c1,
+        max_col : c2,
         pxs,
-        last_row : row
+        pxs_back
     });
 }
 
@@ -152,7 +218,254 @@ fn overlap_open_contour(open : &OpenContour, this_c1 : usize, this_c2 : usize, t
     }
 }
 
-impl Raster {
+fn append_rows_to_open(open_contours : &mut [OpenContour], editions : &mut HashMap<usize, (usize, usize, u8)>, r : usize) {
+    for (ix, (c1, c2, new_color)) in editions.drain() {
+
+        // TODO just push pixels to the end of vector, and then
+        // at the end of contour tracing
+        // swap odd entries at 0..n/2 to n/2..n to avoid moving
+        // so much data.
+
+        // Insert new left col at even index to preserve contour order
+        // open_contours[ix].pxs.insert(0, (r, c1));
+        open_contours[ix].pxs.push((r, c1));
+
+        // Insert new right col at odd index to preserve contour order
+        // open_contours[ix].pxs.push((r, c2));
+        open_contours[ix].pxs_back.push((r, c2));
+
+        open_contours[ix].last_row = r;
+        open_contours[ix].fst_col_last_row = c1;
+        open_contours[ix].lst_col_last_row = c2;
+
+        // Sets color to the open contour as the color of the last raster segment.
+        // open_contours[ix].color = ((open_contours[ix].color as f32 + new_color as f32) / 2.) as u8;
+        open_contours[ix].col = new_color;
+
+        if c1 < open_contours[ix].min_col {
+            open_contours[ix].min_col = c1;
+        }
+        if c2 > open_contours[ix].max_col {
+            open_contours[ix].max_col = c2;
+        }
+    }
+}
+
+fn close_unmatched(
+    open_contours : &mut Vec<OpenContour>,
+    closed_contours : &mut Vec<Contour>,
+    closed_colors : &mut Vec<u8>,
+    matched_contours : &mut Vec<usize>
+) {
+    // Close all contours that weren't matched at this row.
+    let unmatched_contours = (0..open_contours.len())
+        .filter(|ix| matched_contours.iter().find(|c| *c == ix ).is_none() );
+
+    // Reverse the iterator and remove from the end to the start so
+    // as to not mess up with the indices.
+    for ix in unmatched_contours.rev() {
+        let open = open_contours.remove(ix);
+        closed_colors.push(open.col);
+        closed_contours.push(open.close());
+    }
+
+    matched_contours.clear();
+}
+
+fn innaugurate_segment(row : &mut Vec<(usize, usize, u8)>, sum : &mut f32, c : usize, px : u8) {
+    row.push((c, c, px));
+    *sum = px as f32;
+}
+
+fn extend_segment(row : &mut Vec<(usize, usize, u8)>, sum : &mut f32, px : u8, mean : bool) {
+    row.last_mut().unwrap().1 += 1;
+
+    // Update color with the average. If mean=false, will use color of first pixel.
+    // An alternative would be to use color of the central pixel, to avoid edge
+    // pixels determining the patch color.
+
+    *sum += px as f32;
+    let n = (row.last().unwrap().1 - row.last().unwrap().0 + 1) as f32;
+    assert!(n >= 1.);
+    if mean {
+        row.last_mut().unwrap().2 = (*sum / n) as u8;
+    }
+}
+
+fn trim_to_mean(r : usize, row : &mut Vec<(usize, usize, u8)>, win : &Window<'_, u8>, abs_diff : u8) {
+    for seg in row {
+        let mut start = seg.0;
+        let mut end = seg.1;
+        while (win[(r, start)] as i16 - seg.2 as i16).abs() > abs_diff as i16 {
+            if start < end {
+                start += 1;
+            } else {
+                break;
+            }
+        }
+
+        while (win[(r, end)] as i16 - seg.2 as i16).abs() > abs_diff as i16 {
+            if end > start {
+                end -= 1;
+            } else {
+                break;
+            }
+        }
+
+        seg.0 = start;
+        seg.1 = end;
+    }
+}
+
+fn exclude_small(row : &mut Vec<(usize, usize, u8)>, sz : usize) {
+    for ix in (0..row.len()).rev() {
+        if row[ix].1 - row[ix].0 <= sz {
+            row.swap_remove(ix);
+        }
+    }
+    row.sort_by(|a, b| a.0.cmp(&b.0) );
+}
+
+fn merge_similar(row : &mut Vec<(usize, usize, u8)>, abs_diff : u8) {
+    let mut ix = 0;
+    loop {
+        if ix == row.len() || ix+1 == row.len() {
+            return;
+        }
+
+        // Merge only when one of the segments is sufficiently small
+        if row[ix].1 - row[ix].0 <= 2 || row[ix+1].1 - row[ix+1].0 <= 2 {
+            if (row[ix].2 as i16 - row[ix+1].2 as i16).abs() <= abs_diff as i16 {
+                row[ix].1 = row[ix+1].1;
+                row[ix].2 = ((row[ix].2 as f32 + row[ix+1].2 as f32) / 2.) as u8;
+                row.remove(ix+1);
+            } else {
+                ix += 1;
+            }
+        } else {
+            ix += 1;
+        }
+    }
+}
+
+fn merge_small_to_left_or_right(r : usize, row : &mut Vec<(usize, usize, u8)>, win : &Window<'_, u8>, abs_diff : u8) {
+    let mut ix = 0;
+    loop {
+        if ix == row.len() || ix+1 == row.len() {
+            return;
+        }
+
+        // If this isn't a small raster, look for the next one.
+        if row[ix].1 - row[ix].0 > 2 {
+            ix += 1;
+            continue;
+        }
+
+        let left = if ix == 0 {
+            None
+        } else {
+            Some(row[ix-1].clone())
+        };
+
+        let right = if ix == row.len() - 1 {
+            None
+        } else {
+            Some(row[ix+1].clone())
+        };
+
+        match (left, right) {
+            (Some(l), None) => {
+                if (row[ix].2 as i16 - l.2 as i16).abs() <= abs_diff as i16 {
+                    row[ix-1].1 = row[ix].1;
+                    row.remove(ix);
+                } else {
+                    ix += 1;
+                }
+            },
+            (None, Some(r)) => {
+                if (row[ix].2 as i16 - r.2 as i16).abs() <= abs_diff as i16 {
+                    row[ix+1].0 = row[ix].0;
+                    row.remove(ix);
+                } else {
+                    ix += 1;
+                }
+            },
+            (Some(l), Some(r)) => {
+                let left_diff = (row[ix].2 as i16 - l.2 as i16).abs();
+                let rigth_diff = (row[ix].2 as i16 - r.2 as i16).abs();
+                if left_diff.min(rigth_diff) < abs_diff as i16 {
+                    if left_diff < rigth_diff {
+                        row[ix-1].1 = row[ix].1;
+                    } else {
+                        row[ix+1].0 = row[ix].0;
+                    }
+                    row.remove(ix);
+                } else {
+                    ix += 1;
+                }
+            }
+            (None, None) => {
+                return;
+            }
+        }
+    }
+}
+
+/// Since iteration is resolved from left to right,  it is natural the left
+/// rasters will have preference fo gobble pixels even when they are best
+/// matches for the right pixels. This functionn iterate over the borders,
+/// re-assigning pixels to the right if necessary.
+fn resolve_disputes(r : usize, row : &mut Vec<(usize, usize, u8)>, win : &Window<'_, u8>) {
+    for ix in 1..row.len() {
+        let mut n = 1;
+        while let Some(left_pos) = row[ix-1].1.checked_sub(n) {
+            if left_pos <= row[ix-1].0 {
+                break;
+            }
+
+            let col_left = row[ix-1].2;
+            let col_right = row[ix].2;
+
+            if let Some(px) = win.get((r, left_pos)) {
+                let diff_left = (*px as i16 - col_left as i16).abs();
+                let diff_right = (*px as i16 - col_right as i16).abs();
+
+                if diff_right < diff_left {
+                    row[ix-1].1 -= 1;
+                    row[ix].0 -= 1;
+                } else {
+                    return;
+                }
+                n += 1;
+            } else {
+                break;
+            }
+        }
+    }
+}
+
+fn update_overlap(open_contours : &[OpenContour], found : usize, sign : isize, this_c1 : usize, this_c2 : usize) -> usize {
+    let mut ext : isize = 1;
+    let mut new_found = found;
+    loop {
+        let new_ix = found as isize + ext*sign;
+        if new_ix < 0 {
+            return new_found;
+        }
+        if let Some(open) = open_contours.get(new_ix as usize) {
+            if interval_overlap((open.fst_col_last_row, open.lst_col_last_row), (this_c1, this_c2)) {
+                new_found = new_ix as usize;
+                ext += 1;
+            } else {
+                return new_found;
+            }
+        } else {
+            return new_found;
+        }
+    }
+}
+
+impl Rasterizer {
 
     // As an object moves through the screen, assume the change in the segmented boundaries
     // can be reasonably modelled by just updating the left and right columns of each raster
@@ -279,7 +592,7 @@ impl Raster {
     }*/
 
     pub fn new(height : usize) -> Self {
-        Raster((0..height).map(|_| Vec::<(usize, usize, u8)>::new() ).collect())
+        Rasterizer((0..height).map(|_| Vec::<(usize, usize, u8)>::new() ).collect())
     }
 
     pub fn segments(&self) -> &[Vec<(usize, usize, u8)>] {
@@ -316,48 +629,35 @@ impl Raster {
     pub fn calculate(&mut self, win : &Window<'_, u8>, mean : bool, abs_diff : u8) {
         assert!(win.height() == self.0.len());
         self.0.iter_mut().for_each(|row| row.clear() );
-
         let mut sum : f32 = 0.;
+
         for (r, c, px) in win.labeled_pixels::<usize, _>(1) {
             if c == 0 {
-                self.0[r].push((c, c, px));
-                sum = px as f32;
+                assert!(self.0[r].len() == 0);
+                innaugurate_segment(&mut self.0[r], &mut sum, c, px);
             } else {
-
                 let color_match = (px as i16 - self.0[r].last().unwrap().2 as i16).abs() <= abs_diff as i16;
                 if color_match {
-
-                    self.0[r].last_mut().unwrap().1 += 1;
-
-                    // Update color with the average. If mean=false, will use color of first pixel.
-                    // An alternative would be to use color of the central pixel, to avoid edge
-                    // pixels determining the patch color.
-
-                    sum += px as f32;
-                    let n = (self.0[r].last().unwrap().1 - self.0[r].last().unwrap().0 + 1) as f32;
-                    if mean {
-                        self.0[r].last_mut().unwrap().2 = (sum / n) as u8;
-                    }
-
+                    extend_segment(&mut self.0[r], &mut sum, px, mean);
                 } else {
-                    self.0[r].push((c, c, px));
-                    sum = px as f32;
+                    innaugurate_segment(&mut self.0[r], &mut sum, c, px);
                 }
             }
         }
 
         assert!(self.0.len() == win.height());
-        for row in self.0.iter() {
+        for (r, row) in (self.0.iter_mut().enumerate()) {
+            // trim_to_mean(r, row, win, abs_diff);
+            // exclude_small(row, 2);
+            // merge_similar(row, abs_diff);
+            resolve_disputes(r, row, win);
+            merge_small_to_left_or_right(r, row, win, abs_diff);
             assert!(row.len() >= 1);
         }
     }
 
     pub fn contours(&self, abs_diff : u8) -> (Vec<Contour>, Vec<u8>) {
-
-        // Holds (row, col, color)
         let mut open_contours : Vec<OpenContour> = Vec::new();
-
-        // Holds Contour
         let mut closed_contours : Vec<Contour> = Vec::new();
         let mut closed_colors : Vec<u8> = Vec::new();
 
@@ -372,74 +672,81 @@ impl Raster {
         let mut new_contours : Vec<OpenContour> = Vec::new();
 
         // Carries index of opened patch and the new (start, end) columns.
-        let mut editions : HashMap<usize, (usize, usize)> = HashMap::new();
+        let mut editions : HashMap<usize, (usize, usize, u8)> = HashMap::new();
+        // let mut overlaps : Vec<usize> = Vec::new();
 
         for r in 1..(self.0.len()) {
 
-            // Iterate over this patch.
+            // Iterate over the segments in this raster row.
             for (this_c1, this_c2, this_color) in &self.0[r] {
 
-                assert!(open_contours.iter().all(|c| c.last_row == r-1 || c.last_row == r ));
+                assert!(open_contours.iter().all(|c| c.last_row == r-1 /*|| c.last_row == r*/ ));
 
-                // Take any of the overlaps
+                // Take any of the potential overlaps
                 let res_prev_ix = open_contours.binary_search_by(|open| {
                     overlap_open_contour(open, *this_c1, *this_c2, *this_color, abs_diff)
                 });
 
                 if let Ok(cand_ix) = res_prev_ix {
 
-                    // The binary search returns one of the many possible overlaps. We search within
-                    // all possible overlaps for the left-most one that also matches the color.
-                    let mut prev_ix = cand_ix;
+                    let fst_overlap = update_overlap(&open_contours, cand_ix, -1, *this_c1, *this_c2);
+                    let lst_overlap = update_overlap(&open_contours, cand_ix, 1, *this_c1, *this_c2);
 
-                    // Start from right-most overlap
-                    while let Some(open) = open_contours.get(prev_ix+1) {
-                        if interval_overlap((open.fst_col_last_row, open.lst_col_last_row), (*this_c1, *this_c2)) {
-                            prev_ix +=1 ;
-                        } else {
-                            break;
-                        }
-                    }
+                    assert!(interval_overlap((open_contours[fst_overlap].fst_col_last_row, open_contours[fst_overlap].lst_col_last_row), (*this_c1, *this_c2)));
+                    assert!(interval_overlap((open_contours[lst_overlap].fst_col_last_row, open_contours[lst_overlap].lst_col_last_row), (*this_c1, *this_c2)));
 
-                    // Iterate backward to get the first overlap that also matches color.
-                    let mut search_back = 0;
-                    let mut best_offset = 0;
                     let mut matched_color = false;
-                    while let Some(prev) = prev_ix.checked_sub(search_back) {
-                        if let Some(open) = open_contours.get(prev) {
-                            if interval_overlap((open.fst_col_last_row, open.lst_col_last_row), (*this_c1, *this_c2)) {
-                                let color_match = (open_contours[prev].col as i16 - *this_color as i16).abs() <= abs_diff as i16;
-                                if color_match {
-                                    best_offset = search_back;
-                                    matched_color = true;
-                                }
-                                search_back += 1;
-                            } else {
-                                break;
-                            }
-                        } else {
-                            break;
+                    let mut best_ix = fst_overlap;
+                    let mut largest_top = 0;
+                    let mut closest_color = i16::MAX;
+                    for ix in fst_overlap..(lst_overlap+1) {
+                        let color_match = (open_contours[ix].col as i16 - *this_color as i16).abs() <= abs_diff as i16;
+                        let sz_diff = open_contours[ix].lst_col_last_row - open_contours[ix].fst_col_last_row;
+                        let col_diff = (open_contours[ix].col as i16 - *this_color as i16).abs();
+                        if color_match && sz_diff >= largest_top /*col_diff < closest_color*/ {
+                            best_ix = ix;
+                            matched_color = true;
+                            largest_top = sz_diff;
+                            closest_color = col_diff;
                         }
                     }
-                    prev_ix = prev_ix - best_offset;
 
-                    // Case this top segment has been matched to a previous bottom segment
-                    // (which will happen when we have a larger top raster segment and two smaller
-                    // bottom segments), continue the top segment only with the first match, and
+                    // Case this top segment has been matched to a previous bottom segment (top
+                    // matches two or more at bottom, which will happen when we have a larger top raster segment and two smaller
+                    // bottom segments), continue the top segment only with the largest match, and
                     // innaugurate a new segment for the current segment.
                     if matched_color {
-                        if editions.contains_key(&prev_ix) {
-                            innaugurate_contour(&mut new_contours, r, *this_c1, *this_c2, *this_color);
+                        if editions.contains_key(&best_ix) {
+
+                            // Decide to substitute the previous edition for this one based
+                            // on which one is the largest. This assumes smaller regions are more
+                            // likely to be start and end of contours.
+
+                            // TODO consider the sequence with the closest color instead.
+                            if editions[&best_ix].1 - editions[&best_ix].0 < *this_c2 - *this_c1 {
+                            // if (open_contours[best_ix].col as i16 - editions[&best_ix].2 as i16).abs() > (open_contours[best_ix].col as i16 - *this_color as i16).abs() {
+                                // Previous is smaller - update edition to current one and innaugurate a new at the old, smaller one.
+
+                                // innaugurate_contour(&mut new_contours, r, editions[&best_ix].0, editions[&best_ix].1, editions[&best_ix].2);
+                                editions.get_mut(&best_ix).unwrap().0 = *this_c1;
+                                editions.get_mut(&best_ix).unwrap().1 = *this_c2;
+                                editions.get_mut(&best_ix).unwrap().2 = *this_color;
+                            } else {
+
+                                // Previous is larger - Keep it there and innaugurate a new open contour in this case
+                                innaugurate_contour(&mut new_contours, r, *this_c1, *this_c2, *this_color);
+                            }
+
                         } else {
-                            editions.insert(prev_ix, (*this_c1, *this_c2));
-                            matched_contours.push(prev_ix);
+                            editions.insert(best_ix, (*this_c1, *this_c2, *this_color));
+                            matched_contours.push(best_ix);
                         }
                     } else {
                         innaugurate_contour(&mut new_contours, r, *this_c1, *this_c2, *this_color);
                     }
                 } else {
 
-                    println!("{:?} had no overlaps", (r, this_c1, this_c2));
+                    // println!("{:?} had no overlaps", (r, this_c1, this_c2));
 
                     // Innaugurate new contour. Insert at another vector so they won't be matched now
                     // and mess with the indices of OpenContours.
@@ -448,37 +755,8 @@ impl Raster {
                 }
             }
 
-            for (ix, (c1, c2)) in editions.drain() {
-
-                // TODO just push pixels to the end of vector, and then
-                // at the end of contour tracing
-                // swap odd entries at 0..n/2 to n/2..n to avoid moving
-                // so much data.
-
-                // Insert new left col at even index to preserve contour order
-                open_contours[ix].pxs.insert(0, (r, c1));
-                // open_contours[ix].pxs.push((r, c1));
-
-                // Insert new right col at odd index to preserve contour order
-                open_contours[ix].pxs.push((r, c2));
-                // open_contours[ix].pxs.push((r, c2));
-
-                open_contours[ix].last_row = r;
-                open_contours[ix].fst_col_last_row = c1;
-                open_contours[ix].lst_col_last_row = c2;
-            }
-
-            // Close all contours that weren't matched at this row.
-            let unmatched_contours = (0..open_contours.len())
-                .filter(|ix| matched_contours.iter().find(|c| *c == ix ).is_none() );
-
-            // Reverse the iterator and remove from the end to the start so
-            // as to not mess up with the indices.
-            for ix in unmatched_contours.rev() {
-                let open = open_contours.remove(ix);
-                closed_colors.push(open.col);
-                closed_contours.push(Contour(open.pxs));
-            }
+            append_rows_to_open(&mut open_contours[..], &mut editions, r);
+            close_unmatched(&mut open_contours, &mut closed_contours, &mut closed_colors, &mut matched_contours);
 
             for contour in new_contours.drain(..) {
                 open_contours.push(contour);
@@ -498,14 +776,12 @@ impl Raster {
             }
 
             open_contours.sort_by(|a, b| a.fst_col_last_row.cmp(&b.fst_col_last_row) );*/
-
-            matched_contours.clear();
         }
 
         // Push remaining contours after all rows are finished
         for open in open_contours {
             closed_colors.push(open.col);
-            closed_contours.push(Contour(open.pxs));
+            closed_contours.push(open.close());
         }
 
         /*// Rearrange pixel order here. Give the option to deliver
@@ -582,7 +858,7 @@ pub fn sub_mut_u8<'a>(out : &'a mut WindowMut<'a, u8>, a : &'a Window<'a, u8>, b
 }
 
 // Draws each raster with its color, and two black points delimiting each raster.
-fn draw_segments(raster : &Raster, mut img : WindowMut<'_, u8>) {
+pub fn draw_segments(raster : &Rasterizer, mut img : WindowMut<'_, u8>) {
 
     use crate::image::Mark;
 

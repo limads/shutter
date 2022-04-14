@@ -94,6 +94,11 @@ impl NormalizedMoments {
 
 }
 
+/*
+IppStatus ippiGetHuMoments_64f(const IppiMomentState_64f* pState, int nChannel,
+IppiHuMoment_64f pHm);
+*/
+
 // Calculate translation, scale and orientation-invariant moments from basic shapes (aka. Hu moments).
 // Usually, the log of the moments is used.
 pub struct IsotropicMoments {
