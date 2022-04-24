@@ -6,6 +6,16 @@ use num_traits::Zero;
 use serde::{Serialize, Deserialize, de::DeserializeOwned};
 use std::any::Any;
 
+/*
+Morphological operations consider a binary image as a set of (x, y) coordinates and a binary structuring element,
+which is also a set of (x, y) elements. Dilation sets all the pixels that match the geometry of the structuring
+element to foreground whenever there is any intersection between the foreground of the structuring element and
+the image foreground. Erosion sets all pixels that match the geometry of the structutring element to background
+whenever the intersection between foreground of the structuring element and foreground of image is not complete
+(i.e. intersection = original structuring set).
+Opening is an erosion followed by a dilation; Closing is an dilation followed by an erosion.
+*/
+
 /*pub trait Morphology {
 
 }

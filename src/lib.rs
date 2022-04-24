@@ -2,19 +2,49 @@
 
 #![doc(html_logo_url = "https://raw.githubusercontent.com/limads/shutter/master/assets/logo.png")]
 
+/// Common optical manipulations (calculation of focal depth, magnification, camera calibration, lens distortion correction),
+pub mod optics;
+
+pub mod warp;
+
+pub mod edge;
+
+// Contains algorithms to partition the images over homogeneous regions, with a criterion for
+// homegeneity that is algorithm-specific. Contains dense and sparse data structures to represent
+// image regions.
+pub mod region;
+
+// Binary image operations
+pub mod binary;
+
+// Texture operations (segmentation, classification)
+pub mod texture;
+
+/// Grayscale operations (thresholding, segmentation)
+pub mod gray;
+
+/// Color image operations
+pub mod color;
+
+/// Point-wise operations (enhance, equalize, normalize, etc).
+pub mod point;
+
+/// Global operations (mean, max, avg)
+pub mod global;
+
+/// Local (non-filtering) operations (median, min, max)
+pub mod local;
+
 pub mod ffi;
 
 pub mod io;
 
 // pub(crate) mod foreign;
 
-// pub mod histogram;
+pub mod profile;
 
 // Scalar image operations
 pub mod scalar;
-
-// Binary image operations
-pub mod binary;
 
 // Low-level image features
 pub mod feature;
@@ -40,6 +70,8 @@ pub mod raster;
 #[cfg(feature="opencv")]
 pub mod contour;
 
+pub mod corner;
+
 pub mod integral;
 
 // pub mod edge;
@@ -54,10 +86,10 @@ pub mod threshold;
 
 // Defines operations on binary images.
 #[cfg(feature="opencv")]
-pub mod morphology;
+pub mod morph;
 
-#[cfg(feature="opencv")]
-pub mod filter;
+// #[cfg(feature="opencv")]
+// pub mod filter;
 
 pub mod cluster;
 
@@ -72,6 +104,7 @@ pub mod geom;
 pub mod foreign;
 
 #[cfg(feature="glib")]
+#[cfg(feature="once_cell")]
 #[cfg(feature="gstreamer")]
 #[cfg(feature="gstreamer-base")]
 #[cfg(feature="gstreamer-video")]

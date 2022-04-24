@@ -1,7 +1,7 @@
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_base as gst_base;
-use anyhow::Error;
+// use anyhow::Error;
 use once_cell::sync::Lazy;
 use std::cell::RefCell;
 use gstreamer_video;

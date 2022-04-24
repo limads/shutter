@@ -43,10 +43,12 @@ pub use dwt::*;*/
 // #[cfg(feature="gsl")]
 // pub use interp::Interpolation2D;
 
+// TODO image.equalize() (contrast equalization) image.strech() (constrast stretching)
+
 use crate::io;
 
 #[cfg(feature="ipp")]
-pub mod ipp;
+pub(crate) mod ipputils;
 
 #[cfg(feature="opencv")]
 pub mod cvutils;
@@ -84,10 +86,11 @@ pub struct Image<N>
 where
     N : Scalar + Clone + Copy + Serialize + DeserializeOwned + Any
 {
-    buf : Vec<N>,
+    pub(crate) buf : Vec<N>,
     ncols : usize
 }
 
+// Perhaps rename to GrayImage? (but float image is also gray).
 pub type ByteImage = Image<u8>;
 
 pub type FloatImage = Image<f32>;
@@ -136,10 +139,95 @@ impl TryFrom<Image<f32>> for Image<u8> {
     }
 }*/
 
+pub enum Conversion {
+
+    // Literal conversion, preserving pixel values
+    Literal,
+
+    // Relative conversion, that maps limits at the source image numeric domain to the limits
+    // of destination image numeric domain
+    Relative,
+
+    // Convert with user-defined scaling factor.
+    Scaled { offset : f32, scale : f32 }
+
+}
+
+fn baseline_conversion<N, M>(to : &mut Image<N>, from : &Window<M>)
+where
+    N : Scalar + Default + Debug + DeserializeOwned + Serialize + Clone + Copy + num_traits::Zero,
+    M : Scalar + Default + num_traits::cast::AsPrimitive<N> + Debug + DeserializeOwned + Serialize + Clone + Copy
+{
+
+    use num_traits::cast::AsPrimitive;
+
+    to.full_window_mut().pixels_mut(1).zip(from.pixels(1)).for_each(|(to_px, from_px)| *to_px = from_px.as_() );
+}
+
+fn baseline_relative_conversion<N, M>(to : &mut Image<N>, from : &Window<M>)
+where
+    N : Scalar + Default + Debug + DeserializeOwned + Serialize + Clone + Copy + num_traits::Zero,
+    M : Scalar + Default + num_traits::cast::AsPrimitive<N> + Debug + DeserializeOwned + Serialize + Clone + Copy
+{
+
+    use num_traits::cast::AsPrimitive;
+
+    /*to.full_window_mut().pixels_mut(1).zip(from.pixels(1))
+        .for_each(|(to_px, from_px)| {
+            let mut rel : f32 = from_px.as_();
+            rel /= M::max();
+            *to_px = rel * N::max();
+        });*/
+    unimplemented!()
+}
+
+impl<N> Image<N>
+where
+    N : Scalar + Copy + Serialize + DeserializeOwned + Any {
+
+    pub fn shape(&self) -> (usize, usize) {
+        (self.buf.len() / self.ncols, self.ncols)
+    }
+
+    pub fn width(&self) -> usize {
+        self.ncols
+    }
+
+    pub fn height(&self) -> usize {
+        self.buf.len() / self.ncols
+    }
+
+}
+
 impl<N> Image<N>
 where
     N : Scalar + Copy + Default + Zero + Copy + Serialize + DeserializeOwned + Any
 {
+
+    /* Mirroring ops are useful to represent image correlations via convolution:
+    corr(a,b) = conv(a,mirror(b)) = conv(mirror(a), b) */
+    pub fn mirror_vertically(&self) -> Image<N> {
+        unimplemented!()
+    }
+
+    pub fn mirror_horizontally(&self) -> Image<N> {
+        unimplemented!()
+    }
+
+    pub fn mirror(&self) -> Image<N> {
+        unimplemented!()
+    }
+
+    pub fn transpose_from<'a>(&'a mut self, src : &Image<N>) {
+
+        // IppStatus ippiTranspose_<mod>(const Ipp<datatype>* pSrc, int srcStep, Ipp<datatype>*
+        // pDst, int dstStep, IppiSize roiSize);
+
+        use nalgebra::*;
+        assert!(src.width() == self.height() && src.height() == self.width());
+        DMatrixSlice::from_slice(&src.buf[..], src.height(), src.width())
+            .transpose_to(&mut DMatrixSliceMut::from_slice(&mut self.buf[..], src.width(), src.height()));
+    }
 
     // Splits this image over S owning, memory-contiguous blocks. This does not
     // copy the underlying data and is useful to split the work across multiple threads
@@ -227,6 +315,14 @@ where
         Self { buf, ncols }
     }
 
+    pub fn from_rows<const R : usize, const C : usize>(pxs : [[N; C]; R]) -> Self {
+        let mut buf : Vec<N> = Vec::with_capacity(R*C);
+        for r in pxs {
+            buf.extend(r.into_iter());
+        }
+        Self { buf, ncols : C }
+    }
+
     pub fn new_constant(nrows : usize, ncols : usize, value : N) -> Self {
         let mut buf = Vec::with_capacity(nrows * ncols);
         buf.extend((0..(nrows*ncols)).map(|_| value ));
@@ -238,18 +334,6 @@ where
         let mut buf = Vec::with_capacity(nrows * ncols);
         buf.set_len(nrows * ncols);
         Self { buf, ncols }
-    }
-
-    pub fn shape(&self) -> (usize, usize) {
-        (self.buf.len() / self.ncols, self.ncols)
-    }
-    
-    pub fn width(&self) -> usize {
-        self.ncols
-    }
-
-    pub fn height(&self) -> usize {
-        self.buf.len() / self.ncols
     }
 
     pub fn full_window<'a>(&'a self) -> Window<'a, N> {
@@ -294,6 +378,12 @@ where
         let src_ncols = src.orig_sz.1;
         let dst_ncols = self.ncols;
         
+        #[cfg(feature="ipp")]
+        unsafe {
+            let dst_nrows = self.buf.len() / self.ncols;
+            ipputils::resize(src.win, &mut self.buf, src.orig_sz, (dst_nrows, dst_ncols));
+        }
+
         #[cfg(feature="opencv")]
         unsafe {
             cvutils::resize(
@@ -305,12 +395,6 @@ where
                 None
             );
             return;
-        }
-        
-        #[cfg(feature="ipp")]
-        unsafe {
-            let dst_nrows = self.buf.len() / self.ncols;
-            ipp::resize(src.win, &mut self.buf, src.orig_sz, (dst_nrows, dst_ncols));
         }
         
         panic!("Image::downsample requires that crate is compiled with opencv or ipp feature");
@@ -340,12 +424,10 @@ where
         );
     }
     
-    /*
-    // TODO
-    IppStatus ippiCopy_<mod> ( const Ipp<datatype>* pSrc , int srcStep , Ipp<datatype>* pDst ,
-    int dstStep , IppiSize roiSize );
-    */
     pub fn copy_from(&mut self, other : &Image<N>) {
+
+        // IppStatus ippiCopy_8uC1R(const Ipp<datatype>* pSrc, int srcStep, Ipp<datatype>* pDst,
+        // int dstStep, IppiSize roiSize);
         self.buf.copy_from_slice(other.buf.as_slice());
     }
     
@@ -380,14 +462,63 @@ where
         self.full_window().windows(sz)
     }
     
+    pub fn convert_from_scaling<M>(&mut self, other : &Window<M>, scale : f32, offset : f32)
+    where
+        M : Scalar + Default + num_traits::cast::AsPrimitive<N> + DeserializeOwned + Serialize
+    {
+        // IppStatus ippiScaleC_<mod>_C1R(const Ipp<srcDatatype>* pSrc, int srcStep, Ipp64f mVal,
+        // Ipp64f aVal, Ipp<dstDatatype>* pDst, int dstStep, IppiSize roiSize, IppHintAlgorithm
+        // hint);
+        unimplemented!()
+    }
+
+    pub fn convert_from_shrinking<M>(&mut self, other : &Window<M>)
+    where
+        M : Scalar + Default + num_traits::cast::AsPrimitive<N> + DeserializeOwned + Serialize
+    {
+        // Alternatively, choose IppHintAlgorithm_ippAlgHintFast IppHintAlgorithm_ippAlgHintAccurate
+        // IppStatus ippiScale_16s8u_C1R(const Ipp<srcDatatype>* pSrc, int srcStep, Ipp<dstDatatype>*
+        //    pDst, int dstStep, IppiSize roiSize, IppHintAlgorithm_ippAlgHintNone);
+        unimplemented!()
+    }
+
     // TODO make this generic like impl AsRef<Window<M>>, and make self carry a field Window corresponding
     // to the full window to work as the AsRef implementation, so the user can pass images here as well.
-    pub fn convert<M>(&mut self, other : &Window<M>) 
+    pub fn convert_from_stretching<M>(&mut self, other : &Window<M>)
     where
-        M : Scalar + Default
+        M : Scalar + Default + num_traits::cast::AsPrimitive<N> + DeserializeOwned + Serialize
+    {
+        // This maps srcmin..srcmax at the integer scale of src to the integer scale of destination
+        // IppStatus ippiScale_8u16s_C1R(const Ipp<srcDatatype>* pSrc, int srcStep, Ipp<dstDatatype>* pDst, int dstStep, IppiSize roiSize);
+
+        // This maps srcmin..srcmax at the integer scale of src to a user-defined floating point scale of destination
+        // IppStatus ippiScale_8u32f_C1R(const Ipp8u* pSrc, int srcStep, Ipp32f* pDst, int dstStep, IppiSize roiSize, Ipp32f vMin, Ipp32f vMax);
+
+        // For a full user-defined scale (saturating), where mval is the coefficient and aval is the offset:
+        // IppStatus ippiScaleC_<mod>_C1R(const Ipp<srcDatatype>* pSrc, int srcStep, Ipp64f mVal,
+        // Ipp64f aVal, Ipp<dstDatatype>* pDst, int dstStep, IppiSize roiSize, IppHintAlgorithm
+        // hint);
+
+        unimplemented!()
+    }
+
+    // TODO make this generic like impl AsRef<Window<M>>, and make self carry a field Window corresponding
+    // to the full window to work as the AsRef implementation, so the user can pass images here as well.
+    // This converts the pixel values without any type of scaling.
+    pub fn convert_from<M>(&mut self, other : &Window<M>)
+    where
+        M : Scalar + Default + num_traits::cast::AsPrimitive<N> + DeserializeOwned + Serialize
     {
         let ncols = self.ncols;
         
+        #[cfg(feature="ipp")]
+        {
+            assert!(other.is_full());
+            unsafe { ipputils::convert(other.win, &mut self.buf[..], ncols); }
+            return;
+        }
+
+
         #[cfg(feature="opencv")]
         unsafe {
             cvutils::convert(
@@ -401,14 +532,7 @@ where
             return;
         }
         
-        #[cfg(feature="ipp")]
-        {
-            assert!(other.is_full());
-            unsafe { ipp::convert(other.win, &mut self.buf[..], ncols); }
-            return;
-        }
-        
-        panic!("Either opencv or ipp feature should be enabled for image conversion");
+        baseline_conversion(self, other);
     }
     
     /*pub fn iter(&self) -> impl Iterator<Item=&N> {
@@ -571,8 +695,26 @@ where
 
 impl<'a, N> Window<'a, N>
 where
-    N : Scalar
+    N : Scalar + Copy
 {
+
+    pub fn get(&self, index : (usize, usize)) -> Option<&N> {
+        if index.0 < self.height() && index.1 < self.width() {
+            unsafe { Some(self.get_unchecked(index)) }
+        } else {
+            None
+        }
+    }
+
+    pub unsafe fn get_unchecked(&self, index : (usize, usize)) -> &N {
+        let off_ix = (self.offset.0 + index.0, self.offset.1 + index.1);
+        let (limit_row, limit_col) = (self.offset.0 + self.win_sz.0, self.offset.1 + self.win_sz.1);
+        unsafe { self.win.get_unchecked(index::linear_index(off_ix, self.orig_sz.1)) }
+    }
+
+    pub fn offset_ptr(&self) -> *const N {
+        self.get((0, 0)).unwrap() as *const N
+    }
 
     /// Converts this image from the range[0, 1] (floating-point) to the quantized range defined by max
     pub fn quantize<M : Scalar + >(&self, mut out : WindowMut<'_, M>)
@@ -666,11 +808,29 @@ fn shrink_to_divisor(mut n : usize, by : usize) -> Option<usize> {
     }
 }
 
-
 impl<'a, N> Window<'a, N>
 where
     N : Scalar + Copy
 {
+
+    pub fn shape(&self) -> (usize, usize) {
+        // self.win.shape()
+        self.win_sz
+    }
+
+    pub fn width(&self) -> usize {
+        // self.win.ncols()
+        self.win_sz.1
+    }
+
+    pub fn height(&self) -> usize {
+        // self.win.nrows()
+        self.win_sz.0
+    }
+
+    pub fn len(&self) -> usize {
+        self.win_sz.0 * self.win_sz.1
+    }
 
     pub fn rows(&self) -> impl Iterator<Item=&[N]> + Clone {
         let stride = self.orig_sz.1;
@@ -681,26 +841,21 @@ where
         })
     }
 
+    /// Iterate over all image pixels if spacing=1; or over pixels spaced
+    /// horizontally and verticallly by spacing. Iteration proceeds row-wise.
+    pub fn pixels(&self, spacing : usize) -> impl Iterator<Item=&N> + Clone {
+        assert!(spacing > 0, "Spacing should be at least one");
+        assert!(self.width() % spacing == 0 && self.height() % spacing == 0, "Spacing should be integer divisor of width and height");
+        iterate_row_wise(self.win, self.offset, self.win_sz, self.orig_sz, spacing).step_by(spacing)
+    }
+
+
 }
 
 impl<'a, N> Window<'a, N>
 where
     N : Scalar + Mul<Output=N> + MulAssign + Copy + Copy + Serialize + DeserializeOwned + Any
 {
-
-    pub fn get(&self, index : (usize, usize)) -> Option<&N> {
-        if index.0 < self.height() && index.1 < self.width() {
-            unsafe { Some(self.get_unchecked(index)) }
-        } else {
-            None
-        }
-    }
-
-    pub unsafe fn get_unchecked(&self, index : (usize, usize)) -> &N {
-        let off_ix = (self.offset.0 + index.0, self.offset.1 + index.1);
-        let (limit_row, limit_col) = (self.offset.0 + self.win_sz.0, self.offset.1 + self.win_sz.1);
-        unsafe { self.win.get_unchecked(index::linear_index(off_ix, self.orig_sz.1)) }
-    }
 
     /*pub unsafe fn get_unchecked_u16(&self, index : (u16, u16)) -> &N {
         let off_ix = (self.offset.0 + index.0, self.offset.1 + index.1);
@@ -836,25 +991,6 @@ where
         })
     }
     
-    pub fn shape(&self) -> (usize, usize) {
-        // self.win.shape()
-        self.win_sz
-    }
-    
-    pub fn width(&self) -> usize {
-        // self.win.ncols()
-        self.win_sz.1
-    }
-    
-    pub fn height(&self) -> usize {
-        // self.win.nrows()
-        self.win_sz.0
-    }
-    
-    pub fn len(&self) -> usize {
-        self.win_sz.0 * self.win_sz.1
-    }
-
     /*pub fn linear_index(&self, ix : usize) -> &N {
         let offset = self.orig_sz.1 * offset.0 + offset.1;
         let row = ix / self.orig_sz.1;
@@ -987,14 +1123,6 @@ where
                 .map(move |c| self.upper_to_left_diagonal_pixel_pairs(c, comp_dist).unwrap() )
                 .flatten()
             )
-    }
-
-    /// Iterate over all image pixels if spacing=1; or over pixels spaced
-    /// horizontally and verticallly by spacing. Iteration proceeds row-wise.
-    pub fn pixels(&self, spacing : usize) -> impl Iterator<Item=&N> + Clone {
-        assert!(spacing > 0, "Spacing should be at least one");
-        assert!(self.width() % spacing == 0 && self.height() % spacing == 0, "Spacing should be integer divisor of width and height");
-        iterate_row_wise(self.win, self.offset, self.win_sz, self.orig_sz, spacing).step_by(spacing)
     }
 
     pub fn rect_pixels(&'a self, rect : (usize, usize, usize, usize)) -> impl Iterator<Item=N> + Clone + 'a {
@@ -1759,6 +1887,24 @@ where
     N : Scalar + Copy + Debug
 {
 
+    pub fn get_mut(mut self, index : (usize, usize)) -> Option<&'a mut N> {
+        if index.0 < self.height() && index.1 < self.width() {
+            unsafe { Some(self.get_unchecked_mut(index)) }
+        } else {
+            None
+        }
+    }
+
+    pub unsafe fn get_unchecked_mut(mut self, index : (usize, usize)) -> &'a mut N {
+        let off_ix = (self.offset.0 + index.0, self.offset.1 + index.1);
+        let (limit_row, limit_col) = (self.offset.0 + self.win_sz.0, self.offset.1 + self.win_sz.1);
+        unsafe { self.win.get_unchecked_mut(index::linear_index(off_ix, self.orig_sz.1)) }
+    }
+
+    pub fn offset_ptr_mut(mut self) -> *mut N {
+        unsafe { self.get_unchecked_mut((0, 0)) as *mut N }
+    }
+
     pub unsafe fn from_ptr(ptr : *mut N, len : usize, full_ncols : usize, offset : (usize, usize), sz : (usize, usize)) -> Option<Self> {
         let s = std::slice::from_raw_parts_mut(ptr, len);
         Self::sub_from_slice(s, full_ncols, offset, sz)
@@ -2340,61 +2486,6 @@ where
         Self{ buf : DVector::from_vec(s.0), nrows, ncols  }
     }
 }*/
-
-impl<N> ripple::filter::Convolve for Image<N>
-where
-    N : Scalar + Copy + Default + Zero + Copy + Serialize + DeserializeOwned + Any + std::ops::Mul<Output = N> + std::ops::AddAssign
-{
-
-    fn convolve_mut(&self, filter : &Self, out : &mut Self) {
-
-        {
-            assert!(out.height() == self.height() - filter.height() + 1);
-            assert!(out.width() == self.width() - filter.width() + 1);
-            assert!(filter.width() % 2 == 1);
-            assert!(filter.height() % 2 == 1);
-            let half_kh = filter.height() / 2;
-            let half_kw = filter.width() / 2;
-
-            for (ix_ci, center_i) in (half_kh..(self.height() - half_kh)).enumerate() {
-                for (ix_cj, center_j) in (half_kw..(self.width() - half_kw)).enumerate() {
-                    out[(ix_ci, ix_cj)] = N::zero();
-                    for (ix_ki, ki) in ((center_i - half_kh)..(center_i + half_kh + 1)).enumerate() {
-                        for (ix_kj, kj) in ((center_j - half_kw)..(center_j + half_kw + 1)).enumerate() {
-                            out[(ix_ci, ix_cj)] += self[(ki, kj)] * filter[(ix_ki, ix_kj)];
-                        }
-                    }
-                }
-            }
-            return;
-        }
-
-        #[cfg(feature="opencv")]
-        {
-            use opencv;
-
-            assert!(filter.height() % 2 != 0 && filter.width() % 2 != 0 );
-            let input : opencv::core::Mat = self.into();
-            let kernel : opencv::core::Mat = filter.into();
-            let mut flip_kernel = kernel.clone();
-            opencv::core::flip(&kernel, &mut flip_kernel, -1).unwrap();
-            let delta = 0.0;
-            let mut output : opencv::core::Mat = out.into();
-            opencv::imgproc::filter_2d(
-                &input,
-                &mut output,
-                cvutils::get_cv_type::<N>(),
-                &flip_kernel,
-                opencv::core::Point2i::new(0, 0),
-                delta,
-                opencv::core::BORDER_DEFAULT
-            ).unwrap();
-            return;
-        }
-
-        unimplemented!()
-    }
-}
 
 impl<N> AsRef<[N]> for Image<N>
 where

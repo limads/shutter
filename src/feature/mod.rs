@@ -30,59 +30,6 @@ roiSize, IppiPoint seed, Ipp<datatype> newVal, IppiConnectedComp* pRegion, Ipp8u
 pBuffer );
 */
 
-/* pub trait Region {
-
-    fn center()
-
-    fn width()
-
-    fn height()
-
-    fn bounding_rect()
-
-    fn inner_rect()
-
-    fn bounding_circle()
-
-    fn inner_circle()
-
-    fn approximate_ellipse()
-
-    fn approximate_circle()
-
-    fn central_moments()
-
-    fn normalized_moments()
-
-    fn isotropic_moments()
-
-    fn overlaps(self, other)
-
-    fn contacts(self, other)
-
-    fn distance(self, other)
-
-    fn orientation(self, other)
-
-    fn group(&self, others : &[Region])
-
-    fn inner_pixels(&self, win : &Window<'_, u8>)
-
-}
-
-impl Region for Boundary { }
-
-impl Region for Contour { }
-
-impl Region for Patch { }
-
-impl Region for Rectangle { }
-
-impl Region for Circle { }
-
-impl Region for Ellipse { }
-
-*/
 
 /// Contains utilities to represent dense pixel regions (lists of pixel coordinates)
 pub mod patch;
