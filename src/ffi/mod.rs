@@ -9,6 +9,12 @@ use crate::image::WindowMut;
 use crate::feature::patch::Patch;
 use crate::image::Window;
 
+/*#[no_mangle]
+pub extern "C" fn convolve_f32(img : &[f32], img_ncol : i64, kernel : &[f32], kernel_ncol : i64, out : &[f32]) -> i64 {
+    use crate::local::*;
+    0
+}*/
+
 #[no_mangle]
 pub extern "C" fn fit_circle(xs : &[f64], ys : &[f64], center : &mut [f64], radius : &mut f64) -> i64 {
     use nalgebra::Vector2;

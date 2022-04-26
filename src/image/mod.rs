@@ -378,12 +378,6 @@ where
         let src_ncols = src.orig_sz.1;
         let dst_ncols = self.ncols;
         
-        #[cfg(feature="ipp")]
-        unsafe {
-            let dst_nrows = self.buf.len() / self.ncols;
-            ipputils::resize(src.win, &mut self.buf, src.orig_sz, (dst_nrows, dst_ncols));
-        }
-
         #[cfg(feature="opencv")]
         unsafe {
             cvutils::resize(
@@ -397,6 +391,13 @@ where
             return;
         }
         
+        // TODO resize yields a nullpointer when allocating its data.
+        #[cfg(feature="ipp")]
+        unsafe {
+            let dst_nrows = self.buf.len() / self.ncols;
+            ipputils::resize(src.win, &mut self.buf, src.orig_sz, (dst_nrows, dst_ncols));
+        }
+
         panic!("Image::downsample requires that crate is compiled with opencv or ipp feature");
 
         // TODO use resize::resize for native Rust solution
@@ -517,7 +518,6 @@ where
             unsafe { ipputils::convert(other.win, &mut self.buf[..], ncols); }
             return;
         }
-
 
         #[cfg(feature="opencv")]
         unsafe {
@@ -697,6 +697,17 @@ impl<'a, N> Window<'a, N>
 where
     N : Scalar + Copy
 {
+
+    pub fn rect(&self) -> (usize, usize, usize, usize) {
+        let off = self.offset();
+        let sz = self.shape();
+        (off.0, off.1, sz.0, sz.1)
+    }
+
+    pub fn center(&self) -> (usize, usize) {
+        let rect = self.rect();
+        (rect.0 + rect.2 / 2, rect.1 + rect.3 / 2)
+    }
 
     pub fn get(&self, index : (usize, usize)) -> Option<&N> {
         if index.0 < self.height() && index.1 < self.width() {
@@ -1018,6 +1029,12 @@ where
         }
     }
     
+    /// Splits this window into equally-sized subwindows, iterating row-wise over the blocks.
+    pub fn equivalent_windows(self, num_rows : usize, num_cols : usize) -> impl Iterator<Item=Window<'a, N>> {
+        assert!(self.height() % num_rows == 0 && self.width() % num_cols == 0);
+        self.clone().windows((self.height() / num_rows, self.width() / num_cols))
+    }
+
     pub fn row(&self, ix : usize) -> Option<&[N]> {
         if ix >= self.win_sz.0 {
             return None;
@@ -1886,6 +1903,22 @@ impl<'a, N> WindowMut<'a, N>
 where
     N : Scalar + Copy + Debug
 {
+
+    // TODO rewrite this using safe rust.
+    #[allow(mutable_transmutes)]
+    pub fn clone_owned(&'a self) -> Image<N>
+    where
+        N : Copy + Default + Zero + Serialize + DeserializeOwned + 'static
+    {
+        let mut buf = Vec::new();
+        let ncols = self.win_sz.1;
+        unsafe {
+            for row in std::mem::transmute::<_, &'a mut Self>(self).rows_mut() {
+                buf.extend(row.iter().cloned())
+            }
+        }
+        Image::from_vec(buf, ncols)
+    }
 
     pub fn get_mut(mut self, index : (usize, usize)) -> Option<&'a mut N> {
         if index.0 < self.height() && index.1 < self.width() {

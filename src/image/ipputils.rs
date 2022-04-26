@@ -9,6 +9,7 @@ use std::any::Any;
 use crate::image::*;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use std::iter::FromIterator;
 
 pub fn allocate_buffer_with<F>(f : F) -> Vec<u8>
 where
@@ -44,7 +45,7 @@ where
     N : Scalar + Clone + Copy + Serialize + DeserializeOwned + Any
 {
     let win_row_bytes = row_size_bytes::<N>(win.orig_sz.1);
-    (win_row_bytes, window_size(win))
+    (win_row_bytes, window_mut_size(win))
 }
 
 pub fn step_and_size_for_window<N>(win : &Window<'_, N>) -> (i32, crate::foreign::ipp::ippi::IppiSize)
