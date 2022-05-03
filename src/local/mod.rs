@@ -7,7 +7,14 @@ use num_traits::Zero;
 use nalgebra::Scalar;
 use std::iter::FromIterator;
 
-fn baseline_convolution<N>(input : &Window<'_, N>, filter : &Window<'_, N>, mut out : WindowMut<'_, N>)
+pub fn convolution_buffer<N>(img_sz : (usize, usize), kernel_sz : (usize, usize)) -> Image<N>
+where
+    N : Scalar + Clone + Zero + Serialize + DeserializeOwned + Copy + Default
+{
+    Image::new_constant(img_sz.0 - kernel_sz.0 + 1, img_sz.1 - kernel_sz.1 + 1, N::zero())
+}
+
+fn baseline_convolution<N>(input : &Window<'_, N>, filter : &Window<'_, N>, out : &mut WindowMut<'_, N>)
 where
     N : Scalar + Copy + Default + Zero + Copy + Serialize + DeserializeOwned +
         Any + std::ops::Mul<Output = N> + std::ops::AddAssign
@@ -34,20 +41,20 @@ where
 }
 
 #[cfg(feature="ipp")]
-unsafe fn ipp_convolution_f32(img : &Image<f32>, kernel : &Image<f32>, out : &mut Image<f32>) {
+unsafe fn ipp_convolution_f32(img : &Window<f32>, kernel : &Window<f32>, out : &mut WindowMut<f32>) {
 
     use crate::foreign::ipp::ippi::*;
     use std::os::raw::c_int;
 
-    assert!(out.width() == img.width() - kernel.width() - 1);
-    assert!(out.height() == img.height() - kernel.height() - 1);
+    assert!(out.width() == img.width() - kernel.width() + 1);
+    assert!(out.height() == img.height() - kernel.height() + 1);
 
     // With IppiROIShape_ippiROIFull  convolution with zero padding is applied (result is nrow_img + nrow_kenel - 1).
     // With IppiROIShape_ippiROIValid convolution without zero padding is applied (result is nrow_img - nrow_kernel + 1)
     let alg_ty = IppAlgType_ippAlgAuto + IppiROIShape_ippiROIValid;
 
-    let img_sz = crate::image::ipputils::image_size(img);
-    let kernel_sz = crate::image::ipputils::image_size(kernel);
+    let img_sz = crate::image::ipputils::window_size(img);
+    let kernel_sz = crate::image::ipputils::window_size(kernel);
     let mut buf_sz : c_int = 0;
     let status = ippiConvGetBufferSize(
         img_sz,
@@ -61,13 +68,13 @@ unsafe fn ipp_convolution_f32(img : &Image<f32>, kernel : &Image<f32>, out : &mu
     let mut conv_buffer : Vec<u8> = Vec::from_iter((0..buf_sz).map(|_| 0u8 ) );
 
     let status = ippiConv_32f_C1R(
-        &img.buf[0] as *const _,
+        &img.win[0] as *const _,
         (mem::size_of::<f32>() * img.width()) as c_int,
         img_sz,
-        &kernel.buf[0] as *const _,
+        &kernel.win[0] as *const _,
         (mem::size_of::<f32>() * kernel.width()) as c_int,
         kernel_sz,
-        &mut out.buf[0] as *mut _,
+        &mut out.win[0] as *mut _,
         (mem::size_of::<f32>() * out.width()) as c_int,
         alg_ty as i32,
         &mut conv_buffer[0] as *mut _
@@ -75,26 +82,32 @@ unsafe fn ipp_convolution_f32(img : &Image<f32>, kernel : &Image<f32>, out : &mu
     assert!(status == 0);
 }
 
-impl<N> Convolve for Image<N>
+/*impl<N> Convolve for Image<N>
 where
     N : Scalar + Copy + Default + Zero + Copy + Serialize + DeserializeOwned +
         Any + std::ops::Mul<Output = N> + std::ops::AddAssign
 {
 
-    type Output = Image<N>;
+}*/
 
-    fn convolve_mut(&self, filter : &Self, out : &mut Self) {
+impl<'a, N> Convolve for Window<'a, N>
+where
+    N : Scalar + Copy + Default + Zero + Copy + Serialize + DeserializeOwned +
+        Any + std::ops::Mul<Output = N> + std::ops::AddAssign
+{
+
+    type Output = WindowMut<'a, N>;
+
+    fn convolve_mut(&self, filter : &Self, out : &mut Self::Output) {
 
         #[cfg(feature="ipp")]
-        {
-            if (&self[(0, 0)] as &dyn Any).is::<f32>() {
-                unsafe {
-                    ipp_convolution_f32(mem::transmute(self), mem::transmute(filter), mem::transmute(out));
-                }
+        unsafe {
+            if (&self[(0usize, 0usize)] as &dyn Any).is::<f32>() {
+                ipp_convolution_f32(mem::transmute(self), mem::transmute(filter), mem::transmute(out));
                 return;
             }
 
-            if (&self[(0, 0)] as &dyn Any).is::<f64>() {
+            if (&self[(0usize, 0usize)] as &dyn Any).is::<f64>() {
 
             }
         }
@@ -111,7 +124,6 @@ where
         }
 
         #[cfg(feature="opencv")]
-        #[cfg(not(feature="ipp"))]
         {
             use opencv;
 
@@ -134,7 +146,7 @@ where
             return;
         }
 
-        baseline_convolution(&self.full_window(), &filter.full_window(), out.full_window_mut());
+        baseline_convolution(&self, &filter, out);
     }
 }
 

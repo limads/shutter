@@ -9,6 +9,12 @@ use std::cmp::Ord;
 use std::ops::Add;
 use nalgebra;
 
+/* Split polygonal approximation (after Distante & Distante, 2020)
+(1) Find farthest pair of points at contour and trace a bisection line;
+(2) Find pair of points with largest distance perpendicular to the bisection line (where p1 is opposite to p2 wrt this line)
+(3) With the four resulting points, consider the 4 closed remaining segments
+*/
+
 /* The area is the zeroth moment. The first moment is the pixel sum divided by area, or average. */
 pub fn point_centroid(pts : &[(usize, usize)]) -> (f32, f32) {
     let sum : (f32, f32) = pts.iter().fold((0.0, 0.0), |avg, pt| (avg.0 + pt.0 as f32, avg.1 + pt.1 as f32) );
@@ -56,7 +62,9 @@ impl CentralMoments {
 
 }
 
-// Calculate scaled moments by dividing them by the zero-th moment
+// Calculate scaled moments by dividing them by the zero-th moment (area), which
+// generates scale-invariant moments (i.e. the same values irrespective of the
+// distance between camera or object. The object is not, however, orientation-invariant).
 pub struct NormalizedMoments {
 
     pub xx : f32,
@@ -100,7 +108,8 @@ IppiHuMoment_64f pHm);
 */
 
 // Calculate translation, scale and orientation-invariant moments from basic shapes (aka. Hu moments).
-// Usually, the log of the moments is used.
+// Usually, the log of the moments is used. The moments are invariant to any in-plane rotations and
+// scale changes.
 pub struct IsotropicMoments {
 
     pub h1 : f32,
@@ -760,7 +769,7 @@ pub fn vertex_side(theta1 : f64, b : f64, c : f64) -> f64 {
 
 #[test]
 fn line_intersect() {
-    println!("{:?}", line_intersection(((0, 0), (5, 5)), ((5, 0), (0, 5))) );
+    println!("{:?}", line_intersection_usize(((0, 0), (5, 5)), ((5, 0), (0, 5))) );
 }
 
 #[test]
@@ -775,24 +784,20 @@ fn vertex_opening() {
 /// m1 = [x1 y1; x2 y2]
 /// m2 = [x3 y3; x4 y4]
 /// m3 = [x1 - x2, y1 - y2; x3 - x4, y3 - y4]
-fn line_intersection(
-    (line1_pt1, line1_pt2) : ((usize, usize), (usize, usize)),
-    (line2_pt1, line2_pt2) : ((usize, usize), (usize, usize))
-) -> Option<(usize, usize)> {
-    let m1 = Matrix2::from_rows(&[
-        RowVector2::new(line1_pt1.1 as f64, line1_pt1.0 as f64 * -1.),
-        RowVector2::new(line1_pt2.1 as f64, line1_pt2.0 as f64 * -1.)
-    ]);
+/// Calculates intersection of two lines, where each line is defined by two points
+/// stacked into a 2x2 matrix (one at each row as [[x y], [x,y]]).
+pub fn line_intersection(m1 : Matrix2<f64>, m2 : Matrix2<f64>) -> Option<Vector2<f64>> {
+    // let diff_x_l1 = line1_pt1.1 as f64 - line1_pt2.1 as f64;
+    let diff_x_l1 = m1[(0,0)] - m1[(1,0)];
 
-    let m2 = Matrix2::from_rows(&[
-        RowVector2::new(line2_pt1.1 as f64, line2_pt1.0 as f64 * -1.),
-        RowVector2::new(line2_pt2.1 as f64, line2_pt2.0 as f64 * -1.)
-    ]);
+    // let diff_x_l2 = line2_pt1.1 as f64 - line2_pt2.1 as f64;
+    let diff_x_l2 = m2[(0,0)] - m2[(1,0)];
 
-    let diff_x_l1 = line1_pt1.1 as f64 - line1_pt2.1 as f64;
-    let diff_x_l2 = line2_pt1.1 as f64 - line2_pt2.1 as f64;
-    let diff_y_l1 = (line1_pt1.0 as f64 * -1.) - (line1_pt2.0 as f64 * -1.);
-    let diff_y_l2 = (line2_pt1.0 as f64 * -1.) - (line2_pt2.0 as f64 * -1.);
+    // let diff_y_l1 = (line1_pt1.0 as f64 * -1.) - (line1_pt2.0 as f64 * -1.);
+    let diff_y_l1 = m1[(0,1)] - m1[(1,1)];
+
+    // let diff_y_l2 = (line2_pt1.0 as f64 * -1.) - (line2_pt2.0 as f64 * -1.);
+    let diff_y_l2 = m2[(0,1)] - m2[(1,1)];
 
     let m3 = Matrix2::from_rows(&[
         RowVector2::new(diff_x_l1, diff_y_l1),
@@ -813,10 +818,30 @@ fn line_intersection(
         RowVector2::new(m2_det, diff_y_l2)
     ]).determinant() / m3_det;
 
+    if !x.is_nan() && !y.is_nan() {
+        Some(Vector2::new(x, y))
+    } else {
+        None
+    }
+}
+
+pub fn line_intersection_usize(
+    (line1_pt1, line1_pt2) : ((usize, usize), (usize, usize)),
+    (line2_pt1, line2_pt2) : ((usize, usize), (usize, usize))
+) -> Option<(usize, usize)> {
+    let m1 = Matrix2::from_rows(&[
+        RowVector2::new(line1_pt1.1 as f64, line1_pt1.0 as f64 * -1.),
+        RowVector2::new(line1_pt2.1 as f64, line1_pt2.0 as f64 * -1.)
+    ]);
+    let m2 = Matrix2::from_rows(&[
+        RowVector2::new(line2_pt1.1 as f64, line2_pt1.0 as f64 * -1.),
+        RowVector2::new(line2_pt2.1 as f64, line2_pt2.0 as f64 * -1.)
+    ]);
+    let out = line_intersection(m1, m2)?;
+    let (x, mut y) = (out[0], out[1]);
     if y <= 0. {
         y *= -1.;
     }
-
     if !x.is_nan() && !y.is_nan() {
         Some(((y*-1.) as usize, x as usize))
     } else {
@@ -886,7 +911,7 @@ pub fn ellipse_axis_pair(
             if not_same {
                 let test_slope = slope(*pt1, *pt2);
 
-                if let Some(intersection) = line_intersection((major_pt1, major_pt2), (*pt1, *pt2)) {
+                if let Some(intersection) = line_intersection_usize((major_pt1, major_pt2), (*pt1, *pt2)) {
 
                     // let dist_to_mid = euclidian(
                     //    &[intersection.0 as f64, intersection.1 as f64],
@@ -953,7 +978,7 @@ pub fn outer_ellipse(pts : &[(usize, usize)]) -> Option<Ellipse> {
     // Set minor axis to be the normal projecting from the major axis at the
     // point the line of perp_minor_line intersects with the major axis.
 
-    let center = line_intersection((major_pt1, major_pt2), (minor_pt1, minor_pt2))?;
+    let center = line_intersection_usize((major_pt1, major_pt2), (minor_pt1, minor_pt2))?;
     let large_axis = euclidian(&[major_pt1.0 as f64, major_pt1.1 as f64], &[major_pt2.0 as f64, major_pt2.1 as f64]);
     let small_axis = euclidian(&[minor_pt1.0 as f64, minor_pt1.1 as f64], &[minor_pt2.0 as f64, minor_pt2.1 as f64]);
 

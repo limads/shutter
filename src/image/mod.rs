@@ -18,6 +18,10 @@ use std::io::Write;
 use num_traits::cast::FromPrimitive;
 use num_traits::cast::AsPrimitive;
 use num_traits::float::Float;
+use std::borrow::{Borrow, BorrowMut};
+use std::mem;
+use crate::raster::*;
+use crate::draw::*;
 
 #[cfg(feature="opencv")]
 use opencv::core;
@@ -55,8 +59,6 @@ pub mod cvutils;
 
 pub mod index;
 
-pub mod draw;
-
 pub(crate) mod iter;
 
 /*pub trait Raster {
@@ -79,15 +81,16 @@ pub(crate) mod iter;
 /// bounded at a low and high end, because they are the product of a saturated digital quantization
 /// process. But indexing, following OpenCV convention, happens from the top-left point, following
 /// the matrix convention.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(bound = "")]
 #[repr(C)]
+#[derive(Debug, Clone, Default)]
 pub struct Image<N> 
 where
-    N : Scalar + Clone + Copy + Serialize + DeserializeOwned + Any
+    N : Scalar + Clone + Copy + Any + Debug
 {
-    pub(crate) buf : Vec<N>,
-    ncols : usize
+    pub(crate) buf : Box<[N]>,
+    width : usize,
+    offset : (usize, usize),
+    size : (usize, usize)
 }
 
 // Perhaps rename to GrayImage? (but float image is also gray).
@@ -106,32 +109,6 @@ where
 
 }
 
-impl From<Image<u8>> for Image<f32> {
-
-    fn from(img : Image<u8>) -> Image<f32> {
-        #[cfg(feature="opencv")]
-        {
-            use opencv::prelude::MatTrait;
-            let mut out = Image::<f32>::new_constant(img.height(), img.width(), 0.);
-            let m : opencv::core::Mat = (&img).into();
-            m.convert_to(&mut out, opencv::core::CV_32F, 1.0, 0.0);
-            return out;
-        }
-        unimplemented!()
-    }
-
-}
-
-impl TryFrom<Image<f32>> for Image<u8> {
-
-    type Error = ();
-
-    fn try_from(img : Image<f32>) -> Result<Image<u8>, ()> {
-        unimplemented!()
-    }
-
-}
-
 /*impl<N> Sub<Rhs=Image> for Image<N> {
 
     pub fn sub() -> {
@@ -139,69 +116,56 @@ impl TryFrom<Image<f32>> for Image<u8> {
     }
 }*/
 
-pub enum Conversion {
-
-    // Literal conversion, preserving pixel values
-    Literal,
-
-    // Relative conversion, that maps limits at the source image numeric domain to the limits
-    // of destination image numeric domain
-    Relative,
-
-    // Convert with user-defined scaling factor.
-    Scaled { offset : f32, scale : f32 }
-
-}
-
-fn baseline_conversion<N, M>(to : &mut Image<N>, from : &Window<M>)
-where
-    N : Scalar + Default + Debug + DeserializeOwned + Serialize + Clone + Copy + num_traits::Zero,
-    M : Scalar + Default + num_traits::cast::AsPrimitive<N> + Debug + DeserializeOwned + Serialize + Clone + Copy
-{
-
-    use num_traits::cast::AsPrimitive;
-
-    to.full_window_mut().pixels_mut(1).zip(from.pixels(1)).for_each(|(to_px, from_px)| *to_px = from_px.as_() );
-}
-
-fn baseline_relative_conversion<N, M>(to : &mut Image<N>, from : &Window<M>)
-where
-    N : Scalar + Default + Debug + DeserializeOwned + Serialize + Clone + Copy + num_traits::Zero,
-    M : Scalar + Default + num_traits::cast::AsPrimitive<N> + Debug + DeserializeOwned + Serialize + Clone + Copy
-{
-
-    use num_traits::cast::AsPrimitive;
-
-    /*to.full_window_mut().pixels_mut(1).zip(from.pixels(1))
-        .for_each(|(to_px, from_px)| {
-            let mut rel : f32 = from_px.as_();
-            rel /= M::max();
-            *to_px = rel * N::max();
-        });*/
-    unimplemented!()
-}
-
 impl<N> Image<N>
 where
-    N : Scalar + Copy + Serialize + DeserializeOwned + Any {
+    N : Scalar + Copy + Any {
 
     pub fn shape(&self) -> (usize, usize) {
-        (self.buf.len() / self.ncols, self.ncols)
+        (self.buf.len() / self.width, self.width)
     }
 
     pub fn width(&self) -> usize {
-        self.ncols
+        self.width
     }
 
     pub fn height(&self) -> usize {
-        self.buf.len() / self.ncols
+        self.buf.len() / self.width
+    }
+
+}
+
+fn verify_size_and_alignment<A, B>() {
+    assert!(mem::size_of::<A>() == mem::size_of::<B>());
+    assert!(mem::align_of::<A>() == mem::align_of::<B>());
+}
+
+impl<'a, N> AsRef<Window<'a, N>> for Image<N>
+where
+    N : Scalar + Clone + Copy + Any + Debug
+{
+
+    fn as_ref(&self) -> &Window<'a, N> {
+        verify_size_and_alignment::<Self, Window<'a, N>>();
+        unsafe { mem::transmute(self) }
+    }
+
+}
+
+impl<'a, N> AsMut<WindowMut<'a, N>> for Image<N>
+where
+    N : Scalar + Clone + Copy + Any + Debug
+{
+
+    fn as_mut(&mut self) -> &mut WindowMut<'a, N> {
+        verify_size_and_alignment::<Self, Window<'a, N>>();
+        unsafe { mem::transmute(self) }
     }
 
 }
 
 impl<N> Image<N>
 where
-    N : Scalar + Copy + Default + Zero + Copy + Serialize + DeserializeOwned + Any
+    N : Scalar + Copy + Default + Zero + Copy + Any
 {
 
     /* Mirroring ops are useful to represent image correlations via convolution:
@@ -262,17 +226,17 @@ where
         &mut self.buf[ix]
     }
 
-    pub fn from_iter(iter : impl Iterator<Item=N>, ncols : usize) -> Self {
+    pub fn from_iter(iter : impl Iterator<Item=N>, width : usize) -> Self {
         let buf : Vec<N> = iter.collect();
-        Self::from_vec(buf, ncols)
+        Self::from_vec(buf, width)
     }
 
-    pub fn subsample_from(&mut self, content : &[N], ncols : usize, sample_n : usize) {
+    /*pub fn subsample_from(&mut self, content : &[N], ncols : usize, sample_n : usize) {
         assert!(ncols < content.len(), "ncols smaller than content length");
         let nrows = content.len() / ncols;
         let sparse_ncols = ncols / sample_n;
         let sparse_nrows = nrows / sample_n;
-        self.ncols = sparse_ncols;
+        self.width = sparse_ncols;
         if self.buf.len() != sparse_nrows * sparse_ncols {
             self.buf.clear();
             self.buf.extend((0..(sparse_nrows*sparse_ncols)).map(|_| N::zero() ));
@@ -282,7 +246,7 @@ where
                 self.buf[r*sparse_ncols + c] = content[r*sample_n*ncols + c*sample_n];
             }
         }
-    }
+    }*/
 
     #[cfg(feature="opencv")]
     pub fn equalize_inplace(&mut self) {
@@ -300,19 +264,21 @@ where
         imgproc::equalize_hist(&src, &mut dst);
     }
 
-    pub fn new_from_slice(source : &[N], ncols : usize) -> Self {
+    pub fn new_from_slice(source : &[N], width : usize) -> Self {
         let mut buf = Vec::with_capacity(source.len());
+        let height = buf.len() / width;
         unsafe { buf.set_len(source.len()); }
         buf.copy_from_slice(&source);
-        Self{ buf, ncols }
+        Self{ buf : buf.into_boxed_slice(), width, offset : (0, 0), size : (height, width) }
     }
 
-    pub fn from_vec(buf : Vec<N>, ncols : usize) -> Self {
+    pub fn from_vec(buf : Vec<N>, width : usize) -> Self {
         //if buf.len() as f64 % ncols as f64 != 0.0 {
         //    panic!("Invalid image lenght");
         //}
-        assert!(buf.len() % ncols == 0);
-        Self { buf, ncols }
+        assert!(buf.len() % width == 0);
+        let height = buf.len() / width;
+        Self { buf : buf.into_boxed_slice(), width, offset : (0, 0), size : (height, width) }
     }
 
     pub fn from_rows<const R : usize, const C : usize>(pxs : [[N; C]; R]) -> Self {
@@ -320,21 +286,21 @@ where
         for r in pxs {
             buf.extend(r.into_iter());
         }
-        Self { buf, ncols : C }
+        Self { buf : buf.into_boxed_slice(), width : C, offset : (0, 0), size : (R, C) }
     }
 
-    pub fn new_constant(nrows : usize, ncols : usize, value : N) -> Self {
-        let mut buf = Vec::with_capacity(nrows * ncols);
-        buf.extend((0..(nrows*ncols)).map(|_| value ));
-        Self{ buf, ncols }
+    pub fn new_constant(height : usize, width : usize, value : N) -> Self {
+        let mut buf = Vec::with_capacity(height * width);
+        buf.extend((0..(height*width)).map(|_| value ));
+        Self{ buf : buf.into_boxed_slice(), width, offset : (0, 0), size : (height, width) }
     }
     
-    /// Initializes an image with allocated, but undefined content.
+    /*/// Initializes an image with allocated, but undefined content.
     pub unsafe fn new_empty(nrows : usize, ncols : usize) -> Self {
         let mut buf = Vec::with_capacity(nrows * ncols);
         buf.set_len(nrows * ncols);
-        Self { buf, ncols }
-    }
+        Self { buf : buf.into_boxed_slice, ncols }
+    }*/
 
     pub fn full_window<'a>(&'a self) -> Window<'a, N> {
         self.window((0, 0), self.shape()).unwrap()
@@ -351,7 +317,7 @@ where
             Some(Window {
                 win : &self.buf[..],
                 offset,
-                orig_sz,
+                width : self.width,
                 win_sz : sz
             })
         } else {
@@ -365,7 +331,7 @@ where
             Some(WindowMut {
                 win : &mut self.buf[..],
                 offset,
-                orig_sz,
+                width : self.width,
                 win_sz : sz
             })
         } else {
@@ -375,8 +341,8 @@ where
     
     pub fn downsample(&mut self, src : &Window<N>) {
         assert!(src.is_full());
-        let src_ncols = src.orig_sz.1;
-        let dst_ncols = self.ncols;
+        let src_ncols = src.width;
+        let dst_ncols = self.width;
         
         #[cfg(feature="opencv")]
         unsafe {
@@ -394,8 +360,8 @@ where
         // TODO resize yields a nullpointer when allocating its data.
         #[cfg(feature="ipp")]
         unsafe {
-            let dst_nrows = self.buf.len() / self.ncols;
-            ipputils::resize(src.win, &mut self.buf, src.orig_sz, (dst_nrows, dst_ncols));
+            let dst_nrows = self.buf.len() / self.width;
+            ipputils::resize(src.win, &mut self.buf, src.original_size(), (dst_nrows, dst_ncols));
         }
 
         panic!("Image::downsample requires that crate is compiled with opencv or ipp feature");
@@ -403,33 +369,11 @@ where
         // TODO use resize::resize for native Rust solution
     }
     
-    // TODO call this downsample_convert, and leave alias as a second enum argument:
-    // AntiAliasing::On OR AntiAliasing::Off. Disabling antialiasing calls this implementation
-    // that just iterates over the second buffer; enabling it calls for more costly operations.
-    pub fn downsample_aliased<M>(&mut self, src : &Window<M>) 
-    where
-        M : Scalar + Copy,
-        N : Scalar + From<M>
-    {
-        let (nrows, ncols) = self.shape();
-        let step_rows = src.win_sz.0 / nrows;
-        let step_cols = src.win_sz.1 / ncols;
-        assert!(step_rows == step_cols);
-        sampling::slices::subsample_convert_with_offset(
-            src.win,
-            src.offset,
-            src.win_sz, 
-            (nrows, ncols),
-            step_rows,
-            self.buf.chunks_mut(nrows)
-        );
-    }
-    
     pub fn copy_from(&mut self, other : &Image<N>) {
 
         // IppStatus ippiCopy_8uC1R(const Ipp<datatype>* pSrc, int srcStep, Ipp<datatype>* pDst,
         // int dstStep, IppiSize roiSize);
-        self.buf.copy_from_slice(other.buf.as_slice());
+        self.buf.copy_from_slice(&other.buf[..]);
     }
     
     pub fn copy_from_slice(&mut self, slice : &[N]) {
@@ -463,78 +407,6 @@ where
         self.full_window().windows(sz)
     }
     
-    pub fn convert_from_scaling<M>(&mut self, other : &Window<M>, scale : f32, offset : f32)
-    where
-        M : Scalar + Default + num_traits::cast::AsPrimitive<N> + DeserializeOwned + Serialize
-    {
-        // IppStatus ippiScaleC_<mod>_C1R(const Ipp<srcDatatype>* pSrc, int srcStep, Ipp64f mVal,
-        // Ipp64f aVal, Ipp<dstDatatype>* pDst, int dstStep, IppiSize roiSize, IppHintAlgorithm
-        // hint);
-        unimplemented!()
-    }
-
-    pub fn convert_from_shrinking<M>(&mut self, other : &Window<M>)
-    where
-        M : Scalar + Default + num_traits::cast::AsPrimitive<N> + DeserializeOwned + Serialize
-    {
-        // Alternatively, choose IppHintAlgorithm_ippAlgHintFast IppHintAlgorithm_ippAlgHintAccurate
-        // IppStatus ippiScale_16s8u_C1R(const Ipp<srcDatatype>* pSrc, int srcStep, Ipp<dstDatatype>*
-        //    pDst, int dstStep, IppiSize roiSize, IppHintAlgorithm_ippAlgHintNone);
-        unimplemented!()
-    }
-
-    // TODO make this generic like impl AsRef<Window<M>>, and make self carry a field Window corresponding
-    // to the full window to work as the AsRef implementation, so the user can pass images here as well.
-    pub fn convert_from_stretching<M>(&mut self, other : &Window<M>)
-    where
-        M : Scalar + Default + num_traits::cast::AsPrimitive<N> + DeserializeOwned + Serialize
-    {
-        // This maps srcmin..srcmax at the integer scale of src to the integer scale of destination
-        // IppStatus ippiScale_8u16s_C1R(const Ipp<srcDatatype>* pSrc, int srcStep, Ipp<dstDatatype>* pDst, int dstStep, IppiSize roiSize);
-
-        // This maps srcmin..srcmax at the integer scale of src to a user-defined floating point scale of destination
-        // IppStatus ippiScale_8u32f_C1R(const Ipp8u* pSrc, int srcStep, Ipp32f* pDst, int dstStep, IppiSize roiSize, Ipp32f vMin, Ipp32f vMax);
-
-        // For a full user-defined scale (saturating), where mval is the coefficient and aval is the offset:
-        // IppStatus ippiScaleC_<mod>_C1R(const Ipp<srcDatatype>* pSrc, int srcStep, Ipp64f mVal,
-        // Ipp64f aVal, Ipp<dstDatatype>* pDst, int dstStep, IppiSize roiSize, IppHintAlgorithm
-        // hint);
-
-        unimplemented!()
-    }
-
-    // TODO make this generic like impl AsRef<Window<M>>, and make self carry a field Window corresponding
-    // to the full window to work as the AsRef implementation, so the user can pass images here as well.
-    // This converts the pixel values without any type of scaling.
-    pub fn convert_from<M>(&mut self, other : &Window<M>)
-    where
-        M : Scalar + Default + num_traits::cast::AsPrimitive<N> + DeserializeOwned + Serialize
-    {
-        let ncols = self.ncols;
-        
-        #[cfg(feature="ipp")]
-        {
-            assert!(other.is_full());
-            unsafe { ipputils::convert(other.win, &mut self.buf[..], ncols); }
-            return;
-        }
-
-        #[cfg(feature="opencv")]
-        unsafe {
-            cvutils::convert(
-                other.win, 
-                &mut self.buf[..], 
-                other.orig_sz.1, 
-                Some((other.offset, other.win_sz)),
-                ncols,
-                None
-            );
-            return;
-        }
-        
-        baseline_conversion(self, other);
-    }
-    
     /*pub fn iter(&self) -> impl Iterator<Item=&N> {
         let shape = self.shape();
         iterate_row_wise(&self.buf[..], (0, 0), shape, shape)
@@ -551,7 +423,7 @@ where
 }
 
 impl<N> Image<N>
-    where N : Scalar + Copy + RealField + Copy + Serialize + DeserializeOwned + Any
+    where N : Scalar + Copy + RealField + Copy + Any
 {
 
     pub fn scale_by(&mut self, scalar : N)  {
@@ -587,6 +459,8 @@ impl Image<u8> {
             .unwrap();
     }
 
+    /* TODO create new_from_pattern where Pattern is an Enum with checkerboard
+    as one of its patterns */
     pub fn new_checkerboard(sz : usize, sq_sz : usize) -> Self {
         assert!(sz % sq_sz == 0);
         let mut img = Self::new_constant(sz, sz, 255);
@@ -601,9 +475,9 @@ impl Image<u8> {
         img
     }
 
-    pub fn draw(&mut self, mark : Mark) {
+    /*pub fn draw(&mut self, mark : Mark) {
         self.full_window_mut().draw(mark);
-    }
+    }*/
 
     /// Builds a binary image from a set of points.
     pub fn binary_from_points(nrow : usize, ncol : usize, pts : impl Iterator<Item=(usize, usize)>) -> Self {
@@ -621,7 +495,7 @@ impl Image<f32> {
         let (mut max_ix, mut max) = ((0, 0), f32::NEG_INFINITY);
         for (lin_ix, px) in self.full_window().pixels(1).enumerate() {
             if *px > max {
-                max_ix = index::coordinate_index(lin_ix, self.ncols);
+                max_ix = index::coordinate_index(lin_ix, self.width);
                 max = *px
             }
         }
@@ -631,23 +505,23 @@ impl Image<f32> {
 
 impl<N> Index<(usize, usize)> for Image<N> 
 where
-    N : Scalar + Copy + Serialize + DeserializeOwned + Any
+    N : Scalar + Copy + Any
 {
 
     type Output = N;
 
     fn index(&self, index: (usize, usize)) -> &Self::Output {
-        unsafe { self.buf.get_unchecked(index::linear_index(index, self.ncols)) }
+        unsafe { self.buf.get_unchecked(index::linear_index(index, self.width)) }
     }
 }
 
 impl<N> IndexMut<(usize, usize)> for Image<N>
 where
-    N : Scalar + Copy + Default + Copy + Serialize + DeserializeOwned + Any
+    N : Scalar + Copy + Default + Copy + Any
 {
     
     fn index_mut(&mut self, index: (usize, usize)) -> &mut Self::Output {
-        unsafe { self.buf.get_unchecked_mut(index::linear_index(index, self.ncols)) }
+        unsafe { self.buf.get_unchecked_mut(index::linear_index(index, self.width)) }
     }
     
 }
@@ -656,30 +530,26 @@ where
 /// portion of interest) might be useful to represent overlfowing operations (e.g. draw)
 /// as long as the operation does not violate bounds of the original image. We just have
 /// to be careful to not expose the rest of the image in the API.
+#[repr(C)]
 #[derive(Debug, Clone)]
 pub struct Window<'a, N> 
 where
     N : Scalar
 {
-    // Window offset, with respect to the top-left point (row, col).
-    offset : (usize, usize),
-    
-    // Original image dimensions (height, width). orig_sz.0 MUST be win.len() / orig_sz.1
-    orig_sz : (usize, usize),
-    
-    // This window size.
-    win_sz : (usize, usize),
-    
     // Original image full slice. Might refer to an actual pre-allocated image
     // buffer slice; or a slice from an external source (which is why we don't
     // simply reference image here).
-    win : &'a [N],
+    pub(crate) win : &'a [N],
+
+    // Original image dimensions (height, width). orig_sz.0 MUST be win.len() / orig_sz.1
+    pub(crate) width : usize,
+
+    // Window offset, with respect to the top-left point (row, col).
+    pub(crate) offset : (usize, usize),
     
-    // Stack-allocated arrays which keep the slices for the chunks(.) method.
-    // chunks : ([&[N]; 2], [&[N]; 4], [&[N]; 8], [&[N]; 16]);
-    
-    // TODO remove
-    // transposed : bool
+    // This window size.
+    pub(crate) win_sz : (usize, usize),
+
 }
 
 pub struct Neighborhood<'a, N>
@@ -697,6 +567,10 @@ impl<'a, N> Window<'a, N>
 where
     N : Scalar + Copy
 {
+
+    // pub fn original_size(&self) -> (usize, usize) {
+    //    (self.win.len() / self.width, self.width)
+    // }
 
     pub fn rect(&self) -> (usize, usize, usize, usize) {
         let off = self.offset();
@@ -720,7 +594,7 @@ where
     pub unsafe fn get_unchecked(&self, index : (usize, usize)) -> &N {
         let off_ix = (self.offset.0 + index.0, self.offset.1 + index.1);
         let (limit_row, limit_col) = (self.offset.0 + self.win_sz.0, self.offset.1 + self.win_sz.1);
-        unsafe { self.win.get_unchecked(index::linear_index(off_ix, self.orig_sz.1)) }
+        unsafe { self.win.get_unchecked(index::linear_index(off_ix, self.original_size().1)) }
     }
 
     pub fn offset_ptr(&self) -> *const N {
@@ -763,7 +637,7 @@ where
     where
         usize : From<T>,
         T : Copy,
-        N : Mul<Output=N> + MulAssign + Copy + Serialize + DeserializeOwned
+        N : Mul<Output=N> + MulAssign + Copy
     {
         let ix = (self.height() - usize::from(pt[1]), usize::from(pt[0]));
         &self[ix]
@@ -774,10 +648,9 @@ where
     }
 
     pub fn is_full(&'a self) -> bool {
-        self.orig_sz == self.win_sz
+        self.original_size() == self.win_sz
     }
     
-
     /*pub fn shape(&self) -> (usize, usize) {
         self.win_sz
     }
@@ -792,16 +665,16 @@ where
 
     pub fn sub_window(&'a self, offset : (usize, usize), dims : (usize, usize)) -> Option<Window<'a, N>> {
         let new_offset = (self.offset.0 + offset.0, self.offset.1 + offset.1);
-        if new_offset.0 + dims.0 <= self.orig_sz.0 && new_offset.1 + dims.1 <= self.orig_sz.1 {
+        if new_offset.0 + dims.0 <= self.original_size().0 && new_offset.1 + dims.1 <= self.original_size().1 {
             Some(Self {
                 win : self.win,
                 offset : new_offset,
-                orig_sz : self.orig_sz,
+                width : self.width,
                 // transposed : self.transposed,
                 win_sz : dims
             })
         } else {
-            // println!("Requested offset : {:?}; Requested dims : {:?}; Original image size : {:?}", offset, dims, self.orig_sz);
+            // println!("Requested offset : {:?}; Requested dims : {:?}; Original image size : {:?}", offset, dims, self.original_size());
             None
         }
     }
@@ -844,7 +717,7 @@ where
     }
 
     pub fn rows(&self) -> impl Iterator<Item=&[N]> + Clone {
-        let stride = self.orig_sz.1;
+        let stride = self.original_size().1;
         let tl = self.offset.0 * stride + self.offset.1;
         (0..self.win_sz.0).map(move |i| {
             let start = tl + i*stride;
@@ -857,7 +730,7 @@ where
     pub fn pixels(&self, spacing : usize) -> impl Iterator<Item=&N> + Clone {
         assert!(spacing > 0, "Spacing should be at least one");
         assert!(self.width() % spacing == 0 && self.height() % spacing == 0, "Spacing should be integer divisor of width and height");
-        iterate_row_wise(self.win, self.offset, self.win_sz, self.orig_sz, spacing).step_by(spacing)
+        iterate_row_wise(self.win, self.offset, self.win_sz, self.original_size(), spacing).step_by(spacing)
     }
 
 
@@ -865,13 +738,13 @@ where
 
 impl<'a, N> Window<'a, N>
 where
-    N : Scalar + Mul<Output=N> + MulAssign + Copy + Copy + Serialize + DeserializeOwned + Any
+    N : Scalar + Mul<Output=N> + MulAssign + Copy + Copy + Any
 {
 
     /*pub unsafe fn get_unchecked_u16(&self, index : (u16, u16)) -> &N {
         let off_ix = (self.offset.0 + index.0, self.offset.1 + index.1);
         let (limit_row, limit_col) = (self.offset.0 + self.win_sz.0, self.offset.1 + self.win_sz.1);
-        unsafe { self.win.get_unchecked(index::linear_index(off_ix, self.orig_sz.1)) }
+        unsafe { self.win.get_unchecked(index::linear_index(off_ix, self.original_size().1)) }
     }*/
 
     // pub unsafe fn linear_index(&self, ix : usize) -> N {
@@ -955,7 +828,7 @@ where
             Some(Self {
                 win : src,
                 offset,
-                orig_sz : (nrows, full_ncols),
+                width : full_ncols,
                 win_sz : dims
             })
         } else {
@@ -996,15 +869,15 @@ where
             // Dynamic::new(ncols)),
             win : src,
             offset : (0, 0),
-            orig_sz : (nrows, ncols),
+            width : ncols,
             win_sz : (nrows, ncols),
             // transposed : true
         })
     }
     
     /*pub fn linear_index(&self, ix : usize) -> &N {
-        let offset = self.orig_sz.1 * offset.0 + offset.1;
-        let row = ix / self.orig_sz.1;
+        let offset = self.original_size().1 * offset.0 + offset.1;
+        let row = ix / self.original_size().1;
         unsafe{ self.win.get_unchecked(offset + ix) }
     }*/
 
@@ -1039,7 +912,7 @@ where
         if ix >= self.win_sz.0 {
             return None;
         }
-        let stride = self.orig_sz.1;
+        let stride = self.original_size().1;
         let tl = self.offset.0 * stride + self.offset.1;
         let start = tl + ix*stride;
         Some(&self.win[start..(start+self.win_sz.1)])
@@ -1055,14 +928,14 @@ where
 
     /// Iterates over pairs of pixels within a row, carrying the column index of the left element at first position
     pub fn horizontal_pixel_pairs(&'a self, row : usize, comp_dist : usize) -> Option<impl Iterator<Item=(usize, (&'a N, &'a N))>> {
-        Some(iter::horizontal_row_iterator(self.row(row)?, comp_dist))
+        Some(crate::raster::horizontal_row_iterator(self.row(row)?, comp_dist))
     }
 
     pub fn vertical_pixel_pairs(&'a self, col : usize, comp_dist : usize) -> Option<impl Iterator<Item=(usize, (&'a N, &'a N))>> {
         if col >= self.win_sz.1 {
             return None;
         }
-        Some(iter::vertical_col_iterator(self.rows(), comp_dist, col))
+        Some(crate::raster::vertical_col_iterator(self.rows(), comp_dist, col))
     }
 
     /// Iterate over one of the lower-triangular diagonals the image, starting at given row.
@@ -1074,7 +947,7 @@ where
         comp_dist : usize,
     ) -> Option<impl Iterator<Item=((usize, usize), (&'a N, &'a N))>> {
         if row < self.height() {
-            Some(iter::diagonal_right_row_iterator(self.rows(), comp_dist, (row, 0)))
+            Some(crate::raster::diagonal_right_row_iterator(self.rows(), comp_dist, (row, 0)))
         } else {
             None
         }
@@ -1086,7 +959,7 @@ where
         comp_dist : usize,
     ) -> Option<impl Iterator<Item=((usize, usize), (&'a N, &'a N))>> {
         if col < self.width() {
-            Some(iter::diagonal_right_row_iterator(self.rows(), comp_dist, (0, col)))
+            Some(crate::raster::diagonal_right_row_iterator(self.rows(), comp_dist, (0, col)))
         } else {
             None
         }
@@ -1098,7 +971,7 @@ where
         comp_dist : usize,
     ) -> Option<impl Iterator<Item=((usize, usize), (&'a N, &'a N))>> {
         if row < self.height() {
-            Some(iter::diagonal_left_row_iterator(self.rows(), comp_dist, (row, self.width()-1)))
+            Some(crate::raster::diagonal_left_row_iterator(self.rows(), comp_dist, (row, self.width()-1)))
         } else {
             None
         }
@@ -1110,7 +983,7 @@ where
         comp_dist : usize,
     ) -> Option<impl Iterator<Item=((usize, usize), (&'a N, &'a N))>> {
         if col < self.width() {
-            Some(iter::diagonal_left_row_iterator(self.rows(), comp_dist, (0, col)))
+            Some(crate::raster::diagonal_left_row_iterator(self.rows(), comp_dist, (0, col)))
         } else {
             None
         }
@@ -1418,7 +1291,7 @@ fn window_iter() {
 
 impl<N> Index<(usize, usize)> for Window<'_, N>
 where
-    N : Scalar
+    N : Scalar + Copy
 {
 
     type Output = N;
@@ -1427,7 +1300,7 @@ where
         let off_ix = (self.offset.0 + index.0, self.offset.1 + index.1);
         let (limit_row, limit_col) = (self.offset.0 + self.win_sz.0, self.offset.1 + self.win_sz.1);
         if off_ix.0 < limit_row && off_ix.1 < limit_col {
-            unsafe { self.win.get_unchecked(index::linear_index(off_ix, self.orig_sz.1)) }
+            unsafe { self.win.get_unchecked(index::linear_index(off_ix, self.original_size().1)) }
         } else {
             panic!("Invalid window index: {:?}", index);
         }
@@ -1436,7 +1309,7 @@ where
 
 impl<N> Index<(u16, u16)> for Window<'_, N>
 where
-    N : Scalar
+    N : Scalar + Copy
 {
 
     type Output = N;
@@ -1460,213 +1333,10 @@ where
 
 }*/
 
-pub fn iterate_row_wise<N>(
-    src : &[N], 
-    offset : (usize, usize), 
-    win_sz : (usize, usize), 
-    orig_sz : (usize, usize),
-    row_spacing : usize
-) -> impl Iterator<Item=&N> + Clone {
-    let start = orig_sz.1 * offset.0 + offset.1;
-    (0..win_sz.0).step_by(row_spacing).map(move |i| unsafe {
-        let row_offset = start + i*orig_sz.1;
-        src.get_unchecked(row_offset..(row_offset+win_sz.1))
-    }).flatten()
-}
-
-trait BorrowedRegion {
-
-    type Slice;
-
-    fn create(offset : (usize, usize), win_sz : (usize, usize), orig_sz : (usize, usize), win : Self::Slice) -> Self;
-
-    fn offset(&self) -> &(usize, usize);
-
-    fn size(&self) -> &(usize, usize);
-
-    fn original_size(&self) -> &(usize, usize);
-
-    // This takes the implementor because for mutable windows,
-    // the only way to safely give the slice is to let go of the
-    // current object.
-    unsafe fn original_slice(&mut self) -> Self::Slice;
-
-}
-
-impl<'a, T> BorrowedRegion for Window<'a, T>
-where
-    T : Scalar + Copy
-{
-
-    type Slice = &'a [T];
-
-    fn create(offset : (usize, usize), win_sz : (usize, usize), orig_sz : (usize, usize), win : Self::Slice) -> Self {
-        Window { offset, win_sz, orig_sz, win }
-    }
-
-    fn offset(&self) -> &(usize, usize) {
-        &self.offset
-    }
-
-    fn size(&self) -> &(usize, usize) {
-        &self.win_sz
-    }
-
-    fn original_size(&self) -> &(usize, usize) {
-        &self.orig_sz
-    }
-
-    unsafe fn original_slice(&mut self) -> Self::Slice {
-        self.win
-    }
-
-}
-
-impl<'a, T> BorrowedRegion for WindowMut<'a, T>
-where
-    T : Scalar + Copy //+ Serialize + DeserializeOwned + Any + Zero + From<u8>
-{
-
-    type Slice = &'a mut [T];
-
-    fn create(offset : (usize, usize), win_sz : (usize, usize), orig_sz : (usize, usize), win : Self::Slice) -> Self {
-        WindowMut { offset, win_sz, orig_sz, win }
-    }
-
-    fn offset(&self) -> &(usize, usize) {
-        &self.offset
-    }
-
-    fn size(&self) -> &(usize, usize) {
-        &self.win_sz
-    }
-
-    fn original_size(&self) -> &(usize, usize) {
-        &self.orig_sz
-    }
-
-    unsafe fn original_slice(&mut self) -> Self::Slice {
-        std::slice::from_raw_parts_mut(self.win.as_mut_ptr(), self.win.len())
-    }
-
-}
-
-pub struct WindowIterator<'a, N>
-where
-    N : Scalar,
-{
-    source : Window<'a, N>,
-    
-    // This child window size
-    size : (usize, usize),
-
-    // Index the most ancestral window possible.
-    curr_pos : (usize, usize),
-
-    /// Vertical increment. Either U1 or Dynamic.
-    step_v : usize,
-
-    /// Horizontal increment. Either U1 or Dynamic.
-    step_h : usize,
-
-}
-
-impl<'a, N> Iterator for WindowIterator<'a, N>
-where
-    N : Scalar + Copy //+ Clone + Copy + Serialize + Zero + From<u8>
-{
-
-    type Item = Window<'a, N>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        /*let within_horiz = self.curr_pos.0  + self.size.0 <= (self.source.offset.0 + self.source.win_sz.0);
-        let within_vert = self.curr_pos.1 + self.size.1 <= (self.source.offset.1 + self.source.win_sz.1);
-        let within_bounds = within_horiz && within_vert;
-        let win = if within_bounds {
-            Some(Window { 
-                offset : self.curr_pos,
-                win_sz : self.size,
-                orig_sz : self.source.orig_sz,
-                win : &self.source.win
-            })
-        } else {
-            None
-        };
-        self.curr_pos.1 += self.step_h;
-        if self.curr_pos.1 + self.size.1 > (self.source.offset.1 + self.source.win_sz.1) {
-            self.curr_pos.1 = self.source.offset.1;
-            self.curr_pos.0 += self.step_v;
-        }
-        win*/
-        iterate_windows(&mut self.source, &mut self.curr_pos, self.size, (self.step_h, self.step_v))
-    }
-
-}
-
-pub struct WindowIteratorMut<'a, N>
-where
-    N : Scalar + Copy,
-{
-
-    source : WindowMut<'a, N>,
-
-    // This child window size
-    size : (usize, usize),
-
-    // Index the most ancestral window possible.
-    curr_pos : (usize, usize),
-
-    /// Vertical increment. Either U1 or Dynamic.
-    step_v : usize,
-
-    /// Horizontal increment. Either U1 or Dynamic.
-    step_h : usize,
-
-}
-
-impl<'a, N> Iterator for WindowIteratorMut<'a, N>
-where
-    N : Scalar + Copy
-{
-
-    type Item = WindowMut<'a, N>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        iterate_windows(&mut self.source, &mut self.curr_pos, self.size, (self.step_h, self.step_v))
-    }
-
-}
-
-fn iterate_windows<R, S>(
-    s : &mut R,
-    curr_pos : &mut (usize, usize),
-    size : (usize, usize),
-    (step_h, step_v) : (usize, usize)
-) -> Option<R>
-where
-    R : BorrowedRegion<Slice=S>
-{
-    let (offset, win_sz) = (*s.offset(), *s.size());
-    let within_horiz = curr_pos.0  + size.0 <= (offset.0 + win_sz.0);
-    let within_vert = curr_pos.1 + size.1 <= (offset.1 + win_sz.1);
-    let within_bounds = within_horiz && within_vert;
-    let win = if within_bounds {
-        Some(BorrowedRegion::create(*curr_pos, size, *s.original_size(), unsafe { s.original_slice() }))
-    } else {
-        None
-    };
-    curr_pos.1 += step_h;
-    if curr_pos.1 + size.1 > (offset.1 + win_sz.1) {
-        curr_pos.1 = offset.1;
-        curr_pos.0 += step_v;
-    }
-    win
-}
-
 #[cfg(feature="opencv")]
 impl<N> opencv::core::ToInputArray for Image<N>
 where
-    N : Scalar + Copy + Default + Zero + Serialize + DeserializeOwned + Any
+    N : Scalar + Copy + Default + Zero + Any
 {
 
     fn input_array(&self) -> opencv::Result<opencv::core::_InputArray> {
@@ -1679,7 +1349,7 @@ where
 #[cfg(feature="opencv")]
 impl<N> opencv::core::ToOutputArray for Image<N>
 where
-    N : Scalar + Copy + Default + Zero + Serialize + DeserializeOwned + Any
+    N : Scalar + Copy + Default + Zero + Any
 {
 
     fn output_array(&mut self) -> opencv::Result<opencv::core::_OutputArray> {
@@ -1692,7 +1362,7 @@ where
 #[cfg(feature="opencv")]
 impl<N> opencv::core::ToInputArray for Window<'_, N>
 where
-    N : Scalar + Copy + Default + Zero + Serialize + DeserializeOwned + Any
+    N : Scalar + Copy + Default + Zero + Any
 {
 
     fn input_array(&self) -> opencv::Result<opencv::core::_InputArray> {
@@ -1705,7 +1375,7 @@ where
 #[cfg(feature="opencv")]
 impl<N> opencv::core::ToOutputArray for WindowMut<'_, N>
 where
-    N : Scalar + Copy + Default + Zero + Serialize + DeserializeOwned + Any
+    N : Scalar + Copy + Default + Zero + Any
 {
 
     fn output_array(&mut self) -> opencv::Result<opencv::core::_OutputArray> {
@@ -1729,7 +1399,7 @@ pub fn median_blur(win : &Window<'_, u8>, output : WindowMut<'_, u8>, kernel : u
 #[cfg(feature="opencv")]
 impl<N> From<core::Mat> for Image<N>
 where
-    N : Scalar + Copy + Default + Zero + Serialize + DeserializeOwned + Any + opencv::core::DataType
+    N : Scalar + Copy + Default + Zero + Any + opencv::core::DataType
 {
 
     fn from(m : core::Mat) -> Image<N> {
@@ -1756,12 +1426,12 @@ where
 #[cfg(feature="opencv")]
 impl<N> Into<core::Mat> for &Image<N>
 where
-    N : Scalar + Copy + Default + Zero + Serialize + DeserializeOwned + Any
+    N : Scalar + Copy + Default + Zero + Any
 {
 
     fn into(self) -> core::Mat {
         let sub_slice = None;
-        let stride = self.ncols;
+        let stride = self.width;
         unsafe{ cvutils::slice_to_mat(&self.buf[..], stride, sub_slice) }
         // self.full_window().into()
     }
@@ -1770,12 +1440,12 @@ where
 #[cfg(feature="opencv")]
 impl<N> Into<core::Mat> for &mut Image<N>
 where
-    N : Scalar + Copy + Default + Zero + Serialize + DeserializeOwned + Any
+    N : Scalar + Copy + Default + Zero + Any
 {
 
     fn into(self) -> core::Mat {
         let sub_slice = None;
-        let stride = self.ncols;
+        let stride = self.width;
         unsafe{ cvutils::slice_to_mat(&self.buf[..], stride, sub_slice) }
         // self.full_window_mut().into()
     }
@@ -1790,7 +1460,7 @@ where
 
     fn into(self) -> core::Mat {
         let sub_slice = Some((self.offset, self.win_sz));
-        let stride = self.orig_sz.1;
+        let stride = self.original_size().1;
         unsafe{ cvutils::slice_to_mat(self.win, stride, sub_slice) }
     }
 }
@@ -1803,7 +1473,7 @@ where
 
     fn into(self) -> core::Mat {
         let sub_slice = Some((self.offset, self.win_sz));
-        let stride = self.orig_sz.1;
+        let stride = self.original_size().1;
         unsafe{ cvutils::slice_to_mat(self.win, stride, sub_slice) }
     }
 }
@@ -1817,7 +1487,7 @@ where
 
     fn into(self) -> core::Mat {
         let sub_slice = Some((self.offset, self.win_sz));
-        let stride = self.orig_sz.1;
+        let stride = self.original_size().1;
         unsafe{ cvutils::slice_to_mat(self.win, stride, sub_slice) }
     }
 }
@@ -1830,45 +1500,9 @@ where
 
     fn into(self) -> core::Mat {
         let sub_slice = Some((self.offset, self.win_sz));
-        let stride = self.orig_sz.1;
+        let stride = self.original_size().1;
         unsafe{ cvutils::slice_to_mat(self.win, stride, sub_slice) }
     }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Mark {
-
-    // Position, square lenght and color
-    Cross((usize, usize), usize, u8),
-    
-    // Position, square lenght and color
-    Corner((usize, usize), usize, u8),
-    
-    // Start and end positions and color
-    Line((usize, usize), (usize, usize), u8),
-    
-    // Position, digit value, digit size and color
-    Digit((usize, usize), usize, usize, u8),
-
-    // Position, label, digit value, size and color
-    // Label((usize, usize), &'static str, usize, u8),
-
-    // Center, radius and color
-    Circle((usize, usize), usize, u8),
-
-    /// A dense circle
-    Dot((usize, usize), usize, u8),
-
-    /// TL pos, size and color
-    Rect((usize, usize), (usize, usize), u8),
-
-    /// Arbitrary shape coordinates; whether to close it; and color
-    Shape(Vec<(usize, usize)>, bool, u8),
-
-    Text((usize, usize), String, u8),
-
-    Arrow((usize, usize), (usize, usize), usize, u8)
-    
 }
 
 /*impl TryFrom<rhai::Dynamic> for Mark {
@@ -1881,34 +1515,44 @@ pub enum Mark {
 
 }*/
 
+#[repr(C)]
 #[derive(Debug)]
 pub struct WindowMut<'a, N> 
 where
     N : Scalar + Copy
 {
-    // Window offset, with respect to the top-left point (row, col).
-    offset : (usize, usize),
+
+    // Original image full slice.
+    pub(crate) win : &'a mut [N],
     
     // Original image size.
-    orig_sz : (usize, usize),
+    pub(crate) width : usize,
+
+    // Window offset, with respect to the top-left point (row, col).
+    pub(crate) offset : (usize, usize),
     
     // This window size.
-    win_sz : (usize, usize),
-    
-    // Original image full slice.
-    win : &'a mut [N],
+    pub(crate) win_sz : (usize, usize),
+
 }
 
 impl<'a, N> WindowMut<'a, N>
 where
-    N : Scalar + Copy + Debug
+    N : Scalar + Copy + Debug + Default
 {
+
+    pub fn clear(&'a mut self)
+    where
+        N : Zero
+    {
+        self.pixels_mut(1).for_each(|px| *px = N::zero() );
+    }
 
     // TODO rewrite this using safe rust.
     #[allow(mutable_transmutes)]
     pub fn clone_owned(&'a self) -> Image<N>
     where
-        N : Copy + Default + Zero + Serialize + DeserializeOwned + 'static
+        N : Copy + Default + Zero + 'static
     {
         let mut buf = Vec::new();
         let ncols = self.win_sz.1;
@@ -1931,7 +1575,7 @@ where
     pub unsafe fn get_unchecked_mut(mut self, index : (usize, usize)) -> &'a mut N {
         let off_ix = (self.offset.0 + index.0, self.offset.1 + index.1);
         let (limit_row, limit_col) = (self.offset.0 + self.win_sz.0, self.offset.1 + self.win_sz.1);
-        unsafe { self.win.get_unchecked_mut(index::linear_index(off_ix, self.orig_sz.1)) }
+        unsafe { self.win.get_unchecked_mut(index::linear_index(off_ix, self.original_size().1)) }
     }
 
     pub fn offset_ptr_mut(mut self) -> *mut N {
@@ -1960,7 +1604,7 @@ where
             // Dynamic::new(ncols)),
             win : src,
             offset : (0, 0),
-            orig_sz : (nrows, ncols),
+            width : ncols,
             win_sz : (nrows, ncols),
         })
     }
@@ -1976,7 +1620,7 @@ where
             Some(Self {
                 win : src,
                 offset,
-                orig_sz : (nrows, full_ncols),
+                width : full_ncols,
                 win_sz : dims
             })
         } else {
@@ -1986,13 +1630,14 @@ where
 
     /// We might just as well make this take self by value, since the mutable reference to self will be
     /// invalidated by the borrow checker when we have the child.
-    pub fn sub_window_mut(&'a mut self, offset : (usize, usize), dims : (usize, usize)) -> Option<WindowMut<'a, N>> {
+    // pub fn sub_window_mut(&'a mut self, offset : (usize, usize), dims : (usize, usize)) -> Option<WindowMut<'a, N>> {
+    pub fn sub_window_mut(mut self, offset : (usize, usize), dims : (usize, usize)) -> Option<WindowMut<'a, N>> {
         let new_offset = (self.offset.0 + offset.0, self.offset.1 + offset.1);
-        if new_offset.0 + dims.0 <= self.orig_sz.0 && new_offset.1 + dims.1 <= self.orig_sz.1 {
+        if new_offset.0 + dims.0 <= self.original_size().0 && new_offset.1 + dims.1 <= self.original_size().1 {
             Some(Self {
                 win : self.win,
                 offset : (self.offset.0 + offset.0, self.offset.1 + offset.1),
-                orig_sz : self.orig_sz,
+                width : self.width,
                 win_sz : dims
             })
         } else {
@@ -2044,7 +1689,7 @@ impl<'a> WindowMut<'a, u8> {
 
 }
 
-impl WindowMut<'_, u8> {
+impl<'a> WindowMut<'a, u8> {
 
     /// Gamma-corrects, i.e. multiplies input by input^(1/gamma) and normalize.
     pub fn gamma_correct_inplace(&mut self, gamma : f32) {
@@ -2074,7 +1719,7 @@ impl WindowMut<'_, u8> {
         }
     }
 
-    pub fn fill_with_byte<'a>(&'a mut self, byte : u8) {
+    pub fn fill_with_byte(&'a mut self, byte : u8) {
         // self.rows_mut().for_each(|row| std::ptr::write_bytes(&mut row[0] as *mut _, byte, row.len()) );
         /*for ix in 0..self.win_sz.0 {
             let row = self.row_mut(ix);
@@ -2086,7 +1731,7 @@ impl WindowMut<'_, u8> {
         /*let src_win = unsafe {
             Window {
                 offset : (self.offset.0, self.offset.1),
-                orig_sz : self.orig_sz,
+                orig_sz : self.original_size(),
                 win_sz : self.win_sz,
                 win : std::slice::from_raw_parts(self.win.as_ptr(), self.win.len()),
             }
@@ -2107,162 +1752,13 @@ impl WindowMut<'_, u8> {
         self.draw(Mark::Rect((rect.0, rect.1), (rect.2, rect.3), color));
     }
 
-    pub fn draw(&mut self, mark : Mark) {
-        /*let slice_ptr = self.win.data.as_mut_slice().as_mut_ptr();
-        let ptr_offset = slice_ptr as u64 - (self.orig_sz.0*(self.offset.1 - 1)) as u64 - self.offset.0 as u64;
-        let orig_ptr = ptr_offset as *mut u8;
-        let orig_slice = unsafe { std::slice::from_raw_parts_mut(orig_ptr, self.orig_sz.0 * self.orig_sz.1) };*/
-        match mark {
-            Mark::Cross(pos, sz, col) => {
-                let cross_pos = (self.offset.0 + pos.0, self.offset.1 + pos.1);
-                draw::draw_cross(
-                    self.win,
-                    self.orig_sz,
-                    cross_pos,
-                    col,
-                    sz
-                );
-            },
-            Mark::Corner(pos, sz, col) => {
-                let center_pos = (self.offset.0 + pos.0, self.offset.1 + pos.1);
-                draw::draw_corners(
-                    self.win,
-                    self.orig_sz,
-                    center_pos,
-                    col,
-                    sz
-                );
-            },
-            Mark::Line(src, dst, color) => {
-                let src_pos = (self.offset.0 + src.0, self.offset.1 + src.1);
-                let dst_pos = (self.offset.0 + dst.0, self.offset.1 + dst.1);
-                
-                #[cfg(feature="opencv")]
-                unsafe {
-                    cvutils::draw_line(self.win, self.orig_sz.1, src_pos, dst_pos, color);
-                    return;
-                }
-                
-                draw::draw_line(
-                    self.win,
-                    self.orig_sz,
-                    src_pos,
-                    dst_pos,
-                    color
-                );
-            },
-            Mark::Rect(tl, sz, color) => {
-                let tr = (tl.0, tl.1 + sz.1);
-                let br = (tl.0 + sz.0, tl.1 + sz.1);
-                let bl = (tl.0 + sz.0, tl.1);
-                self.draw(Mark::Line(tl, tr, color));
-                self.draw(Mark::Line(tr, br, color));
-                self.draw(Mark::Line(br, bl, color));
-                self.draw(Mark::Line(bl, tl, color));
-            },
-            Mark::Digit(pos, val, sz, color) => {
-                let tl_pos = (self.offset.0 + pos.0, self.offset.1 + pos.1);
-
-                #[cfg(feature="opencv")]
-                unsafe {
-                    cvutils::write_text(self.win, self.orig_sz.1, tl_pos, &val.to_string()[..], color);
-                    return;
-                }
-                
-                draw::draw_digit_native(self.win, self.orig_sz.1, tl_pos, val, sz, color);
-            },
-            /*Mark::Label(pos, msg, sz, color) => {
-                let tl_pos = (self.offset.0 + pos.0, self.offset.1 + pos.1);
-
-                #[cfg(feature="opencv")]
-                unsafe {
-                    cvutils::write_text(self.win, self.orig_sz.1, tl_pos, msg, color);
-                    return;
-                }
-
-                panic!("Label draw require 'opencv' feature");
-            },*/
-            Mark::Circle(pos, radius, color) => {
-                let center_pos = (self.offset.0 + pos.0, self.offset.1 + pos.1);
-
-                #[cfg(feature="opencv")]
-                unsafe {
-                    cvutils::draw_circle(self.win, self.orig_sz.1, center_pos, radius, color);
-                    return;
-                }
-
-                panic!("Circle draw require 'opencv' feature");
-            },
-            Mark::Dot(pos, radius, color) => {
-                for i in 0..self.height() {
-                    for j in 0..self.width() {
-                        if crate::feature::shape::point_euclidian((i, j), pos) <= radius as f32 {
-                            self[(i, j)] = color;
-                        }
-                    }
-                }
-            },
-            Mark::Shape(pts, close, col) => {
-                let n = pts.len();
-                if n < 2 {
-                    return;
-                }
-                for (p1, p2) in pts.iter().take(n-1).zip(pts.iter().skip(1)) {
-                    self.draw(Mark::Line(*p1, *p2, col));
-                }
-
-                if close {
-                    self.draw(Mark::Line(pts[0], pts[pts.len()-1], col));
-                }
-            },
-            Mark::Text(tl_pos, txt, color) => {
-
-                #[cfg(feature="opencv")]
-                {
-                    unsafe { 
-                        cvutils::write_text(
-                            self.win, 
-                            self.orig_sz.1, 
-                            (self.offset.0 + tl_pos.0, self.offset.1 + tl_pos.1),
-                            &txt[..], 
-                            color
-                        ); 
-                    }
-                    return;
-                }
-
-                println!("Warning: Text drawing require opencv feature");
-            },
-            Mark::Arrow(from, to, thickness, color) => {
-
-                #[cfg(feature="opencv")]
-                {
-                    let mut out : opencv::core::Mat = self.into();
-                    opencv::imgproc::arrowed_line(
-                        &mut out,
-                        opencv::core::Point2i::new(from.1 as i32, from.0 as i32),
-                        opencv::core::Point2i::new(to.1 as i32, to.0 as i32),
-                        opencv::core::Scalar::from(color as f64),
-                        thickness as i32,
-                        opencv::imgproc::LINE_8,
-                        0,
-                        0.1
-                    );
-                    return;
-                }
-
-                println!("Warning: Arrow drawing require opencv feature");
-            }
-        }
-    }
-
 }
 
 pub(crate) unsafe fn create_immutable<'a>(win : &'a WindowMut<'a, u8>) -> Window<'a, u8> {
     unsafe {
         Window {
             offset : (win.offset.0, win.offset.1),
-            orig_sz : win.orig_sz,
+            width : win.width,
             win_sz : win.win_sz,
             win : std::slice::from_raw_parts(win.win.as_ptr(), win.win.len()),
         }
@@ -2277,7 +1773,7 @@ where
     unsafe fn create_immutable_without_lifetime(&self, src : (usize, usize), dim : (usize, usize)) -> Window<'_, N> {
         Window {
             offset : (self.offset.0 + src.0, self.offset.1 + src.1),
-            orig_sz : self.orig_sz,
+            orig_sz : self.original_size(),
             win_sz : dim,
             win : std::slice::from_raw_parts(self.win.as_ptr(), self.win.len()),
         }
@@ -2287,7 +1783,7 @@ where
     unsafe fn create_mutable_without_lifetime(&mut self, src : (usize, usize), dim : (usize, usize)) -> WindowMut<'_, N> {
         WindowMut {
             offset : (self.offset.0 + src.0, self.offset.1 + src.1),
-            orig_sz : self.orig_sz,
+            orig_sz : self.original_size(),
             win_sz : dim,
             win : std::slice::from_raw_parts_mut(self.win.as_mut_ptr(), self.win.len()),
         }
@@ -2317,7 +1813,7 @@ where
     }
 
     pub fn orig_sz(&self) -> (usize, usize) {
-        self.orig_sz
+        self.original_size()
     }
 
     pub fn full_slice(&'a self) -> &'a [N] {
@@ -2344,7 +1840,7 @@ where
 {
 
     pub fn rows_mut(&'a mut self) -> impl Iterator<Item=&'a mut [N]> {
-        let stride = self.orig_sz.1;
+        let stride = self.original_size().1;
         let tl = self.offset.0 * stride + self.offset.1;
         (0..self.win_sz.0).map(move |i| {
             let start = tl + i*stride;
@@ -2368,12 +1864,11 @@ where
             })
     }
 
-
 }
 
 impl<'a, N> WindowMut<'a, N>
 where
-    N : Scalar + Copy + Mul<Output=N> + MulAssign + PartialOrd + Serialize + DeserializeOwned
+    N : Scalar + Copy + Mul<Output=N> + MulAssign + PartialOrd + Default
 {
 
     pub fn fill(&'a mut self, color : N) {
@@ -2402,16 +1897,19 @@ where
         let src_win = unsafe {
             Window {
                 offset : (self.offset.0 + src.0, self.offset.1 + src.1),
-                orig_sz : self.orig_sz,
+                width : self.original_size().1,
                 win_sz : dim,
                 win : std::slice::from_raw_parts(self.win.as_ptr(), self.win.len()),
             }
         };
-        self.sub_window_mut(dst, dim).unwrap().copy_from(&src_win);
+
+        // TODO not working since we made sub_window_mut take by value.
+        // self.sub_window_mut(dst, dim).unwrap().copy_from(&src_win);
+        unimplemented!()
     }
 
     pub fn row_mut(&'a mut self, i : usize) -> &'a mut [N] {
-        let stride = self.orig_sz.1;
+        let stride = self.original_size().1;
         let tl = self.offset.0 * stride + self.offset.1;
         let start = tl + i*stride;
         let slice = &self.win[start..(start+self.win_sz.1)];
@@ -2446,7 +1944,7 @@ where
     type Output = N;
 
     fn index(&self, index: (usize, usize)) -> &Self::Output {
-        unsafe { self.win.get_unchecked(index::linear_index((self.offset.0 + index.0, self.offset.1 + index.1), self.orig_sz.1)) }
+        unsafe { self.win.get_unchecked(index::linear_index((self.offset.0 + index.0, self.offset.1 + index.1), self.original_size().1)) }
     }
 }
 
@@ -2456,7 +1954,30 @@ where
 {
     
     fn index_mut(&mut self, index: (usize, usize)) -> &mut Self::Output {
-        unsafe { self.win.get_unchecked_mut(index::linear_index((self.offset.0 + index.0, self.offset.1 + index.1), self.orig_sz.1)) }
+        unsafe { self.win.get_unchecked_mut(index::linear_index((self.offset.0 + index.0, self.offset.1 + index.1), self.original_size().1)) }
+    }
+
+}
+
+impl<N> Index<(u16, u16)> for WindowMut<'_, N>
+where
+    N : Scalar + Copy
+{
+
+    type Output = N;
+
+    fn index(&self, index: (u16, u16)) -> &Self::Output {
+        self.index((index.0 as u16, index.1 as u16))
+    }
+}
+
+impl<N> IndexMut<(u16, u16)> for WindowMut<'_, N>
+where
+    N : Scalar + Copy
+{
+
+    fn index_mut(&mut self, index: (u16, u16)) -> &mut Self::Output {
+        self.index_mut((index.0 as u16, index.1 as u16))
     }
     
 }
@@ -2522,7 +2043,7 @@ where
 
 impl<N> AsRef<[N]> for Image<N>
 where
-    N : Scalar + Copy + Serialize + DeserializeOwned + Any
+    N : Scalar + Copy + Any
 {
     fn as_ref(&self) -> &[N] {
         &self.buf[..]
@@ -2531,7 +2052,7 @@ where
 
 impl<N> AsMut<[N]> for Image<N> 
 where
-    N : Scalar + Copy + Serialize + DeserializeOwned + Any
+    N : Scalar + Copy + Any
 {
     fn as_mut(&mut self) -> &mut [N] {
         &mut self.buf[..]
@@ -2544,7 +2065,7 @@ where
     f64 : From<N>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", io::build_pgm_string_from_slice(&self.win, self.orig_sz.1))
+        write!(f, "{}", io::build_pgm_string_from_slice(&self.win, self.original_size().1))
     }
 }
 
@@ -2554,7 +2075,7 @@ where
     f64 : From<N>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", io::build_pgm_string_from_slice(&self.win, self.orig_sz.1))
+        write!(f, "{}", io::build_pgm_string_from_slice(&self.win, self.original_size().1))
     }
 }
 
@@ -2564,7 +2085,7 @@ where
     f64 : From<N>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", io::build_pgm_string_from_slice(&self.buf[..], self.ncols))
+        write!(f, "{}", io::build_pgm_string_from_slice(&self.buf[..], self.width))
     }
 }*/
 
@@ -3034,3 +2555,16 @@ pub fn from_nalgebra3(m : nalgebra::Matrix3<f64>) -> opencv::core::Mat {
 
     mat
 }
+
+/*impl<'a, N> Borrow<Window<'a, N>> for Image<N>
+where
+    N : Scalar + Clone + Copy + Serialize + DeserializeOwned + Any + Zero + Default
+{
+
+    fn borrow(&self) -> &Window<'a, N> {
+        &self.full_window()
+    }
+
+}*/
+
+

@@ -3,6 +3,7 @@ use nalgebra::Scalar;
 use std::cmp::Ordering;
 use std::convert::AsRef;
 use std::collections::HashMap;
+use crate::draw::*;
 
 /*pub struct RegionCache {
 
@@ -136,6 +137,26 @@ pub struct RasterLines {
 /// running average of the pixel color values (at a slightly higher computational cost).
 #[derive(Debug, Clone)]
 pub struct Rasterizer(Vec<Vec<(usize, usize, u8)>>);
+
+pub fn overlap_ratio(a : (usize, usize), b : (usize, usize)) -> f32 {
+    let overlap_ext = (
+        (a.1 as f32 - b.0 as f32).max(0.) -
+        (a.0 as f32 - b.0 as f32).max(0.) -
+        (a.1 as f32 - b.1 as f32).max(0.)
+    ).max(0.);
+
+    let a_ext = (a.1 as f32 - a.0 as f32);
+    let b_ext = (b.1 as f32 - b.0 as f32);
+
+    // The largest possible overlap is the same size as the smallest interval.
+    assert!(overlap_ext <= a_ext && overlap_ext <= b_ext);
+
+    if a_ext > b_ext {
+        overlap_ext / a_ext
+    } else {
+        overlap_ext / b_ext
+    }
+}
 
 pub fn interval_overlap(a : (usize, usize), b : (usize, usize)) -> bool {
     /*(a.0 <= b.0 && a.1 >= b.0) ||
@@ -656,7 +677,7 @@ impl Rasterizer {
         }
     }
 
-    pub fn contours(&self, abs_diff : u8) -> (Vec<Contour>, Vec<u8>) {
+    pub fn contours(&self, abs_diff : u8, req_overlap : f32) -> (Vec<Contour>, Vec<u8>) {
         let mut open_contours : Vec<OpenContour> = Vec::new();
         let mut closed_contours : Vec<Contour> = Vec::new();
         let mut closed_colors : Vec<u8> = Vec::new();
@@ -673,14 +694,13 @@ impl Rasterizer {
 
         // Carries index of opened patch and the new (start, end) columns.
         let mut editions : HashMap<usize, (usize, usize, u8)> = HashMap::new();
-        // let mut overlaps : Vec<usize> = Vec::new();
 
         for r in 1..(self.0.len()) {
 
             // Iterate over the segments in this raster row.
             for (this_c1, this_c2, this_color) in &self.0[r] {
 
-                assert!(open_contours.iter().all(|c| c.last_row == r-1 /*|| c.last_row == r*/ ));
+                assert!(open_contours.iter().all(|c| c.last_row == r-1 ));
 
                 // Take any of the potential overlaps
                 let res_prev_ix = open_contours.binary_search_by(|open| {
@@ -697,16 +717,20 @@ impl Rasterizer {
 
                     let mut matched_color = false;
                     let mut best_ix = fst_overlap;
-                    let mut largest_top = 0;
+                    // let mut largest_top = 0;
+                    let mut largest_overlap = 0.;
                     let mut closest_color = i16::MAX;
                     for ix in fst_overlap..(lst_overlap+1) {
+                        let ovlp_ratio = overlap_ratio((open_contours[ix].fst_col_last_row, open_contours[ix].lst_col_last_row), (*this_c1, *this_c2));
                         let color_match = (open_contours[ix].col as i16 - *this_color as i16).abs() <= abs_diff as i16;
-                        let sz_diff = open_contours[ix].lst_col_last_row - open_contours[ix].fst_col_last_row;
+                        // let sz_diff = open_contours[ix].lst_col_last_row - open_contours[ix].fst_col_last_row;
                         let col_diff = (open_contours[ix].col as i16 - *this_color as i16).abs();
-                        if color_match && sz_diff >= largest_top /*col_diff < closest_color*/ {
+                        // if color_match && sz_diff >= largest_top  {
+                        if color_match && ovlp_ratio > largest_overlap {
                             best_ix = ix;
                             matched_color = true;
-                            largest_top = sz_diff;
+                            // largest_top = sz_diff;
+                            largest_overlap = ovlp_ratio;
                             closest_color = col_diff;
                         }
                     }
@@ -723,9 +747,18 @@ impl Rasterizer {
                             // likely to be start and end of contours.
 
                             // TODO consider the sequence with the closest color instead.
-                            if editions[&best_ix].1 - editions[&best_ix].0 < *this_c2 - *this_c1 {
-                            // if (open_contours[best_ix].col as i16 - editions[&best_ix].2 as i16).abs() > (open_contours[best_ix].col as i16 - *this_color as i16).abs() {
-                                // Previous is smaller - update edition to current one and innaugurate a new at the old, smaller one.
+                            // if editions[&best_ix].1 - editions[&best_ix].0 < *this_c2 - *this_c1 {
+
+                            let prev_ratio = overlap_ratio(
+                                (open_contours[best_ix].fst_col_last_row, open_contours[best_ix].lst_col_last_row),
+                                (editions[&best_ix].0, editions[&best_ix].1)
+                            );
+                            let curr_ratio = overlap_ratio(
+                                (open_contours[best_ix].fst_col_last_row, open_contours[best_ix].lst_col_last_row),
+                                (*this_c1, *this_c2)
+                            );
+                            // if editions[&best_ix].1 - editions[&best_ix].0 < *this_c2 - *this_c1 {
+                            if prev_ratio < curr_ratio {
 
                                 // innaugurate_contour(&mut new_contours, r, editions[&best_ix].0, editions[&best_ix].1, editions[&best_ix].2);
                                 editions.get_mut(&best_ix).unwrap().0 = *this_c1;
@@ -745,8 +778,6 @@ impl Rasterizer {
                         innaugurate_contour(&mut new_contours, r, *this_c1, *this_c2, *this_color);
                     }
                 } else {
-
-                    // println!("{:?} had no overlaps", (r, this_c1, this_c2));
 
                     // Innaugurate new contour. Insert at another vector so they won't be matched now
                     // and mess with the indices of OpenContours.
@@ -819,10 +850,10 @@ fn assert_multiple(vals : &[usize], by : usize) {
 }
 
 fn assign_row_iter<'a, N>(
-    out : &'a mut WindowMut<'a, N>, 
-    a : &'a Window<'a, N>, 
+    out : &'a mut WindowMut<'a, N>,
+    a : &'a Window<'a, N>,
     b : &'a Window<'a, N>
-) -> impl Iterator<Item=(&'a mut [N], (&'a [N], &'a [N]))> 
+) -> impl Iterator<Item=(&'a mut [N], (&'a [N], &'a [N]))>
     where N : Scalar + Copy
 {
     out.rows_mut().zip(a.rows().zip(b.rows()))
@@ -858,13 +889,13 @@ pub fn sub_mut_u8<'a>(out : &'a mut WindowMut<'a, u8>, a : &'a Window<'a, u8>, b
 }
 
 // Draws each raster with its color, and two black points delimiting each raster.
-pub fn draw_segments(raster : &Rasterizer, mut img : WindowMut<'_, u8>) {
+pub fn draw_segments<'a>(raster : &Rasterizer, mut img : WindowMut<'a, u8>) {
 
-    use crate::image::Mark;
+    use crate::draw::Mark;
 
     for (r, segs) in raster.segments().iter().enumerate() {
         for s in segs {
-            img.draw(crate::image::Mark::Line((r, s.0), (r, s.1), s.2));
+            img.draw(crate::draw::Mark::Line((r, s.0), (r, s.1), s.2));
             img[(r,s.0)] = 0;
             img[(r,s.1)] = 0;
         }

@@ -1,10 +1,12 @@
 use crate::image::*;
-use std::collections::VecDeque;
+use std::collections::{VecDeque, HashMap};
 use std::iter::FromIterator;
 use std::mem;
 use std::convert::AsRef;
 use std::fmt::Debug;
 use nalgebra::Scalar;
+
+pub mod raster;
 
 /* pub trait Region {
 
@@ -70,6 +72,16 @@ impl Region for Contour {
 
 }
 */
+
+// Searches for pixels that are likely to be near the center of homogeneous
+// regions, since all their neighbors have approximately the same color as the pixel.
+// Pivotal pixels are good candidates for seeds for Filler algorithms.
+pub fn pivotal_pixels() -> Vec<(usize, usize)> {
+
+    let mut piv_pxs = Vec::new();
+
+    piv_pxs
+}
 
 /// Holds an array with all the pixel coordinates. It is recommended to use patches only
 /// on small and/or coarse images, or images for which you expect the regions of interest
@@ -510,7 +522,7 @@ where
 /// pairs or the minimum window size is achieved. QuadTree might also be useful when processing videos,
 /// where large homogeneous regions are expected to be stabe (just sample a few pixels randomly or uniformly
 /// or at its edges to verify if the region is still stable at a next frame. If it is, ignore it for
-/// processing at the current frame)
+/// processing at the current frame). This is basically the split-and-merge segmentation strategy.
 pub fn quad_tree_segmenter<'a>(
     win : &'a Window<'a, u8>,
     crit : fn(u8,u8)->bool,
@@ -566,3 +578,37 @@ TODO a better algorithm starts by comparing all pairwise pixels within windows o
 whole window. Then, we merge those smaller windows by comparing the first pixel of each subwindow,
 and so on and so forth, until windows get to the size of length/2.
 */
+
+/// Builds a LUT between labels and pixels, such that the color for each label
+/// is the color of the first pixel found with that label.
+pub fn recolor_with_labels<'a>(mut img : WindowMut<'a, u8>, labels : &'a Window<'a, u8>) {
+
+    assert!(img.width() == labels.width() && img.height() == labels.height());
+
+    let mut lut = HashMap::new();
+
+    /*for (px, lbl) in img.pixels_mut(1).zip(labels.pixels(1)) {
+        match lut.get(lbl) {
+            Some(color) => {
+                *px = *color;
+            },
+            None => {
+                lut.insert(lbl, *px);
+                // Just keep the pixel color the first time this label is found.
+            }
+        }
+    }*/
+    for r in 0..img.height() {
+        for c in 0..img.width() {
+            let lbl = img[(r, c)];
+            match lut.get(&lbl) {
+                Some(color) => {
+                    img[(r, c)] = *color;
+                },
+                None => {
+                    lut.insert(lbl, img[(r, c)]);
+                }
+            }
+        }
+    }
+}

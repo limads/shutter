@@ -11,6 +11,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::iter::FromIterator;
 
+// Allocates a buffer from a function that writes how many bytes should be allocated.
 pub fn allocate_buffer_with<F>(f : F) -> Vec<u8>
 where
     F : Fn(*mut i32)->IppStatus
@@ -44,7 +45,7 @@ pub fn step_and_size_for_window_mut<N>(win : &WindowMut<'_, N>) -> (i32, crate::
 where
     N : Scalar + Clone + Copy + Serialize + DeserializeOwned + Any
 {
-    let win_row_bytes = row_size_bytes::<N>(win.orig_sz.1);
+    let win_row_bytes = row_size_bytes::<N>(win.width);
     (win_row_bytes, window_mut_size(win))
 }
 
@@ -52,7 +53,7 @@ pub fn step_and_size_for_window<N>(win : &Window<'_, N>) -> (i32, crate::foreign
 where
     N : Scalar + Clone + Copy + Serialize + DeserializeOwned + Any
 {
-    let win_row_bytes = row_size_bytes::<N>(win.orig_sz.1);
+    let win_row_bytes = row_size_bytes::<N>(win.width);
     /*let pad_front = win.offset.1 * mem::size_of::<N>();
     let pad_back = (win.orig_sz.1 - (win.offset.1 + win.width())) * mem::size_of::<N>();
     (pad_front + win_row_bytes + pad_back, window_size(win))*/
@@ -165,29 +166,47 @@ where
             &mut spec_size,
             &mut init_buf_size
         );
+        // assert!(spec_size > 0);
+        // assert!(init_buf_size > 0);
         check_status("Resize get size", status_code);
         status_get_size = Some(status_code);
+    } else {
+        panic!("Image expected to be u8");
     }
+
+    // Allocating an initialization buffer with init_buf_size is only required for
+    // lanczos and cubic filters. For nearest and linear, we can do without it, since
+    // ippiresizenearestinit and ippiresizelinearinit do not take an initialization
+    // buffer argument.
 
     // Then initialize structure using the out parameters:
     // IppiResizeSpec_<T> has only types for T = 32f or T = 64f
-    let spec : *mut IppiResizeSpec_32f = ptr::null_mut();
+    let spec_bytes = Vec::from_iter((0..(spec_size as usize)).map(|_| 0u8 ));
+    let init_buf_bytes = Vec::from_iter((0..(init_buf_size as usize)).map(|_| 0u8 ));
+    let spec : *mut IppiResizeSpec_32f = mem::transmute::<_, _>(&spec_bytes[0]);
+    let init_buf : *mut u8 = mem::transmute::<_, _>(&init_buf_bytes[0]);
+
+    mem::forget(spec_bytes);
+    mem::forget(init_buf_bytes);
 
     if is_u8 {
         let status_code = ippiResizeNearestInit_8u(src_size, dst_size, spec);
         check_status("Resize init", status_code);
         status_init = Some(status_code);
+    } else {
+        panic!("Image expected to be u8");
     }
 
     // Get buffer size for the current spec
     let n_channels = 1;
-    let mut buf_sz = 0;
+    let mut work_buf_sz = 0;
 
     let mut buf_ptr : *mut ffi::c_void = ptr::null_mut();
     if is_u8 {
-        let status_code = ippiResizeGetBufferSize_8u(spec, dst_size, n_channels, &mut buf_sz as *mut _);
+        let status_code = ippiResizeGetBufferSize_8u(spec, dst_size, n_channels, &mut work_buf_sz as *mut _);
         check_status("Allocate resize buffer", status_code);
-        buf_ptr = ipps::ippsMalloc_8u(buf_sz) as *mut ffi::c_void;
+        assert!(work_buf_sz > 0);
+        buf_ptr = ipps::ippsMalloc_8u(work_buf_sz) as *mut ffi::c_void;
         status_get_buf_size = Some(status_code);
     }
 
@@ -221,6 +240,8 @@ where
         );
         ipps::ippsFree(buf_ptr);
         status = Some(status_code);
+    } else {
+        panic!("Expected u8 image");
     }
 
     match status {

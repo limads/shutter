@@ -687,17 +687,64 @@ pub struct PatchBorder {
 
 impl Patch {
 
-    pub fn inner_pixels<'a>(
+    /*/// This assumes the contour is ordered and complete (there is one per row) and convex (there aren't holes or openings).
+    pub fn alt_inner_pixels(
         &'a self,
         win : &'a Window<'_, u8>,
         px_spacing : usize
+    ) -> impl Iterator<Item=((u16, u16), u8)> + 'a {
+        let mut last_left_ix = 0;
+        let mut last_right_ix = 0;
+
+        let mut rows = Vec::new();
+        let mut r = self.outer_rect.0;
+
+        while r < self.outer_rect.0 + self.outer_rect.2 {
+            if let Some(pos1) = self.pxs.position(|px| px.0 == r ) {
+
+                let left_slice = self.pxs[..pos1];
+                let right_slice = self.pxs[(pos1+1)..];
+                let opt_pos_2 = left_slice.position(|px| px.0 == r )
+                    .or_else(|| right_slice.position(|px| px.0 == r ).map(|p| p + pos1+1) );
+
+                // First pair of rows has been found.
+                if let Some(pos2) = opt_pos_2 {
+                    if pxs[pos1].1 < pxs[pos2].1 {
+                        last_left_ix = pos1;
+                        last_right_ix = pos2;
+                    } else {
+                        last_left_ix = pos2;
+                        last_right_ix = pos1;
+                    }
+
+                    rows.push((pxs[last_left_ix].1..´pxs[last_right_ix].1).map(move |c| ((row, c), win[(row, c)]) ));
+                }
+            }
+        }
+
+        rows.into_iter().flatten()
+    }*/
+
+    // This works for a boundary too.
+    pub fn inner_pixels<'a>(
+        &'a self,
+        win : &'a Window<'_, u8>,
+        px_spacing : u16
     ) -> impl Iterator<Item=((u16, u16), u8)> + 'a {
         let mut pxs = self.pxs.clone();
         pxs.sort_by(|a, b| a.0.cmp(&b.0) );
 
         let mut rows = Vec::new();
         let mut inner = Vec::new();
+
+        let mut last_row = None;
         for (row, row_px) in &pxs.into_iter().group_by(|px| px.0 ) {
+
+            if let Some(last) = last_row {
+                if row - last < px_spacing {
+                    continue;
+                }
+            }
 
             // Sort by cols within rows
             inner.clear();
@@ -706,7 +753,8 @@ impl Patch {
 
             // Pairs of pixels within row (now sorted by col) must be contiguous in the patch.
             for (p1, p2) in inner.iter().clone().zip(inner.iter().skip(1)) {
-                rows.push((p1.1..p2.1).map(move |c| ((row, c), win[(row, c)]) ));
+                rows.push((p1.1..p2.1).step_by(px_spacing as usize).map(move |c| ((row, c), win[(row, c)]) ));
+                last_row = Some(row as u16);
             }
         }
 

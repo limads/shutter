@@ -1,10 +1,12 @@
-use std::cmp::{Ord, Eq};
+use std::cmp::{Ord, PartialOrd, Eq};
 use std::ops::Div;
 use crate::image::*;
 use crate::global;
 use serde::{Serialize, de::DeserializeOwned};
 use std::any::Any;
 use std::fmt::Debug;
+use num_traits::*;
+use nalgebra::Scalar;
 
 /*/// Stretch the image profile such that the gray levels make the best use of the dynamic range.
 /// (Myler & Weeks, 1993). gray_max and gray_min are min and max intensities at the current image.
@@ -25,7 +27,7 @@ pub fn equalize() {
 
 pub fn point_div_mut<'a, N>(win : &'a Window<'a, N>, by : N, dst : &'a mut WindowMut<'a, N>)
 where
-    N : Div<Output=N> + Copy + Serialize + DeserializeOwned + Any + Debug + Eq
+    N : Scalar + Div<Output=N> + Copy + Serialize + DeserializeOwned + Any + Debug
 {
     dst.pixels_mut(1).zip(win.pixels(1)).for_each(|(dst, src)| *dst = *src / by );
 }
@@ -37,6 +39,17 @@ where
 {
     let max = global::max(win);
     point_div_mut(win, max, dst);
+}
+
+/// Normalizes the image, so that the sum of its pixels is 1.0. Useful for convolution filters,
+/// which must preserve the original image norm so that convolution output does not overflow its integer
+/// or float maximum.
+pub fn normalize_unit_mut<'a, N>(win : &'a Window<'a, N>, dst : &'a mut WindowMut<'a, N>)
+where
+    N : Div<Output=N> + Copy + PartialOrd + Serialize + DeserializeOwned + Any + Debug + Zero
+{
+    let sum = global::sum(win);
+    point_div_mut(win, sum, dst);
 }
 
 /*IppStatus ippiAdd_<mod> ( const Ipp<datatype>* pSrc1 , int src1Step , const Ipp<datatype>*

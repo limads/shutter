@@ -7,13 +7,50 @@ use serde_json;
 use crate::image::Image;
 use crate::image::WindowMut;
 use crate::feature::patch::Patch;
-use crate::image::Window;
+use crate::image::*;
+use crate::draw::*;
+use crate::convert::*;
+use std::str::FromStr;
 
 /*#[no_mangle]
 pub extern "C" fn convolve_f32(img : &[f32], img_ncol : i64, kernel : &[f32], kernel_ncol : i64, out : &[f32]) -> i64 {
     use crate::local::*;
     0
 }*/
+
+/*#[no_mangle]
+pub extern "C" fn convert_u8_f32(input : &[u8], width : i64, output : &mut [f32], mode : &str) -> i64 {
+    if let Ok(conv) = Conversion::from_str(mode) {
+        WindowMut::from_slice(output, width as usize).unwrap()
+            .convert_from(&Window::from_slice(input, width as usize).unwrap(), conv);
+        0
+    } else {
+        -1
+    }
+}*/
+
+#[no_mangle]
+pub extern "C" fn convert_f32_u8(input : &[u8], width : i64, output : &mut [f32], mode : &str) -> i64 {
+    if let Ok(conv) = Conversion::from_str(mode) {
+        WindowMut::from_slice(output, width as usize).unwrap()
+            .convert_from(&(Window::from_slice(input, width as usize).unwrap()), conv);
+        0
+    } else {
+        -1
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn encode_rgb(input : &[u8], output : &mut [u8]) -> i64 {
+    if output.len() == 3*input.len() {
+        for ix in 0..output.len() {
+            output[ix] = input[(ix / 3)];
+        }
+        0
+    } else {
+        -1
+    }
+}
 
 #[no_mangle]
 pub extern "C" fn fit_circle(xs : &[f64], ys : &[f64], center : &mut [f64], radius : &mut f64) -> i64 {
@@ -31,8 +68,8 @@ pub extern "C" fn fit_circle(xs : &[f64], ys : &[f64], center : &mut [f64], radi
 }
 
 #[no_mangle]
-pub extern "C" fn image_draw(buf : &mut [u8], width : i64, mark : &str) -> i64 {
-    let mark : Result<crate::image::Mark, _> = serde_json::from_str(mark);
+pub extern "C" fn image_draw<'a>(buf : &'a mut [u8], width : i64, mark : &str) -> i64 {
+    let mark : Result<crate::draw::Mark, _> = serde_json::from_str(mark);
     if let Ok(mark) = mark {
         if let Some(mut win) = WindowMut::from_slice(buf, width as usize) {
             win.draw(mark);
@@ -116,7 +153,7 @@ pub extern "C" fn segment_all(
 }
 
 #[no_mangle]
-pub extern "C" fn draw_patches(buf : &mut [u8], width : i64, patches : &str, color : i64) -> i64 {
+pub extern "C" fn draw_patches<'a>(buf : &mut [u8], width : i64, patches : &str, color : i64) -> i64 {
     let mut win = WindowMut::from_slice(buf, width as usize).unwrap();
     let patches : Vec<Patch> = serde_json::from_str(&patches).unwrap();
     for patch in &patches {

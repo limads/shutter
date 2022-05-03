@@ -5,9 +5,15 @@
 /// Common optical manipulations (calculation of focal depth, magnification, camera calibration, lens distortion correction),
 pub mod optics;
 
+pub mod draw;
+
 pub mod warp;
 
 pub mod edge;
+
+pub mod convert;
+
+pub mod resize;
 
 // Contains algorithms to partition the images over homogeneous regions, with a criterion for
 // homegeneity that is algorithm-specific. Contains dense and sparse data structures to represent
@@ -109,6 +115,22 @@ pub mod foreign;
 #[cfg(feature="gstreamer-base")]
 #[cfg(feature="gstreamer-video")]
 pub mod processor;
+
+pub mod prelude {
+
+    pub use super::image::*;
+
+    pub use super::raster::*;
+
+    pub use super::local::*;
+
+    pub use super::convert::*;
+
+    pub use super::resize::*;
+
+    pub use super::draw::*;
+
+}
 
 /*#[cfg(feature="mlua")]
 impl mlua::UserData for crate::image::Image<u8> {
