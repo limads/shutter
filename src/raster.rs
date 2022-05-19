@@ -71,7 +71,7 @@ where
     }
 
     fn original_size(&self) -> (usize, usize) {
-        (self.win.len() / self.width, self.width)
+        (self.original_height(), self.width)
     }
 
     unsafe fn original_slice(&mut self) -> Self::Slice {
@@ -108,7 +108,7 @@ where
     }
 
     fn original_size(&self) -> (usize, usize) {
-        (self.win.len() / self.width, self.width)
+        (self.original_height(), self.width)
     }
 
     fn original_width(&self) -> usize {

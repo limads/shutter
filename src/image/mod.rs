@@ -151,6 +151,33 @@ where
 
 }
 
+impl<'a, N> Borrow<Window<'a, N>> for Image<N>
+where
+    N : Scalar + Clone + Copy + Any + Debug
+{
+
+    fn borrow(&self) -> &Window<'a, N> {
+        verify_size_and_alignment::<Self, Window<'a, N>>();
+        unsafe { mem::transmute(self) }
+    }
+
+}
+
+/*// This is violating aliasing guarantees. But unless we implement this,
+// impl BorrowMut<WindowMut> for Image isn't possible, since it assumes
+// impl Borrow<WindowMut> for Image.
+impl<'a, N> BorrowMut<WindowMut<'a, N>> for Image<N>
+where
+    N : Scalar + Clone + Copy + Any + Debug
+{
+
+    fn borrow(&self) -> &Window<'a, N> {
+        verify_size_and_alignment::<Self, WindowMut<'a, N>>();
+        unsafe { mem::transmute(self) }
+    }
+
+}*/
+
 impl<'a, N> AsMut<WindowMut<'a, N>> for Image<N>
 where
     N : Scalar + Clone + Copy + Any + Debug
@@ -162,6 +189,20 @@ where
     }
 
 }
+
+/*// Not possible, since requires Borrow<WindowMut> as bound. But Borrow<WindowMut>
+// conflicts with Borrow<Window>
+impl<'a, N> BorrowMut<WindowMut<'a, N>> for Image<N>
+where
+    N : Scalar + Clone + Copy + Any + Debug
+{
+
+    fn borrow_mut(&mut self) -> &mut WindowMut<'a, N> {
+        verify_size_and_alignment::<Self, Window<'a, N>>();
+        unsafe { mem::transmute(self) }
+    }
+
+}*/
 
 impl<N> Image<N>
 where
@@ -248,22 +289,6 @@ where
         }
     }*/
 
-    #[cfg(feature="opencv")]
-    pub fn equalize_inplace(&mut self) {
-        // assert!(self.shape() == dst.shape());
-        let src : core::Mat = self.full_window().into();
-        let mut dst : core::Mat = self.full_window_mut().into();
-        imgproc::equalize_hist(&src, &mut dst);
-    }
-
-    #[cfg(feature="opencv")]
-    pub fn equalize_mut(&mut self, dst : &mut Image<N>) {
-        assert!(self.shape() == dst.shape());
-        let src : core::Mat = self.full_window().into();
-        let mut dst : core::Mat = dst.full_window_mut().into();
-        imgproc::equalize_hist(&src, &mut dst);
-    }
-
     pub fn new_from_slice(source : &[N], width : usize) -> Self {
         let mut buf = Vec::with_capacity(source.len());
         let height = buf.len() / width;
@@ -339,35 +364,22 @@ where
         }
     }
     
-    pub fn downsample(&mut self, src : &Window<N>) {
+    /*pub fn downsample(&mut self, src : &Window<N>) {
         assert!(src.is_full());
         let src_ncols = src.width;
         let dst_ncols = self.width;
-        
-        #[cfg(feature="opencv")]
-        unsafe {
-            cvutils::resize(
-                src.win,
-                &mut self.buf[..],
-                src_ncols, 
-                None,
-                dst_ncols,
-                None
-            );
-            return;
-        }
         
         // TODO resize yields a nullpointer when allocating its data.
         #[cfg(feature="ipp")]
         unsafe {
             let dst_nrows = self.buf.len() / self.width;
-            ipputils::resize(src.win, &mut self.buf, src.original_size(), (dst_nrows, dst_ncols));
+            ipputils::resize(src.win, &mut self.buf);
         }
 
         panic!("Image::downsample requires that crate is compiled with opencv or ipp feature");
 
         // TODO use resize::resize for native Rust solution
-    }
+    }*/
     
     pub fn copy_from(&mut self, other : &Image<N>) {
 
@@ -533,8 +545,8 @@ where
 #[repr(C)]
 #[derive(Debug, Clone)]
 pub struct Window<'a, N> 
-where
-    N : Scalar
+//where
+//    N : Scalar
 {
     // Original image full slice. Might refer to an actual pre-allocated image
     // buffer slice; or a slice from an external source (which is why we don't
@@ -552,7 +564,7 @@ where
 
 }
 
-pub struct Neighborhood<'a, N>
+pub struct WindowNeighborhood<'a, N>
 where
     N : Scalar
 {
@@ -561,6 +573,96 @@ where
     pub top : Window<'a, N>,
     pub right : Window<'a, N>,
     pub bottom : Window<'a, N>,
+}
+
+impl<'a, N> Window<'a, N> {
+
+    /*pub const fn from_constant<const L : usize, const H : usize>(val : N) -> Window<'static, N> {
+        let arr : [N; L] = [val; L];
+        Window {
+            win : &arr,
+            width : (L / H),
+            offset : (0, 0),
+            win_sz : (H, L / H)
+        }
+    }*/
+
+    pub const fn from_static<const S : usize, const W : usize>(array : &'static [N; S]) -> Window<'static, N> {
+
+        if S % W != 0 {
+            panic!("Invalid image dimensions");
+        }
+
+        Window {
+            win : array,
+            width : W,
+            offset : (0, 0),
+            win_sz : (S / W, W)
+        }
+    }
+
+}
+
+impl<N> Image<N>
+where
+    N : Scalar + Copy + Any + 'static
+{
+    pub fn pixel_is<T>(&self) -> bool
+    where
+        T : 'static
+    {
+        (&self[(0usize, 0usize)] as &dyn Any).is::<T>()
+    }
+}
+
+impl<'a, N> Window<'a, N>
+where
+    N : Scalar + Copy + Any + 'static
+{
+    pub fn pixel_is<T>(&self) -> bool
+    where
+        T : 'static
+    {
+        (&self[(0usize, 0usize)] as &dyn Any).is::<T>()
+    }
+}
+
+impl<'a, N> WindowMut<'a, N>
+where
+    N : Scalar + Copy + Any + 'static
+{
+
+    /// Splits this mutable window horizontally
+    pub fn split_at(mut self, row : usize) -> (WindowMut<'a, N>, WindowMut<'a, N>) {
+        assert!(self.win.len() % (self.width * row) == 0);
+        let offset = self.offset;
+        let win_sz = self.win_sz;
+        let width = self.width;
+        let (win1, win2) = self.win.split_at_mut(self.width * row);
+
+        let w1 = WindowMut {
+            win : win1,
+            width,
+            offset,
+            win_sz : (row, win_sz.1),
+        };
+        let w2 = WindowMut {
+            win : win2,
+            width,
+            offset : (offset.0 + row, offset.1),
+            win_sz : (win_sz.0 - row, win_sz.1),
+        };
+        assert!(w1.win.len() == w1.win_sz.0 * w1.win_sz.1);
+        assert!(w2.win.len() == w2.win_sz.0 * w2.win_sz.1);
+        (w1, w2)
+    }
+
+    pub fn pixel_is<T>(&self) -> bool
+    where
+        T : 'static
+    {
+        (&self[(0usize, 0usize)] as &dyn Any).is::<T>()
+    }
 }
 
 impl<'a, N> Window<'a, N>
@@ -697,9 +799,32 @@ where
     N : Scalar + Copy
 {
 
+    pub fn shrink_to_subsample(&'a self, by : usize) -> Option<Window<'a, N>> {
+        let height = shrink_to_divisor(self.height(), by)?;
+        let width = shrink_to_divisor(self.width(), by)?;
+        self.sub_window((0, 0), (height, width))
+    }
+
+    pub fn byte_stride(&self) -> usize {
+        std::mem::size_of::<N>() * self.width
+    }
+
+    pub fn as_ptr(&self) -> *const N {
+        // self.win.as_ptr()
+        &self[(0usize,0usize)] as *const _
+    }
+
+    pub fn full_slice(&self) -> &[N] {
+        &self.win[..]
+    }
+
     pub fn shape(&self) -> (usize, usize) {
         // self.win.shape()
         self.win_sz
+    }
+
+    pub fn area(&self) -> usize {
+        self.width() * self.height()
     }
 
     pub fn width(&self) -> usize {
@@ -712,6 +837,7 @@ where
         self.win_sz.0
     }
 
+    // same as self.area
     pub fn len(&self) -> usize {
         self.win_sz.0 * self.win_sz.1
     }
@@ -732,6 +858,83 @@ where
         assert!(self.width() % spacing == 0 && self.height() % spacing == 0, "Spacing should be integer divisor of width and height");
         iterate_row_wise(self.win, self.offset, self.win_sz, self.original_size(), spacing).step_by(spacing)
     }
+
+    pub fn labeled_neighborhoods(&'a self) -> impl Iterator<Item=((usize, usize), PixelNeighborhood<N>)> + 'a {
+        (0..(self.width()*self.height()))
+            .map(move |ix| {
+                let pos = (ix / self.width(), ix % self.width());
+                let neigh = self.neighboring_pixels(pos).unwrap();
+                (pos, neigh)
+            })
+    }
+
+    pub fn neighboring_pixels(&'a self, pos : (usize, usize)) -> Option<PixelNeighborhood<N>> {
+
+        if pos.0 > 0 && pos.1 > 0 && pos.0 < self.height() - 1 && pos.1 < self.width() - 1 {
+
+            // Center
+            let (tl, tr) = (top_left(pos), top_right(pos));
+            let (bl, br) = (bottom_left(pos), bottom_right(pos));
+            let (t, b) = (top(pos), bottom(pos));
+            let (l, r) = (left(pos), right(pos));
+            Some(PixelNeighborhood::Full([
+                self[tl], self[t], self[tr],
+                self[l], self[r],
+                self[bl], self[b], self[br]
+            ], 0))
+        } else if pos.0 == 0 {
+
+            // Top row
+
+            if pos.1 == 0 {
+                // Top row left corner
+                let (b, br, r) = (bottom(pos), bottom_right(pos), right(pos));
+                Some(PixelNeighborhood::Corner([self[b], self[br], self[r]], 0))
+            } else if pos.1 == self.width()-1 {
+                // Top right right corner
+                let (l, bl, b) = (left(pos), bottom_left(pos), bottom(pos));
+                Some(PixelNeighborhood::Corner([self[l], self[bl], self[b]], 0))
+            } else {
+                // Top row NOT corner
+                let (l, r, bl, b, br) = (left(pos), right(pos), bottom_left(pos), bottom(pos), bottom_right(pos));
+                Some(PixelNeighborhood::Edge([self[l], self[r], self[bl], self[b], self[br]], 0))
+            }
+        } else if pos.0 == self.height()-1 && pos.1 < self.width() {
+
+            // Bottom row
+
+            if pos.1 == 0 {
+                // Bottom row left corner
+                let (t, tr, r) = (top(pos), top_right(pos), right(pos));
+                Some(PixelNeighborhood::Corner([self[t], self[tr], self[r]], 0))
+            } else if pos.1 == self.width()-1 {
+                // Bottom row right corner
+                let (t, tl, l) = (top(pos), top_left(pos), left(pos));
+                Some(PixelNeighborhood::Corner([self[t], self[tl], self[l]], 0))
+            } else {
+                // Bottom row NOT corner
+                let (l, r, tl, t, tr) = (left(pos), right(pos), top_left(pos), top(pos), top_right(pos));
+                Some(PixelNeighborhood::Edge([self[l], self[r], self[tl], self[t], self[tr]], 0))
+            }
+
+        } else if pos.1 == 0 && pos.0 < self.height() {
+
+            //  Left column (except corner pixels, matched above)
+            let (t, b, tr, r, br) = (top(pos), bottom(pos), top_right(pos), right(pos), bottom_right(pos));
+            Some(PixelNeighborhood::Edge([self[t], self[b], self[tr], self[r], self[br]], 0))
+
+        } else if pos.1 == self.width()-1 && pos.0 < self.height() {
+
+            // Right column (except corner pixels, matched above)
+            let (t, b, tl, l, bl) = (top(pos), bottom(pos), top_left(pos), left(pos), bottom_left(pos));
+            Some(PixelNeighborhood::Edge([self[t], self[b], self[tl], self[l], self[bl]], 0))
+
+        } else {
+            // Outside area
+            None
+        }
+    }
+
 
 
 }
@@ -767,10 +970,6 @@ where
         ixs
     }
 
-    pub fn as_ptr(&self) -> *const N {
-        self.win.as_ptr()
-    }
-
     pub fn slice_len(&self) -> usize {
         self.win.len()
     }
@@ -783,7 +982,7 @@ where
         sub_wins
     }
 
-    pub fn far_thin_neighborhood(&'a self, center_tl : (usize, usize), win_sz : (usize, usize), dist : usize) -> Option<Neighborhood<'a, N>> {
+    pub fn far_thin_neighborhood(&'a self, center_tl : (usize, usize), win_sz : (usize, usize), dist : usize) -> Option<WindowNeighborhood<'a, N>> {
         let outside_bounds = center_tl.0 < win_sz.0 + dist ||
             center_tl.0 > self.height().checked_sub(win_sz.0 + dist)? ||
             center_tl.1 > self.width().checked_sub(win_sz.1 + dist)? ||
@@ -791,7 +990,7 @@ where
         if outside_bounds {
             return None;
         }
-        Some(Neighborhood {
+        Some(WindowNeighborhood {
             center : self.sub_window(center_tl, win_sz)?,
             left : self.sub_window((center_tl.0, center_tl.1 - win_sz.1 - dist), win_sz)?,
             top : self.sub_window((center_tl.0 - win_sz.0 - dist, center_tl.1), win_sz)?,
@@ -800,7 +999,7 @@ where
         })
     }
 
-    pub fn thin_neighborhood(&'a self, center_tl : (usize, usize), win_sz : (usize, usize)) -> Option<Neighborhood<'a, N>> {
+    pub fn thin_neighborhood(&'a self, center_tl : (usize, usize), win_sz : (usize, usize)) -> Option<WindowNeighborhood<'a, N>> {
         let outside_bounds = center_tl.0 < win_sz.0 ||
             center_tl.0 > self.height().checked_sub(win_sz.0)? ||
             center_tl.1 > self.width().checked_sub(win_sz.1)? ||
@@ -808,7 +1007,7 @@ where
         if outside_bounds {
             return None;
         }
-        Some(Neighborhood {
+        Some(WindowNeighborhood {
             center : self.sub_window(center_tl, win_sz)?,
             left : self.sub_window((center_tl.0, center_tl.1 - win_sz.1), win_sz)?,
             top : self.sub_window((center_tl.0 - win_sz.0, center_tl.1), win_sz)?,
@@ -819,27 +1018,21 @@ where
 
     pub fn sub_from_slice(
         src : &'a [N],
-        full_ncols : usize,
+        original_width : usize,
         offset : (usize, usize),
         dims : (usize, usize)
     ) -> Option<Self> {
-        let nrows = src.len() / full_ncols;
-        if offset.0 + dims.0 <= nrows && offset.1 + dims.1 <= full_ncols {
+        let nrows = src.len() / original_width;
+        if offset.0 + dims.0 <= nrows && offset.1 + dims.1 <= original_width {
             Some(Self {
                 win : src,
+                width : original_width,
                 offset,
-                width : full_ncols,
                 win_sz : dims
             })
         } else {
             None
         }
-    }
-
-    pub fn shrink_to_subsample(&'a self, by : usize) -> Option<Window<'a, N>> {
-        let height = shrink_to_divisor(self.height(), by)?;
-        let width = shrink_to_divisor(self.width(), by)?;
-        self.sub_window((0, 0), (height, width))
     }
 
     /// Creates a window that cover the whole slice src, assuming it represents a square image.
@@ -1112,6 +1305,86 @@ impl<'a> Iterator for PackedIterator<'a, u8> {
         }
     }
 }*/
+
+// Holds an array of neighboring pixels and the current index at the iterator.
+pub enum PixelNeighborhood<N>
+where
+    N : Copy
+{
+
+    Corner([N; 3], usize),
+
+    Edge([N; 5], usize),
+
+    Full([N; 8], usize)
+
+}
+
+fn walk_neighborhood<N>(pxs : &[N], pos : &mut usize) -> Option<N>
+where
+    N : Copy
+{
+    let ans = pxs.get(*pos).copied();
+    if ans.is_some() {
+        *pos += 1;
+    }
+    ans
+}
+
+impl<N> Iterator for PixelNeighborhood<N>
+where
+    N : Copy
+{
+
+    type Item = N;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Corner(pxs, ref mut pos) => {
+                walk_neighborhood(&pxs[..], pos)
+            },
+            Self::Edge(pxs, pos) => {
+                walk_neighborhood(&pxs[..], pos)
+            },
+            Self::Full(pxs, pos) => {
+                walk_neighborhood(&pxs[..], pos)
+            },
+        }
+    }
+
+}
+
+fn top_left(pos : (usize, usize)) -> (usize, usize) {
+    (pos.0 - 1, pos.1 - 1)
+}
+
+fn top_right(pos : (usize, usize)) -> (usize, usize) {
+    (pos.0 - 1, pos.1 + 1)
+}
+
+fn bottom_left(pos : (usize, usize)) -> (usize, usize) {
+    (pos.0 + 1, pos.1 - 1)
+}
+
+fn bottom_right(pos : (usize, usize)) -> (usize, usize) {
+    (pos.0 + 1, pos.1 + 1)
+}
+
+fn top(pos : (usize, usize)) -> (usize, usize) {
+    (pos.0 - 1, pos.1)
+}
+
+fn bottom(pos : (usize, usize)) -> (usize, usize) {
+    (pos.0 + 1, pos.1)
+}
+
+fn left(pos : (usize, usize)) -> (usize, usize) {
+    (pos.0, pos.1 - 1)
+}
+
+fn right(pos : (usize, usize)) -> (usize, usize) {
+    (pos.0, pos.1 + 1)
+}
 
 pub fn labels<L, E>((height, width) : (usize, usize), px_spacing : usize) -> impl Iterator<Item=(L, L)> + Clone
 where
@@ -1541,6 +1814,24 @@ where
     N : Scalar + Copy + Debug + Default
 {
 
+    pub fn area(&self) -> usize {
+        self.width() * self.height()
+    }
+
+    pub fn as_mut_ptr(&mut self) -> *mut N {
+        // self.win.as_ptr()
+        &mut self[(0usize,0usize)] as *mut _
+    }
+
+    pub fn as_ptr(&self) -> *const N {
+        // self.win.as_ptr()
+        &self[(0usize,0usize)] as *const _
+    }
+
+    pub fn byte_stride(&self) -> usize {
+        std::mem::size_of::<N>() * self.width
+    }
+
     pub fn clear(&'a mut self)
     where
         N : Zero
@@ -1611,16 +1902,16 @@ where
 
     pub fn sub_from_slice(
         src : &'a mut [N],
-        full_ncols : usize,
+        original_width : usize,
         offset : (usize, usize),
         dims : (usize, usize)
     ) -> Option<Self> {
-        let nrows = src.len() / full_ncols;
-        if offset.0 + dims.0 <= nrows && offset.1 + dims.1 <= full_ncols {
+        let nrows = src.len() / original_width;
+        if offset.0 + dims.0 <= nrows && offset.1 + dims.1 <= original_width {
             Some(Self {
                 win : src,
                 offset,
-                width : full_ncols,
+                width : original_width,
                 win_sz : dims
             })
         } else {
@@ -1644,6 +1935,8 @@ where
             None
         }
     }
+
+    // pub fn centered_sub_window_mut(mut self, center : (usize, usize))
 
     /// Creates a window that cover the whole slice src, assuming it represents a square image.
     pub fn from_square_slice(src : &'a mut [N]) -> Option<Self> {
@@ -1839,6 +2132,17 @@ where
     N : Scalar + Copy
 {
 
+    /*/// Copies the content of the slice, assuming raster order.
+    pub fn copy_from_slice<'b>(&'a mut self, other : &'b [N]) {
+        assert!(self.area() == other.len());
+        self.copy_from(&Window::from_slice(other, self.win_sz.1));
+    }*/
+
+    pub fn copy_from<'b>(&'a mut self, other : &'b Window<'b, N>) {
+        assert!(self.shape() == other.shape(), "Mutable windows differ in shape");
+        self.rows_mut().zip(other.rows()).for_each(|(this, other)| this.copy_from_slice(other) );
+    }
+
     pub fn rows_mut(&'a mut self) -> impl Iterator<Item=&'a mut [N]> {
         let stride = self.original_size().1;
         let tl = self.offset.0 * stride + self.offset.1;
@@ -1848,7 +2152,6 @@ where
             unsafe { std::slice::from_raw_parts_mut(slice.as_ptr() as *mut _, slice.len()) }
         })
     }
-
 
     pub fn pixels_mut(&'a mut self, spacing : usize) -> impl Iterator<Item=&'a mut N> {
         self.rows_mut().step_by(spacing).map(move |r| r.iter_mut().step_by(spacing) ).flatten()
@@ -1914,11 +2217,6 @@ where
         let start = tl + i*stride;
         let slice = &self.win[start..(start+self.win_sz.1)];
         unsafe { std::slice::from_raw_parts_mut(slice.as_ptr() as *mut _, slice.len()) }
-    }
-
-    pub fn copy_from(&'a mut self, other : &Window<N>) {
-        assert!(self.shape() == other.shape(), "Mutable windows differ in shape");
-        self.rows_mut().zip(other.rows()).for_each(|(this, other)| this.copy_from_slice(other) );
     }
 
 }

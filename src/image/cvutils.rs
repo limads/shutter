@@ -24,25 +24,32 @@ where
         core::CV_8UC1
         // core::CV_8U
     } else {
-        if any_t.is::<i16>() {
+        if any_t.is::<u16>() {
 
-            assert!(core::CV_16S == core::CV_16SC1);
+            assert!(core::CV_16UC1 == core::CV_16U);
 
-            core::CV_16SC1
+            core::CV_16UC1
         } else {
-            if any_t.is::<f32>() {
+            if any_t.is::<i16>() {
 
-                assert!(core::CV_32FC1 == core::CV_32F);
+                assert!(core::CV_16S == core::CV_16SC1);
 
-                core::CV_32FC1 // Or CV_32F?
+                core::CV_16SC1
             } else {
-                if any_t.is::<f64>() {
+                if any_t.is::<f32>() {
 
-                    assert!(core::CV_64FC1 == core::CV_64F);
+                    assert!(core::CV_32FC1 == core::CV_32F);
 
-                    core::CV_64FC1 // // Or CV_64F?
+                    core::CV_32FC1
                 } else {
-                    panic!("Invalid matrix type (expected u8, i16, f32 or f64)");
+                    if any_t.is::<f64>() {
+
+                        assert!(core::CV_64FC1 == core::CV_64F);
+
+                        core::CV_64FC1
+                    } else {
+                        panic!("Invalid matrix type (expected u8, u16, i16, f32 or f64)");
+                    }
                 }
             }
         }

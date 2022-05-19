@@ -418,7 +418,7 @@ where
     (r.0 + r.2, r.1 + r.3)
 }
 
-#[test]
+/*#[test]
 fn test_overlap() {
     let rects = [
         ((0, 0, 10, 10), (11, 11, 10, 10)),
@@ -433,7 +433,7 @@ fn test_overlap() {
     for (r1, r2) in rects {
         println!("{:?} {:?} = {:?}", &r1, &r2, shutter::feature::shape::rect_overlaps(&r1, &r2));
     }
-}
+}*/
 
 pub fn rect_overlaps<N>(r1 : &(N, N, N, N), r2 : &(N, N, N, N)) -> bool
 where

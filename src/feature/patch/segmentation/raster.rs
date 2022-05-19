@@ -638,7 +638,7 @@ fn test_patches() {
     }
 }
 
-#[test]
+/*#[test]
 fn test_raster() {
 
     use deft::Show;
@@ -653,6 +653,6 @@ fn test_raster() {
     // img.full_window_mut().draw(Mark::Rect((1,1), (10, 10), 255));
     img.show();
     // crate::io::encode_to_file(img, "/home/diego/Downloads/index-drawn.png");
-}
+}*/
 
 

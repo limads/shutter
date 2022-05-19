@@ -1,11 +1,10 @@
-/*IppStatus ippiIntegral_8u32s_C1R(const Ipp8u* pSrc, int srcStep, Ipp32s* pDst, int
-dstStep, IppiSize srcRoiSize, Ipp32s val );*/
 use std::any::Any;
 use crate::image::*;
 use num_traits::Zero;
 use nalgebra::*;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use std::mem;
 
 pub struct Integral<T>(Image<T>)
 where
@@ -17,15 +16,36 @@ where
 {
 
     pub fn calculate(win : &Window<'_, u8>) -> Self {
-        let mut img = Image::<T>::new_constant(win.height(), win.width(), T::zero());
-        img[(0, 0)] = T::from(win[(0 as usize, 0 as usize)]);
+
+        let mut dst = Image::<T>::new_constant(win.height(), win.width(), T::zero());
+
+        #[cfg(feature="ipp")]
         unsafe {
-            for ix in 1..img.len() {
-                let prev = *img.unchecked_linear_index(ix-1);
-                *img.unchecked_linear_index_mut(ix) += prev;
+            if (&T::default() as &dyn Any).is::<i32>() {
+                let (src_step, src_sz) = crate::image::ipputils::step_and_size_for_window(win);
+                let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_window_mut(&dst.full_window_mut());
+                let offset : i32 = 0;
+                let ans = crate::foreign::ipp::ippcv::ippiIntegral_8u32s_C1R(
+                    win.as_ptr(),
+                    src_step,
+                    mem::transmute(dst.full_window_mut().as_mut_ptr()),
+                    dst_step,
+                    std::mem::transmute(src_sz),
+                    offset
+                );
+                assert!(ans == 0);
+                return Integral(dst);
             }
         }
-        Self(img)
+
+        dst[(0, 0)] = T::from(win[(0 as usize, 0 as usize)]);
+        unsafe {
+            for ix in 1..dst.len() {
+                let prev = *dst.unchecked_linear_index(ix-1);
+                *dst.unchecked_linear_index_mut(ix) += prev;
+            }
+        }
+        Self(dst)
     }
 
 }

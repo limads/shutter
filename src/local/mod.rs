@@ -1,5 +1,4 @@
 use crate::image::*;
-pub use ripple::conv::*;
 use std::mem;
 use std::any::Any;
 use serde::{Serialize, Deserialize, de::DeserializeOwned};
@@ -7,22 +6,301 @@ use num_traits::Zero;
 use nalgebra::Scalar;
 use std::iter::FromIterator;
 
+// This implements min-pool or max-pool.
+pub fn block_min_or_max(win : &Window<'_, u8>, dst : &mut WindowMut<'_, u8>, is_maximum : bool) {
+
+    assert!(win.width() % dst.width() == 0);
+    assert!(win.height() % dst.height() == 0);
+
+    let block_sz = (win.height() / dst.height(), win.width() / dst.width());
+    // let block_sz = (win.height() / num_blocks.0, win.width() / num_blocks.1);
+
+    #[cfg(feature="ipp")]
+    unsafe {
+        let (src_step, src_sz) = crate::image::ipputils::step_and_size_for_window(win);
+        let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_window_mut(&dst);
+        let mut global_min = 0u8;
+        let mut global_max = 0u8;
+
+        // If pdstmin or pdstmax are null, the corresponding result is not calculated.
+        let (ptr_dst_min, ptr_dst_max) : (*mut u8, *mut u8) = match is_maximum {
+            true => (std::ptr::null_mut(), dst.as_mut_ptr()),
+            false => (dst.as_mut_ptr(), std::ptr::null_mut())
+        };
+        /*let mut other = dst.clone_owned();
+        let (ptr_dst_min, ptr_dst_max) : (*mut u8, *mut u8) = match is_maximum {
+            true => (other.full_window_mut().as_mut_ptr(), dst.as_mut_ptr()),
+            false => (dst.as_mut_ptr(), other.full_window_mut().as_mut_ptr())
+        };*/
+
+        println!("{:?}", block_sz);
+
+        let ans = crate::foreign::ipp::ippi::ippiBlockMinMax_8u_C1R(
+            win.as_ptr(),
+            src_step,
+            src_sz,
+            ptr_dst_min,
+            dst_step,
+            ptr_dst_max,
+            dst_step,
+            crate::foreign::ipp::ippi::IppiSize  { width : block_sz.1 as i32, height : block_sz.0 as i32 },
+            &mut global_min as *mut _,
+            &mut global_max as *mut _
+        );
+        assert!(ans == 0);
+
+        // println!("{} {}", global_min, global_max);
+        return;
+    }
+
+    unimplemented!()
+
+}
+
+pub fn find_peaks(win : &Window<'_, i32>, threshold : i32, max_peaks : usize) -> Vec<(usize, usize)> {
+
+    #[cfg(feature="ipp")]
+    unsafe {
+
+        use crate::foreign::ipp::ippi::IppiPoint;
+
+        let (step, sz) = crate::image::ipputils::step_and_size_for_window(win);
+        let mut pts : Vec<IppiPoint> = (0..max_peaks).map(|_| IppiPoint { x : 0, y : 0} ).collect();
+        let mut n_peaks = 0;
+
+        // This uses max-norm withh 8-neighborhood. Alternatively use L1 norm for absolute-max norm
+        // at 4-neighborhood.
+        let norm = crate::foreign::ipp::ippi::_IppiNorm_ippiNormInf;
+        let border = 1;
+
+        let mut buf_sz = 0;
+        let ans = crate::foreign::ipp::ippcv::ippiFindPeaks3x3GetBufferSize_32s_C1R(
+            win.width() as i32,
+            &mut buf_sz as *mut _
+        );
+        assert!(ans == 0);
+
+        let mut buffer = Vec::from_iter((0..buf_sz).map(|_| 0u8 ));
+        let ans = crate::foreign::ipp::ippcv::ippiFindPeaks3x3_32s_C1R(
+            win.as_ptr(),
+            step,
+            mem::transmute(sz),
+            threshold,
+            mem::transmute(pts.as_mut_ptr()),
+            max_peaks as i32,
+            &mut n_peaks as *mut _,
+            mem::transmute(norm),
+            border,
+            buffer.as_mut_ptr()
+        );
+        assert!(ans == 0);
+
+        let out_pts : Vec<_> = pts.iter()
+            .take(n_peaks as usize)
+            .map(|pt| (pt.y as usize, pt.x as usize) )
+            .collect();
+        return out_pts;
+    }
+
+    unimplemented!()
+}
+
+/// Pool operations are nonlinear local image transformation that replace each k x k region of an
+/// image by a statistic stored at a corresponding downsampled version of the image.
+pub trait Pool {
+
+}
+
+pub struct MinPool {
+
+}
+
+pub struct MaxPool {
+
+}
+
+pub struct MedianPool {
+
+}
+
+pub struct AvgPool {
+
+}
+
+pub use ripple::conv::*;
+
+/// Implements separable convolution, representing the filter as a one-row filter.
+pub trait ConvolveSep {
+
+    type Output;
+
+    type OwnedOutput;
+
+    fn convolve_mut(&self, filter : &Self, conv : Convolution, out : &mut Self::Output);
+
+    fn convolve(&self, filter : &Self, conv : Convolution) -> Self::OwnedOutput;
+
+}
+
+/// Common difference (edge-detection) filters
+pub mod edge {
+
+    use crate::image::Window;
+    use std::f32::consts::SQRT_2;
+
+    const NEG_SQRT_2 : f32 = -1.41421356237309504880168872420969808f32;
+
+    // pub const ROBERTS_HORIZ : Window<'static, f32> = Window::from_static::<4, 2>(&[1., 0., 0., -1.]);
+
+    // pub const ROBERTS_VERT : Window<'static, f32> = Window::from_static::<4, 2>(&[0., 1., -1., 0.]);
+
+    // 3x3 directional filters
+    pub const SOBEL_HORIZ : Window<'static, f32> = Window::from_static::<9, 3>(&[
+        -1., 0., 1.,
+        -2., 0., 2.,
+        -1., 0., 1.
+    ]);
+
+    pub const SOBEL_VERT : Window<'static, f32> = Window::from_static::<9, 3>(&[
+        1., 2., 1.,
+        0., 0., 0.,
+        -1., -2., -1.
+    ]);
+
+    pub const PREWIT_HORIZ : Window<'static, f32> = Window::from_static::<9, 3>(&[
+        -1., 0., 1.,
+        -1., 0., 1.,
+        -1., 0., 1.
+    ]);
+
+    pub const PREWIT_VERT : Window<'static, f32> = Window::from_static::<9, 3>(&[
+        1., 1., 1.,
+        0., 0., 0.,
+        -1., -1., -1.
+    ]);
+
+    pub const FREI_HORIZ : Window<'static, f32> = Window::from_static::<9, 3>(&[
+        -1., 0., 1.,
+        NEG_SQRT_2, 0., SQRT_2,
+        -1., 0., 1.
+    ]);
+
+    pub const FREI_VERT : Window<'static, f32> = Window::from_static::<9, 3>(&[
+        1., SQRT_2, 1.,
+        0., 0., 0.,
+        -1., NEG_SQRT_2, -1.
+    ]);
+
+    // Symmetric laplace filter
+    pub const LAPLACE : Window<'static, f32> = Window::from_static::<9, 3>(&[
+        0., 1., 0.,
+        1., -4., 1.,
+        0., 1., 0.
+    ]);
+
+    // Symmetric Laplacian of Gaussian (LoG) filter
+    pub const LAPLACE_GAUSS : Window<'static, f32> = Window::from_static::<25, 5>(&[
+        0., 0., 1., 0., 0.,
+        0., 1., 2., 1., 0.,
+        1., 2., -16., 2., 1.,
+        0., 1., 2., 1., 0.,
+        0., 0., 1., 0., 0.
+    ]);
+
+    // TODO difference of gaussian 5x5 with DOG_21 with var(2) - var(1); DOG_31 with var(3) - var(1) and so on.
+
+}
+
+/// Common weighted averaging (blur) filters
+pub mod blur {
+
+    use crate::image::Window;
+
+    const FRAC_1_9 : f32 = 0.111111111;
+
+    // TODO build all scaled versions of gauss_3 and gauss_5.
+    // const FRAC_1_
+
+    pub const UNSCALED_BOX_5 : Window<'static, f32> = Window::from_static::<25, 5>(&[
+        0., 0., 0., 0., 0.,
+        0., 1., 1., 1., 0.,
+        0., 1., 1., 1., 0.,
+        0., 1., 1., 1., 0.,
+        0., 0., 0., 0., 0.
+    ]);
+
+    pub const BOX_5 : Window<'static, f32> = Window::from_static::<25, 5>(&[
+        0., 0., 0., 0., 0.,
+        0., FRAC_1_9, FRAC_1_9, FRAC_1_9, 0.,
+        0., FRAC_1_9, FRAC_1_9, FRAC_1_9, 0.,
+        0., FRAC_1_9, FRAC_1_9, FRAC_1_9, 0.,
+        0., 0., 0., 0., 0.
+    ]);
+
+    pub const UNSCALED_GAUSS_5 : Window<'static, f32> = Window::from_static::<25, 5>(&[
+        1., 4., 6., 4., 1.,
+        4., 16., 24., 16., 4.,
+        6., 24., 36., 24., 6.,
+        4., 16., 24., 16., 4.,
+        1., 4., 6., 4., 1.
+    ]);
+}
+
 pub fn convolution_buffer<N>(img_sz : (usize, usize), kernel_sz : (usize, usize)) -> Image<N>
 where
     N : Scalar + Clone + Zero + Serialize + DeserializeOwned + Copy + Default
 {
-    Image::new_constant(img_sz.0 - kernel_sz.0 + 1, img_sz.1 - kernel_sz.1 + 1, N::zero())
+    let (nrow, ncol) = linear_conv_sz(img_sz, kernel_sz);
+    Image::new_constant(nrow, ncol, N::zero())
 }
+
+pub fn linear_conv_sz(img_sz : (usize, usize), kernel_sz : (usize, usize)) -> (usize, usize) {
+    let nrow = img_sz.0 - kernel_sz.0 + 1;
+    let ncol = img_sz.1 - kernel_sz.1 + 1;
+    (nrow, ncol)
+}
+
+fn padded_baseline_convolution<'a, N>(input : &Window<'_, N>, filter : &Window<'_, N>, out : &'a mut WindowMut<'a, N>)
+where
+    N : Scalar + Copy + Default + Zero + Copy + Serialize + DeserializeOwned +
+    Any + std::ops::Mul<Output = N> + std::ops::AddAssign
+{
+    let mut extended_in = Image::new_constant(
+        input.height() + filter.height() / 2 + 1,
+        input.width() + filter.width() / 2 + 1,
+        N::zero()
+    );
+    let mut extended_out = extended_in.clone();
+    extended_in.window_mut(((filter.height() / 2), (filter.width() / 2)), out.shape()).unwrap().copy_from(&input);
+    baseline_convolution(extended_in.as_ref(), filter, &mut extended_out.full_window_mut());
+    out.copy_from(&extended_out.window(((filter.height() / 2), (filter.width() / 2)), out.shape()).unwrap());
+}
+
+/*fn extended_baseline_convolution<N>(input : &Window<'_, N>, filter : &Window<'_, N>, out : &mut WindowMut<'_, N>)
+where
+    N : Scalar + Copy + Default + Zero + Copy + Serialize + DeserializeOwned +
+    Any + std::ops::Mul<Output = N> + std::ops::AddAssign
+{
+    /*let mut extended_in = Image::new_constant(
+        input.height() + filter.height() / 2 + 1,
+        input.width() + filter.width() / 2 + 1,
+        N::zero()
+    );
+    let mut extended_out = extended_in.clone();
+    extened_in.sub_window_mut((filter.height() / 2), (filter.width() / 2), out.shape()).unwrap().copy_from(&input);
+    baseline_convolution(extended_in.as_ref(), filter.as_ref(), extended_out.as_mut());
+    out.copy_from(&extended_out.sub_window().unwrap());*/
+}*/
 
 fn baseline_convolution<N>(input : &Window<'_, N>, filter : &Window<'_, N>, out : &mut WindowMut<'_, N>)
 where
     N : Scalar + Copy + Default + Zero + Copy + Serialize + DeserializeOwned +
         Any + std::ops::Mul<Output = N> + std::ops::AddAssign
 {
-    assert!(out.height() == input.height() - filter.height() + 1);
-    assert!(out.width() == input.width() - filter.width() + 1);
-    assert!(filter.width() % 2 == 1);
-    assert!(filter.height() % 2 == 1);
+    // assert!(out.height() == input.height() - filter.height() + 1);
+    // assert!(out.width() == input.width() - filter.width() + 1);
+    // assert!(filter.width() % 2 == 1);
+    // assert!(filter.height() % 2 == 1);
 
     // Actually half the kernel size minus one, since size % 2 must be 1
     let half_kh = filter.height() / 2;
@@ -51,10 +329,15 @@ unsafe fn ipp_convolution_f32(img : &Window<f32>, kernel : &Window<f32>, out : &
 
     // With IppiROIShape_ippiROIFull  convolution with zero padding is applied (result is nrow_img + nrow_kenel - 1).
     // With IppiROIShape_ippiROIValid convolution without zero padding is applied (result is nrow_img - nrow_kernel + 1)
-    let alg_ty = IppAlgType_ippAlgAuto + IppiROIShape_ippiROIValid;
+    let alg_ty = (IppAlgType_ippAlgAuto + IppiROIShape_ippiROIValid) as i32;
 
     let img_sz = crate::image::ipputils::window_size(img);
     let kernel_sz = crate::image::ipputils::window_size(kernel);
+
+    let img_stride = crate::image::ipputils::byte_stride_for_window(img);
+    let kernel_stride = crate::image::ipputils::byte_stride_for_window(kernel);
+    let out_stride = crate::image::ipputils::byte_stride_for_window_mut(out);
+
     let mut buf_sz : c_int = 0;
     let status = ippiConvGetBufferSize(
         img_sz,
@@ -68,20 +351,21 @@ unsafe fn ipp_convolution_f32(img : &Window<f32>, kernel : &Window<f32>, out : &
     let mut conv_buffer : Vec<u8> = Vec::from_iter((0..buf_sz).map(|_| 0u8 ) );
 
     let status = ippiConv_32f_C1R(
-        &img.win[0] as *const _,
-        (mem::size_of::<f32>() * img.width()) as c_int,
+        img.as_ptr(),
+        img_stride,
         img_sz,
-        &kernel.win[0] as *const _,
-        (mem::size_of::<f32>() * kernel.width()) as c_int,
+        kernel.as_ptr(),
+        kernel_stride,
         kernel_sz,
-        &mut out.win[0] as *mut _,
-        (mem::size_of::<f32>() * out.width()) as c_int,
-        alg_ty as i32,
-        &mut conv_buffer[0] as *mut _
+        out.as_mut_ptr(),
+        out_stride,
+        alg_ty,
+        conv_buffer.as_mut_ptr()
     );
     assert!(status == 0);
 }
 
+// Waiting GAT stabilization
 /*impl<N> Convolve for Image<N>
 where
     N : Scalar + Copy + Default + Zero + Copy + Serialize + DeserializeOwned +
@@ -98,11 +382,13 @@ where
 
     type Output = WindowMut<'a, N>;
 
-    fn convolve_mut(&self, filter : &Self, out : &mut Self::Output) {
+    type OwnedOutput = Image<N>;
+
+    fn convolve_mut(&self, filter : &Self, conv : Convolution, out : &mut Self::Output) {
 
         #[cfg(feature="ipp")]
         unsafe {
-            if (&self[(0usize, 0usize)] as &dyn Any).is::<f32>() {
+            if self.pixel_is::<f32>() {
                 ipp_convolution_f32(mem::transmute(self), mem::transmute(filter), mem::transmute(out));
                 return;
             }
@@ -127,6 +413,8 @@ where
         {
             use opencv;
 
+            // println!("Processing with opencv");
+
             assert!(filter.height() % 2 != 0 && filter.width() % 2 != 0 );
             let input : opencv::core::Mat = self.into();
             let kernel : opencv::core::Mat = filter.into();
@@ -146,8 +434,17 @@ where
             return;
         }
 
+        // println!("Processing with baseline");
         baseline_convolution(&self, &filter, out);
     }
+
+    fn convolve(&self, filter : &Self, conv : Convolution) -> Image<N> {
+        let (height, width) = linear_conv_sz(self.shape(), filter.shape());
+        let mut out = Image::new_constant(height, width, N::zero());
+        self.convolve_mut(filter, conv, &mut out.full_window_mut());
+        out
+    }
+
 }
 
 pub fn local_min(src : Window<'_, u8>, dst : WindowMut<'_, u8>, kernel_sz : usize) -> Image<u8> {

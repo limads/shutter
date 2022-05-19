@@ -5,6 +5,7 @@ use std::mem;
 use std::convert::AsRef;
 use std::fmt::Debug;
 use nalgebra::Scalar;
+use crate::gray::Foreground;
 
 pub mod raster;
 
@@ -611,4 +612,102 @@ pub fn recolor_with_labels<'a>(mut img : WindowMut<'a, u8>, labels : &'a Window<
             }
         }
     }
+}
+
+#[test]
+fn homogeneous_regions() {
+
+    use crate::prelude::*;
+    use crate::feature::patch::*;
+    use crate::feature::patch::raster::*;
+    use crate::draw::*;
+    use crate::local::*;
+    use crate::gray::*;
+
+    let img = crate::io::decode_from_file("/home/diego/Downloads/eyes.png").unwrap();
+    img.show();
+
+    let mut fimg = Image::<f32>::new_constant(img.height(), img.width(), 0.);
+    fimg.full_window_mut().convert_from(img.full_window(), Conversion::Shrink);
+    let out = fimg.full_window().convolve(&crate::local::edge::LAPLACE, Convolution::Linear);
+
+    let mut out_c = Image::<u8>::new_constant(out.height(), out.width(), 0);
+    out_c.full_window_mut().convert_from(out.full_window(), Conversion::Stretch);
+    // out_c.show();
+    let out_thr = FixedThreshold::new(Foreground::Above(10)).threshold(&out_c.full_window());
+    let mut out = out_thr.clone();
+    crate::gray::supress_binary_speckles(out_thr.as_ref(), out.full_window_mut(), 3);
+
+    // let mut seg = RasterSegmenter::new(out_thr.shape(), 1);
+    // for patch in seg.segment_single_color(&out_thr.full_window(), |px| px == 0, ExpansionMode::Contour).iter() {
+    //    out_thr.full_window_mut().draw_patch_contour(&patch, 255);
+    // }
+
+    out.show();
+}
+
+pub struct PointExtractor {
+    pts : Vec<(usize, usize)>
+}
+
+impl PointExtractor {
+
+    pub fn new() -> Self {
+        Self { pts : Vec::new() }
+    }
+
+    /// Extract all points of image with threshold above a given point.
+    pub fn extract(&mut self, win : &Window<'_, u8>, fg : Foreground) -> &[(usize, usize)] {
+        self.pts.clear();
+        match fg {
+            Foreground::Below(v) => {
+                win.labeled_pixels::<usize, _>(1)
+                    .for_each(|(r, c, px)| if px <= v { self.pts.push((r, c)) } );
+            },
+            Foreground::Above(v) => {
+                win.labeled_pixels::<usize, _>(1)
+                    .for_each(|(r, c, px)| if px >= v { self.pts.push((r, c)) } );
+            },
+            Foreground::Between(a, b) => {
+                win.labeled_pixels::<usize, _>(1)
+                    .for_each(|(r, c, px)| if px >= a && px <= b { self.pts.push((r, c)) } );
+            }
+        }
+        &self.pts[..]
+    }
+
+}
+
+#[cfg(feature="opencv")]
+pub fn connected_components(win : &Window<'_, u8>, mut out : WindowMut<'_, u16>) -> Vec<(usize, usize, usize, usize)> {
+
+    use opencv::core::*;
+    use opencv::imgproc::*;
+    use opencv::prelude::*;
+
+    let input : Mat = win.into();
+    let mut output : Mat = out.into();
+
+    let mut centroids = Mat::default();
+    let mut stats = Mat::default();
+    let n_labels = opencv::imgproc::connected_components_with_stats(
+        &input,
+        &mut output,
+        &mut stats,
+        &mut centroids,
+        8,
+        CV_16U
+    ).unwrap();
+    let mut rects = Vec::new();
+    for lbl in 0..(n_labels as usize) {
+        // let x = centroids.at_2d::<f64>(label, 0);
+        // let y = centroids.at_2d::<f64>(label, 1);
+        let left = stats.at_2d::<i32>(lbl as i32, CC_STAT_LEFT).unwrap();
+        let top = stats.at_2d::<i32>(lbl as i32, CC_STAT_TOP).unwrap();
+        let width = stats.at_2d::<i32>(lbl as i32, CC_STAT_WIDTH).unwrap();
+        let height = stats.at_2d::<i32>(lbl as i32, CC_STAT_HEIGHT).unwrap();
+        rects.push((*top as usize, *left as usize, *height as usize, *width as usize));
+        // let area = stats.at(label, CC_STAT_AREA);
+    }
+    rects
 }

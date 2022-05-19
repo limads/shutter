@@ -11,6 +11,17 @@ use crate::image::*;
 use crate::draw::*;
 use crate::convert::*;
 use std::str::FromStr;
+use std::fmt::Debug;
+use nalgebra::Scalar;
+use num_traits::Zero;
+use std::ops::Mul;
+use num_traits::Bounded;
+use num_traits::AsPrimitive;
+use num_traits::ops::inv::Inv;
+use num_traits::One;
+use std::ops::Div;
+use crate::local::*;
+use num_traits::{ToPrimitive};
 
 /*#[no_mangle]
 pub extern "C" fn convolve_f32(img : &[f32], img_ncol : i64, kernel : &[f32], kernel_ncol : i64, out : &[f32]) -> i64 {
@@ -18,22 +29,73 @@ pub extern "C" fn convolve_f32(img : &[f32], img_ncol : i64, kernel : &[f32], ke
     0
 }*/
 
-/*#[no_mangle]
+static NOT_POSITIVE : i64 = 1;
+
+fn all_positive(s : &[i64]) -> i64 {
+    if s.iter().all(|s| *s > 0 ) {
+        0
+    } else {
+        NOT_POSITIVE
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn convolve_f32(
+    input : &[f32],
+    input_width : i64,
+    filter : &[f32],
+    filter_width : i64,
+    output : &mut [f32],
+    mode : &str
+) -> i64 {
+    if let Some(src) = Window::from_slice(input, input_width as usize) {
+        if let Some(kernel) = Window::from_slice(filter, filter_width as usize) {
+            if mode == "linear" {
+                let (_, ncol) = crate::local::linear_conv_sz(src.shape(), kernel.shape());
+                if let Some(mut out) = WindowMut::from_slice(output, ncol) {
+                    src.convolve_mut(&kernel, Convolution::Linear, &mut out);
+                    return 0;
+                }
+            } else if mode == "pad" {
+
+            } else if mode == "repeat" {
+
+            } else if mode == "interpolate" {
+
+            }
+        }
+    }
+
+    -1
+}
+
+fn convert_slice_pair<T, U>(input : &[T], width : i64, output : &mut [U], conv : Conversion)
+where
+    T : Scalar + Copy + Debug + Clone + Zero + Default + Mul<Output=T> + AsPrimitive<U> + std::ops::MulAssign + Bounded + Div<Output=T> + One + PartialOrd + ToPrimitive,
+    U : Scalar + Copy + Debug + Clone  + Zero + Default + Bounded + AsPrimitive<T> + Mul<Output=U> + One + Div<Output=U> + PartialOrd + ToPrimitive,
+    u8 : AsPrimitive<U>,
+    u8 : AsPrimitive<T>,
+    f64 : AsPrimitive<U>
+{
+    let mut dst = WindowMut::from_slice(output, width as usize).unwrap();
+    let src = Window::from_slice(input, width as usize).unwrap();
+    dst.convert_from(src, conv);
+}
+
+#[no_mangle]
 pub extern "C" fn convert_u8_f32(input : &[u8], width : i64, output : &mut [f32], mode : &str) -> i64 {
     if let Ok(conv) = Conversion::from_str(mode) {
-        WindowMut::from_slice(output, width as usize).unwrap()
-            .convert_from(&Window::from_slice(input, width as usize).unwrap(), conv);
+        convert_slice_pair(input, width, output, conv);
         0
     } else {
         -1
     }
-}*/
+}
 
 #[no_mangle]
-pub extern "C" fn convert_f32_u8(input : &[u8], width : i64, output : &mut [f32], mode : &str) -> i64 {
+pub extern "C" fn convert_f32_u8(input : &[f32], width : i64, output : &mut [u8], mode : &str) -> i64 {
     if let Ok(conv) = Conversion::from_str(mode) {
-        WindowMut::from_slice(output, width as usize).unwrap()
-            .convert_from(&(Window::from_slice(input, width as usize).unwrap()), conv);
+        convert_slice_pair(input, width, output, conv);
         0
     } else {
         -1
@@ -42,6 +104,12 @@ pub extern "C" fn convert_f32_u8(input : &[u8], width : i64, output : &mut [f32]
 
 #[no_mangle]
 pub extern "C" fn encode_rgb(input : &[u8], output : &mut [u8]) -> i64 {
+
+    println!("Input ptr: {:?}; Output ptr: {:?}", input.as_ptr(), output.as_ptr());
+    println!("Input length: {}; Output length: {}", input.len(), output.len());
+
+    assert!(input.len() * 3 == output.len());
+
     if output.len() == 3*input.len() {
         for ix in 0..output.len() {
             output[ix] = input[(ix / 3)];

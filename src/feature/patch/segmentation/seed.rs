@@ -656,11 +656,12 @@ where
 }
 
 
-#[test]
+/*#[test]
 fn test_seed() {
 
     use crate::feature::patch::seed::*;
     use crate::image::*;
+    use crate::draw::*;
 
 	let mut img = Image::<u8>::new_constant(100, 100, 10);
     let radius : f32 = 20.;
@@ -695,4 +696,6 @@ fn test_seed() {
 	println!("emp circle center = {:?}", center);
 	println!("circle area (emp radius) = {}", std::f32::consts::PI * emp_radius.powf(2.) );
 	img.show();
-}
+}*/
+
+

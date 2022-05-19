@@ -13,7 +13,13 @@ pub mod edge;
 
 pub mod convert;
 
-pub mod resize;
+pub mod resample;
+
+pub mod motion;
+
+pub mod stereo;
+
+pub mod object;
 
 // Contains algorithms to partition the images over homogeneous regions, with a criterion for
 // homegeneity that is algorithm-specific. Contains dense and sparse data structures to represent
@@ -23,10 +29,10 @@ pub mod region;
 // Binary image operations
 pub mod binary;
 
-// Texture operations (segmentation, classification)
-pub mod texture;
+// Pattern and texture analysis operations (segmentation, classification)
+pub mod pattern;
 
-/// Grayscale operations (thresholding, segmentation)
+/// Image-to-image grayscale operations (thresholding, segmentation)
 pub mod gray;
 
 /// Color image operations
@@ -37,6 +43,8 @@ pub mod point;
 
 /// Global operations (mean, max, avg)
 pub mod global;
+
+pub mod hist;
 
 /// Local (non-filtering) operations (median, min, max)
 pub mod local;
@@ -64,8 +72,7 @@ pub mod raster;
 // #[cfg(feature="opencvlib")]
 // pub mod tracking;
 
-// #[cfg(feature="opencvlib")]
-// pub mod template;
+pub mod template;
 
 // #[cfg(feature="opencvlib")]
 // pub mod matching;
@@ -84,7 +91,7 @@ pub mod integral;
 
 // pub mod shape;
 
-pub mod threshold;
+// pub mod threshold;
 
 // pub mod feature;
 
@@ -126,7 +133,7 @@ pub mod prelude {
 
     pub use super::convert::*;
 
-    pub use super::resize::*;
+    pub use super::resample::*;
 
     pub use super::draw::*;
 
