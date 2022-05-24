@@ -28,7 +28,7 @@ pub fn equalize() {
 
 pub fn point_div_mut<'a, N>(win : &'a Window<'a, N>, by : N, dst : &'a mut WindowMut<'a, N>)
 where
-    N : Scalar + Div<Output=N> + Copy + Any + Debug
+    N : Scalar + Div<Output=N> + Copy + Any + Debug + Default
 {
     dst.pixels_mut(1).zip(win.pixels(1)).for_each(|(dst, src)| *dst = *src / by );
 }
@@ -36,7 +36,7 @@ where
 /// Normalizes the image relative to the max(infinity) norm. This limits values to [0., 1.]
 pub fn normalize_max_mut<'a, N>(win : &'a Window<'a, N>, dst : &'a mut WindowMut<'a, N>)
 where
-    N : Div<Output=N> + Copy + Ord + Any + Debug,
+    N : Div<Output=N> + Copy + Ord + Any + Debug + Default,
     u8 : AsPrimitive<N>
 {
     let max = global::max(win);
@@ -48,7 +48,7 @@ where
 /// or float maximum.
 pub fn normalize_unit_mut<'a, N>(win : &'a Window<'a, N>, dst : &'a mut WindowMut<'a, N>)
 where
-    N : Div<Output=N> + Copy + PartialOrd + Serialize + DeserializeOwned + Any + Debug + Zero + From<f64>,
+    N : Div<Output=N> + Copy + PartialOrd + Serialize + DeserializeOwned + Any + Debug + Zero + From<f64> + Default,
     f64 : From<N>
 {
     let sum = global::sum(win, 1);
@@ -135,8 +135,7 @@ where
 
 impl<'a, N> AddAssign<Window<'a, N>> for WindowMut<'a, N>
 where
-    N : Scalar + Copy + Clone + Debug + AddAssign + Default + Any + 'static,
-    Self : 'a
+    N : Scalar + Copy + Clone + Debug + AddAssign + Default + Any + 'static
 {
 
     fn add_assign(&mut self, rhs: Window<'a, N>) {
@@ -167,10 +166,56 @@ where
             }
         }
 
-        //for (out, input) in  self.pixels_mut(1).zip(rhs.pixels(1)) {
-        //    *out += *input;
-        //}
-        unimplemented!()
+        // Unsafe required because we cannot specify that Self : 'a using the trait signature.
+        unsafe {
+            for (out, input) in mem::transmute::<_, &'a mut WindowMut<'a, N>>(self).pixels_mut(1).zip(rhs.pixels(1)) {
+                *out += *input;
+            }
+        }
+
+    }
+
+}
+
+impl<'a, N> SubAssign<Window<'a, N>> for WindowMut<'a, N>
+where
+    N : Scalar + Copy + Clone + Debug + SubAssign + Default + Any + 'static
+{
+
+    fn sub_assign(&mut self, rhs: Window<'a, N>) {
+
+        assert!(self.shape() == rhs.shape());
+
+        #[cfg(feature="ipp")]
+        unsafe {
+
+            let (src_dst_byte_stride, roi) = crate::image::ipputils::step_and_size_for_window_mut(&self);
+            let rhs_byte_stride = crate::image::ipputils::byte_stride_for_window(&rhs);
+
+            let scale_factor = 1;
+            if self.pixel_is::<u8>() {
+                let ans = crate::foreign::ipp::ippi::ippiSub_8u_C1RSfs(
+                    mem::transmute(self.as_ptr()),
+                    src_dst_byte_stride,
+                    mem::transmute(rhs.as_ptr()),
+                    rhs_byte_stride,
+                    mem::transmute(self.as_mut_ptr()),
+                    src_dst_byte_stride,
+                    roi,
+                    scale_factor
+                );
+                assert!(ans == 0);
+                return;
+            }
+        }
+
+        // Unsafe required because we cannot specify that Self : 'a using the trait signature.
+        unsafe {
+            for (out, input) in mem::transmute::<_, &'a mut WindowMut<'a, N>>(self).pixels_mut(1).zip(rhs.pixels(1)) {
+                *out -= *input;
+            }
+        }
+
     }
 
 }

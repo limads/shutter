@@ -8,9 +8,6 @@ use bayes::fit::{cluster::center::KMeans, cluster::center::KMeansSettings, Estim
 use bayes::fit::cluster::space::SpatialClustering;
 use std::cmp::Ordering;
 
-/*IppStatus ippiHistogram_<mod>(const Ipp<dataType>* pSrc, int srcStep, IppiSize roiSize,
-Ipp32u* pHist, const IppiHistogramSpec* pSpec, Ipp8u* pBuffer );*/
-
 mod segmentation;
 
 pub use segmentation::*;

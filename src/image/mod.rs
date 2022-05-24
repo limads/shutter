@@ -151,6 +151,18 @@ where
 
 }
 
+impl<'a, N> AsRef<Window<'a, N>> for WindowMut<'a, N>
+where
+    N : Scalar + Clone + Copy + Any + Debug
+{
+
+    fn as_ref(&self) -> &Window<'a, N> {
+        verify_size_and_alignment::<Self, Window<'a, N>>();
+        unsafe { mem::transmute(self) }
+    }
+
+}
+
 impl<'a, N> Borrow<Window<'a, N>> for Image<N>
 where
     N : Scalar + Clone + Copy + Any + Debug
@@ -163,20 +175,28 @@ where
 
 }
 
-/*// This is violating aliasing guarantees. But unless we implement this,
-// impl BorrowMut<WindowMut> for Image isn't possible, since it assumes
-// impl Borrow<WindowMut> for Image.
+impl<'a, N> Borrow<WindowMut<'a, N>> for Image<N>
+where
+    N : Scalar + Clone + Copy + Any + Debug
+{
+
+    fn borrow(&self) -> &WindowMut<'a, N> {
+        verify_size_and_alignment::<Self, Window<'a, N>>();
+        unsafe { mem::transmute(self) }
+    }
+}
+
 impl<'a, N> BorrowMut<WindowMut<'a, N>> for Image<N>
 where
     N : Scalar + Clone + Copy + Any + Debug
 {
 
-    fn borrow(&self) -> &Window<'a, N> {
+    fn borrow_mut(&mut self) -> &mut WindowMut<'a, N> {
         verify_size_and_alignment::<Self, WindowMut<'a, N>>();
         unsafe { mem::transmute(self) }
     }
 
-}*/
+}
 
 impl<'a, N> AsMut<WindowMut<'a, N>> for Image<N>
 where
@@ -320,12 +340,12 @@ where
         Self{ buf : buf.into_boxed_slice(), width, offset : (0, 0), size : (height, width) }
     }
     
-    /*/// Initializes an image with allocated, but undefined content.
+    /// Initializes an image with allocated, but undefined content.
     pub unsafe fn new_empty(nrows : usize, ncols : usize) -> Self {
-        let mut buf = Vec::with_capacity(nrows * ncols);
+        let mut buf = Vec::<N>::with_capacity(nrows * ncols);
         buf.set_len(nrows * ncols);
-        Self { buf : buf.into_boxed_slice, ncols }
-    }*/
+        Self { buf : buf.into_boxed_slice(), width : ncols, offset : (0, 0), size : (nrows, ncols) }
+    }
 
     pub fn full_window<'a>(&'a self) -> Window<'a, N> {
         self.window((0, 0), self.shape()).unwrap()
@@ -632,6 +652,11 @@ where
     N : Scalar + Copy + Any + 'static
 {
 
+    // Joins two mutable windows, as long as their slices are contiguous in memory.
+    pub fn join(a : WindowMut<'a, N>, b : WindowMut<'a, N>) -> Option<WindowMut<'a, N>> {
+        unimplemented!()
+    }
+
     /// Splits this mutable window horizontally
     pub fn split_at(mut self, row : usize) -> (WindowMut<'a, N>, WindowMut<'a, N>) {
         assert!(self.win.len() % (self.width * row) == 0);
@@ -798,6 +823,31 @@ impl<'a, N> Window<'a, N>
 where
     N : Scalar + Copy
 {
+
+    // Returns image corners with the given dimensions.
+    pub fn corners(&'a self, height : usize, width : usize) -> Option<[Window<'a, N>; 4]> {
+        let right = self.width() - width;
+        let bottom = self.height() - height;
+        let sz = (height, width);
+        let tl = self.sub_window((0, 0), sz)?;
+        let tr = self.sub_window((0, right), sz)?;
+        let bl = self.sub_window((bottom, 0), sz)?;
+        let br = self.sub_window((bottom, right), sz)?;
+        Some([tl, tr, bl, br])
+    }
+
+    // Returns image sides (without corners or same dimension).
+    pub fn sides(&'a self, height : usize, width : usize) -> Option<[Window<'a, N>; 4]> {
+        let right = self.width() - width;
+        let bottom = self.height() - height;
+        let vert_sz = (height, self.width() - 2*width);
+        let horiz_sz = (self.height() - 2*height, self.width());
+        let top = self.sub_window((0, width), vert_sz)?;
+        let right = self.sub_window((height, right), horiz_sz)?;
+        let bottom = self.sub_window((bottom, width), vert_sz)?;
+        let left = self.sub_window((height, 0), horiz_sz)?;
+        Some([top, right, bottom, left])
+    }
 
     pub fn shrink_to_subsample(&'a self, by : usize) -> Option<Window<'a, N>> {
         let height = shrink_to_divisor(self.height(), by)?;
@@ -1788,6 +1838,14 @@ where
 
 }*/
 
+/// Wraps a mutable slice, offering access to it as if it were a mutable image buffer.
+/// The consequence of this approach is that mutable windows sharing the same underlying image
+/// rows cannot be represented simultaneously without violating aliasing rules. Mutable windows
+/// sharing only columns (but at disjoint row intervals), however, can be safely represented
+/// via split_at(.). This requires that sub_window_mut takes windows by-value. Iteration, however,
+/// is possible by iter_windows_mut() and apply_to_sub/apply_to_sub_sequence, which work with raw pointers
+/// internally (thus any closures or code segments working with the iterable items cannot access the original window for
+/// the lifetime of the mutable iterator items in the public API).
 #[repr(C)]
 #[derive(Debug)]
 pub struct WindowMut<'a, N> 
@@ -1813,6 +1871,27 @@ impl<'a, N> WindowMut<'a, N>
 where
     N : Scalar + Copy + Debug + Default
 {
+
+    /// Applies a closure to a subset of the mutable window. This effectively forces
+    /// the user to innaugurate a new scope for which the lifetime of the original window
+    /// is no longer valid, thus allowing applying an operation to different positions of
+    /// a mutable window without violating aliasing rules.
+    pub fn apply_to_sub<R>(&mut self, offset : (usize, usize), sz : (usize, usize), f : impl Fn(WindowMut<'_, N>)->R) -> R {
+        let ptr = self.win.as_mut_ptr();
+        let len = self.win.len();
+        let mut sub = unsafe { WindowMut::from_ptr(ptr, len, self.width, offset, sz).unwrap() };
+        f(sub)
+    }
+
+    /// Calls the same closure with apply_to_sub by specifying a series of offsets and sizes. Elements can overlap
+    /// without problem, since the operation is sequential.
+    pub fn apply_to_sub_sequence<R>(&mut self, offs_szs : &[((usize, usize), (usize, usize))], f : impl Fn(WindowMut<'_, N>)->R + Clone) -> Vec<R> {
+        let mut res = Vec::new();
+        for (off, sz) in offs_szs.iter().copied() {
+            res.push(self.apply_to_sub(off, sz, f.clone()));
+        }
+        res
+    }
 
     pub fn area(&self) -> usize {
         self.width() * self.height()
@@ -2098,8 +2177,43 @@ where
 
 impl<'a, N> WindowMut<'a, N>
 where
-    N : Scalar + Copy
+    N : Scalar + Copy + Default
 {
+
+    /*// Returns image corners with the given dimensions.
+    pub fn corners_mut(mut self, height : usize, width : usize) -> Option<[WindowMut<'a, N>; 4]> {
+        let right = self.width() - width;
+        let bottom = self.height() - height;
+        let sz = (height, width);
+
+        self.apply_to_sub_mut((0, 0), (100, 100), |mut win| {
+            self.shape();
+        });
+
+        unimplemented!();
+
+        // let (top, rem) = self.split(height);
+        // let (mid, bottom) = rem.split(rem.height() - height);
+
+        /*let tl = self.sub_window((0, 0), sz)?;
+        let tr = self.sub_window((0, right), sz)?;
+        let bl = self.sub_window((bottom, 0), sz)?;
+        let br = self.sub_window((bottom, right), sz)?;
+        Some([tl, tr, bl, br])*/
+    }
+
+    // Returns image sides (without corners or same dimension).
+    pub fn sides_mut(mut self, height : usize, width : usize) -> Option<[Window<'a, N>; 4]> {
+        let right = self.width() - width;
+        let bottom = self.height() - height;
+        let vert_sz = (height, self.width() - 2*width);
+        let horiz_sz = (self.height() - 2*height, self.width());
+        let top = self.sub_window((0, width), vert_sz)?;
+        let right = self.sub_window((height, right), horiz_sz)?;
+        let bottom = self.sub_window((bottom, width), vert_sz)?;
+        let left = self.sub_window((height, 0), horiz_sz)?;
+        Some([top, right, bottom, left])
+    }*/
 
     pub fn shape(&self) -> (usize, usize) {
         self.win_sz
@@ -2127,9 +2241,32 @@ where
 
 }
 
+fn verify_border_dims<N>(src : &Window<'_, N>, dst : &WindowMut<'_, N>)
+where
+    N : Scalar + Copy + Debug
+{
+    assert!(src.height() < dst.height());
+    assert!(src.width() < dst.width());
+    let diffw = dst.width() - src.width();
+    let diffh = dst.height() - src.height();
+    assert!(diffw % 2 == 0);
+    assert!(diffh % 2 == 0);
+    assert!(src.height() + diffh == dst.height());
+    assert!(src.width() + diffw == dst.width());
+}
+
+fn border_dims<N>(src : &Window<'_, N>, dst : &WindowMut<'_, N>) -> (usize, usize)
+where
+    N : Scalar + Copy + Debug
+{
+    let diffw = dst.width() - src.width();
+    let diffh = dst.height() - src.height();
+    (diffh / 2, diffw / 2)
+}
+
 impl<'a, N> WindowMut<'a, N>
 where
-    N : Scalar + Copy
+    N : Scalar + Copy + Default
 {
 
     /*/// Copies the content of the slice, assuming raster order.
@@ -2138,9 +2275,131 @@ where
         self.copy_from(&Window::from_slice(other, self.win_sz.1));
     }*/
 
+    // Copies elements into the center of self self from other, assuming dim(self) > dim(other), padding the
+    // border elements with a constant user-supplied value.
+    pub fn padded_copy_from<'b>(&'a mut self, other : &'b Window<'b, N>, pad : N) {
+        verify_border_dims(other, self);
+        let (bh, bw) = border_dims(other, self);
+
+        #[cfg(feature="ipp")]
+        unsafe {
+            let (src_step, src_sz) = crate::image::ipputils::step_and_size_for_window(other);
+            let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_window_mut(&self);
+            if self.pixel_is::<u8>() {
+                //let ans = self.apply_to_sub((bh, bw), *other.size(), |mut dst| {
+                let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_window_mut(&self);
+                let ans = crate::foreign::ipp::ippi::ippiCopyConstBorder_8u_C1R(
+                    mem::transmute(other.as_ptr()),
+                    src_step,
+                    src_sz,
+                    mem::transmute(self.as_mut_ptr()),
+                    dst_step,
+                    dst_sz,
+                    bh as i32,
+                    bw as i32,
+                    *std::mem::transmute::<_, &u8>(&pad)
+                );
+                // });
+                assert!(ans == 0);
+                return;
+            }
+        }
+
+        /*self.apply_to_sub_mut((0, 0), (100, 100), |mut win| {
+            self.shape();
+        });*/
+
+        unimplemented!()
+    }
+
+    // Copies elements into the center of self self from other, assuming dim(self) > dim(other), wrapping the
+    // border elements (i.e. border elements are copied by reflecting elements from the opposite border).
+    pub fn wrapped_copy_from<'b>(&'a mut self, other : &'b Window<'b, N>) {
+        verify_border_dims(other, self);
+
+        let (bh, bw) = border_dims(other, self);
+
+        #[cfg(feature="ipp")]
+        unsafe {
+            let (src_step, src_sz) = crate::image::ipputils::step_and_size_for_window(other);
+            let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_window_mut(&self);
+            if self.pixel_is::<f32>() {
+                //let ans = self.apply_to_sub((bh, bw), *other.size(), |mut dst| {
+
+                let ans = crate::foreign::ipp::ippi::ippiCopyWrapBorder_32f_C1R(
+                    mem::transmute(other.as_ptr()),
+                    src_step,
+                    src_sz,
+                    mem::transmute(self.as_mut_ptr()),
+                    dst_step,
+                    dst_sz,
+                    bh as i32,
+                    bw as i32,
+                );
+                // });
+                assert!(ans == 0);
+                return;
+            }
+        }
+
+        unimplemented!()
+    }
+
+    // Copies elements into the center of self self from other, assuming dim(self) > dim(other), padding the
+    // border elements with the last element of other at each border pixel.
+    pub fn replicated_copy_from<'b>(&'a mut self, other : &'b Window<'b, N>) {
+        verify_border_dims(other, self);
+
+        let (bh, bw) = border_dims(other, self);
+
+         #[cfg(feature="ipp")]
+        unsafe {
+            let (src_step, src_sz) = crate::image::ipputils::step_and_size_for_window(other);
+            let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_window_mut(&self);
+            if self.pixel_is::<u8>() {
+                // let ans = self.apply_to_sub((bh, bw), *other.size(), |mut dst| {
+                let ans = crate::foreign::ipp::ippi::ippiCopyReplicateBorder_8u_C1R(
+                    mem::transmute(other.as_ptr()),
+                    src_step,
+                    src_sz,
+                    mem::transmute(self.as_mut_ptr()),
+                    dst_step,
+                    dst_sz,
+                    bh as i32,
+                    bw as i32,
+                );
+                //});
+                assert!(ans == 0);
+                return;
+            }
+        }
+
+        unimplemented!()
+    }
+
+    // Copies elements into self from other, assuming same dims.
     pub fn copy_from<'b>(&'a mut self, other : &'b Window<'b, N>) {
         assert!(self.shape() == other.shape(), "Mutable windows differ in shape");
-        self.rows_mut().zip(other.rows()).for_each(|(this, other)| this.copy_from_slice(other) );
+
+        #[cfg(feature="ipp")]
+        unsafe {
+            let (src_step, src_sz) = crate::image::ipputils::step_and_size_for_window(other);
+            let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_window_mut(&self);
+            if self.pixel_is::<u8>() {
+                let ans = crate::foreign::ipp::ippi::ippiCopy_8u_C1R(
+                    mem::transmute(other.as_ptr()),
+                    src_step,
+                    mem::transmute(self.as_mut_ptr()),
+                    dst_step,
+                    src_sz
+                );
+                assert!(ans == 0);
+                return;
+            }
+        }
+
+        self.rows_mut().zip(other.rows())
+            .for_each(|(this, other)| this.copy_from_slice(other) );
     }
 
     pub fn rows_mut(&'a mut self) -> impl Iterator<Item=&'a mut [N]> {
@@ -2151,6 +2410,15 @@ where
             let slice = &self.win[start..(start+self.win_sz.1)];
             unsafe { std::slice::from_raw_parts_mut(slice.as_ptr() as *mut _, slice.len()) }
         })
+    }
+
+    /*pub unsafe fn pixels_mut_ptr(&'a mut self, spacing : usize) -> impl Iterator<Item=*mut N> {
+        self.pixels_mut(spacing).map(|px| px as *mut _ )
+    }*/
+    pub fn foreach_pixel(&'a mut self, spacing : usize, f : impl Fn(&mut N)) {
+        for px in self.pixels_mut(spacing) {
+            f(px);
+        }
     }
 
     pub fn pixels_mut(&'a mut self, spacing : usize) -> impl Iterator<Item=&'a mut N> {

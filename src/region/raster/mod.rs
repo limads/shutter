@@ -854,7 +854,7 @@ fn assign_row_iter<'a, N>(
     a : &'a Window<'a, N>,
     b : &'a Window<'a, N>
 ) -> impl Iterator<Item=(&'a mut [N], (&'a [N], &'a [N]))>
-    where N : Scalar + Copy
+    where N : Scalar + Copy + Default
 {
     out.rows_mut().zip(a.rows().zip(b.rows()))
 }

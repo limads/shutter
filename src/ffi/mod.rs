@@ -29,6 +29,55 @@ pub extern "C" fn convolve_f32(img : &[f32], img_ncol : i64, kernel : &[f32], ke
     0
 }*/
 
+#[no_mangle]
+pub extern "C" fn peaks(
+    hist : &[i64],
+    width : i64,
+    height : i64,
+    left_peaks : &mut [i64],
+    valleys : &mut [i64],
+    right_peaks : &mut [i64],
+    num_found : &mut i64
+) -> i64 {
+
+    if width % 256 != 0 {
+        return -1;
+    }
+
+    let mut ans = crate::hist::peaks_and_valleys(hist, width as usize, height);
+    *num_found = ans.len() as i64;
+    for (ix, (left, valley, right)) in ans.drain(..).enumerate() {
+        if let (Some(l), Some(v), Some(r)) = (left_peaks.get_mut(ix), valleys.get_mut(ix), right_peaks.get_mut(ix)) {
+            *l = left as i64;
+            *v = valley as i64;
+            *r = right as i64;
+        } else {
+            return -1;
+        }
+    }
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn histogram(img : &[u8], width : i64, smooth : i64, hist_dst : &mut [i64]) -> i64 {
+    if hist_dst.len() == 256 {
+        if let Some(win) = Window::from_slice(img, width as usize) {
+            let mut hist = crate::hist::GrayHistogram::calculate(&win);
+            if smooth > 0 {
+                crate::hist::smoothen(&mut hist, smooth as usize);
+            }
+            for ix in 0..256 {
+                hist_dst[ix] = hist.as_slice()[ix] as i64;
+            }
+            0
+        } else {
+            -1
+        }
+    } else {
+        -1
+    }
+}
+
 static NOT_POSITIVE : i64 = 1;
 
 fn all_positive(s : &[i64]) -> i64 {

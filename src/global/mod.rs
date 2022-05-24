@@ -9,6 +9,67 @@ use std::ops::Add;
 use nalgebra::Scalar;
 use num_traits::AsPrimitive;
 
+// a < b ? 255 else 0
+pub fn is_pairwise_min(a : &Window<'_, u8>, b : &Window<'_, u8>, mut dst : WindowMut<'_, u8>) {
+
+    #[cfg(feature="ipp")]
+    unsafe {
+        let (a_stride, a_roi) = crate::image::ipputils::step_and_size_for_window(a);
+        let (b_stride, b_roi) = crate::image::ipputils::step_and_size_for_window(b);
+        let (dst_stride, dst_roi) = crate::image::ipputils::step_and_size_for_window_mut(&dst);
+        let ans = crate::foreign::ipp::ippi::ippiCompare_8u_C1R(
+            a.as_ptr(),
+            a_stride,
+            b.as_ptr(),
+            b_stride,
+            dst.as_mut_ptr(),
+            dst_stride,
+            a_roi,
+            crate::foreign::ipp::ippi::IppCmpOp_ippCmpLess
+        );
+        assert!(ans == 0);
+        return;
+    }
+
+    unimplemented!()
+}
+
+// a < b ? a else b
+pub fn pairwise_compare(a : &Window<'_, u8>, b : &Window<'_, u8>, mut dst : WindowMut<'_, u8>, max : bool) {
+
+    #[cfg(feature="ipp")]
+    unsafe {
+        let (a_stride, a_roi) = crate::image::ipputils::step_and_size_for_window(a);
+        let (b_stride, b_roi) = crate::image::ipputils::step_and_size_for_window(b);
+        let (dst_stride, dst_roi) = crate::image::ipputils::step_and_size_for_window_mut(&dst);
+        let ans = if max {
+            crate::foreign::ipp::ippi::ippiMaxEvery_8u_C1R(
+                a.as_ptr(),
+                a_stride,
+                b.as_ptr(),
+                b_stride,
+                dst.as_mut_ptr(),
+                dst_stride,
+                a_roi
+            )
+        } else {
+            crate::foreign::ipp::ippi::ippiMinEvery_8u_C1R(
+                a.as_ptr(),
+                a_stride,
+                b.as_ptr(),
+                b_stride,
+                dst.as_mut_ptr(),
+                dst_stride,
+                a_roi
+            )
+        };
+        assert!(ans == 0);
+        return;
+    }
+
+    unimplemented!()
+}
+
 pub fn max<N>(win : &Window<'_, N>) -> N
 where
     N : PartialOrd + Any + Clone + Copy + Debug,

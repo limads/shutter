@@ -6,6 +6,20 @@ use num_traits::Zero;
 use nalgebra::Scalar;
 use std::iter::FromIterator;
 
+// Implements median filter by histogram (Huang & Yang, 1979)
+fn histogram_median_filter(src : &Window<'_, u8>, mut dst : WindowMut<'_, u8>, win_sz : (usize, usize)) {
+
+    // (1) Calculate the median by building a histogram and sorting pixels
+    // and getting the middle one at first sub-window. Store number of pixels less than the median.
+
+    // (2) Update histogram by moving one column to the left. Update the count as well. Now the count
+    // means number of pixels less than the median of the previous window.
+
+    // (3) Starting from the median of the previous window, move up/down histogram of bins if
+    // the count is not greater/greater than #pixels in the window / 2 and update the count
+    // of #less median until the median bin is reached.
+}
+
 // This implements min-pool or max-pool.
 pub fn block_min_or_max(win : &Window<'_, u8>, dst : &mut WindowMut<'_, u8>, is_maximum : bool) {
 
