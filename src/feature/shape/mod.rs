@@ -9,6 +9,170 @@ use std::cmp::Ord;
 use std::ops::Add;
 use nalgebra;
 
+pub trait Quadrilateral {
+
+    fn top_left(&self) -> (usize, usize);
+
+    fn size(&self) -> (usize, usize);
+
+}
+
+pub struct Square {
+
+    pub tl : Vector2<usize>,
+
+    pub side : usize
+
+}
+
+impl Quadrilateral for Square {
+
+    fn top_left(&self) -> (usize, usize) {
+        (self.tl[0], self.tl[1])
+    }
+
+    fn size(&self) -> (usize, usize) {
+        (self.side, self.side)
+    }
+
+}
+
+pub struct Rect {
+
+    pub tl : Vector2<usize>,
+
+    pub sides : Vector2<usize>
+
+}
+
+impl Quadrilateral for Rect {
+
+    fn top_left(&self) -> (usize, usize) {
+        (self.tl[0], self.tl[1])
+    }
+
+    fn size(&self) -> (usize, usize) {
+        (self.sides[0], self.sides[1])
+    }
+
+}
+
+pub fn pair_distance(a : (usize, usize), b : (usize, usize)) -> (i16, i16) {
+    ((a.0 as i16 - b.0 as i16).abs(), (a.1 as i16 - b.1 as i16).abs())
+}
+
+pub fn is_pair_contiguous(a : (usize, usize), b : (usize, usize)) -> bool {
+     pair_distance(a, b) == (1, 1)
+}
+
+pub fn is_contour_contigous(pts : &[(usize, usize)]) -> bool {
+    pts.iter().take(pts.len()-1).zip(pts.iter().skip(1)).all(|(a, b)| is_pair_contiguous(*a, *b) )
+}
+
+pub fn make_contour_contiguous(pts : &mut [(usize, usize)]) -> usize {
+    make_contour_contiguous_step(pts, &mut pts.len())
+}
+
+struct PointCandidate {
+    ix : usize,
+    is_dead_end : bool
+}
+
+/* Swaps points at the slice until a maximum set of contigous elements is found.
+All elements before the returned index will be contigous. If no elements could be
+made contiguos, this will be zero; if all could be made contiguous, return slice.len().
+No guarantee is made about the order of the elements after this partition index.
+The function should be started with ix = pts.len(). Assumes each point is unique. */
+fn make_contour_contiguous_step(pts : &mut [(usize, usize)], partition_ix : &mut usize) -> usize {
+    match pts.len() - *partition_ix {
+        0..=1 => {
+            *partition_ix
+        },
+        2 => {
+            if is_pair_contiguous(pts[0], pts[1]) {
+                *partition_ix
+            } else {
+                *partition_ix - 1
+            }
+        },
+        n => {
+
+            // Holds indices of pts that are contigous to the first point. This holds
+            // at a maximum 8 points (assuming uniqueness), so could be an array/slice to reduce allocations.
+            let mut candidates = Vec::new();
+            for ix in 1..(*partition_ix) {
+                if is_pair_contiguous(pts[0], pts[ix]) {
+                    candidates.push(ix);
+                }
+            }
+
+            let mut best_candidate : Option<PointCandidate> = None;
+
+            // Keep only candidates that are also contiguous with any other points (excluding the
+            // current one).
+            for cand in candidates.drain(..).rev() {
+                let mut other_points = pts[1..cand].iter().chain(pts[cand+1..*partition_ix].iter());
+                let this_is_dead_end = !other_points.any(|other_pt| is_pair_contiguous(pts[cand], *other_pt) );
+                if let Some(ref mut best_cand) = best_candidate {
+                    match (this_is_dead_end, best_cand.is_dead_end) {
+
+                        // If previous and this are both dead ends, swap new to end of slice.
+                        (true, true) => {
+                            pts.swap(cand, *partition_ix-1);
+                            *partition_ix -= 1;
+                        },
+
+                        // This is dead end but old candidate is not. Swap new to end of slice as well.
+                        (true, false) => {
+                            pts.swap(cand, *partition_ix-1);
+                            *partition_ix -= 1;
+                        },
+
+                        // Found a linking point. Replace by previous dead end candidate.
+                        (false, true) => {
+                            pts.swap(cand, 1);
+                            *partition_ix -= 1;
+                            best_cand.ix = cand;
+                            best_cand.is_dead_end = false;
+                        },
+
+                        (false, false) => {
+                            // Here, decide on the best index (both are valid). We must remove one of
+                            // them to avoid forking paths at the contour. Remove new one by convention.
+                            pts.swap(cand, *partition_ix-1);
+                            *partition_ix -= 1;
+                        }
+                    }
+                } else {
+                    pts.swap(cand, 1);
+                    best_candidate = Some(PointCandidate { is_dead_end : this_is_dead_end, ix : cand });
+                }
+            }
+
+            match best_candidate {
+                Some(cand) => {
+                    if cand.is_dead_end {
+                        *partition_ix
+                    } else {
+                        make_contour_contiguous_step(&mut pts[2..], partition_ix)
+                    }
+                },
+
+                // Cannot find contiguous points anymore. Just set all points to unordered and stop search.
+                None => {
+                    *partition_ix - pts.len()
+                }
+            }
+        }
+    }
+}
+
+/* Verifies if one contours completes another (i.e. the extreme points at both ends are within
+a maximum distance. */
+pub fn contour_completes(a : &[(usize, usize)], b : &[(usize, usize)], dist : f32) -> bool {
+    false
+}
+
 /* Split polygonal approximation (after Distante & Distante, 2020)
 (1) Find farthest pair of points at contour and trace a bisection line;
 (2) Find pair of points with largest distance perpendicular to the bisection line (where p1 is opposite to p2 wrt this line)

@@ -5,6 +5,62 @@ use std::fmt::Debug;
 use num_traits::Zero;
 use serde::{Serialize, Deserialize, de::DeserializeOwned};
 use std::any::Any;
+use std::iter::FromIterator;
+
+// point kernel does nothing, really, since it will effectively ignore the neighborhood since it will never match the image.
+pub const POINT_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&[
+    0, 0, 0,
+    0, 255, 0,
+    0, 0, 0
+]);
+
+pub const DIAG_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&[
+    255, 0, 0,
+    0, 255, 0,
+    0, 0, 255
+]);
+
+pub const ANTI_DIAG_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&[
+    0, 0, 255,
+    0, 255, 0,
+    255, 0, 0
+]);
+
+pub const HBAR_PAIR_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&[
+    255, 255, 255,
+    0, 0, 0,
+    255, 255, 255
+]);
+
+pub const VBAR_PAIR_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&[
+    255, 0, 255,
+    255, 0, 255,
+    255, 0, 255
+]);
+
+pub const HBAR_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&[
+    0, 0, 0,
+    255, 255, 255,
+    0, 0, 0
+]);
+
+pub const VBAR_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&[
+    0, 255, 0,
+    0, 255, 0,
+    0, 255, 0
+]);
+
+pub const BLOCK_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&[
+    255, 255, 255,
+    255, 255, 255,
+    255, 255, 255
+]);
+
+pub const BOX_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&[
+    255, 255, 255,
+    255, 0, 255,
+    255, 255, 255
+]);
 
 /*
 Morphological operations consider a binary image as a set of (x, y) coordinates and a binary structuring element,
@@ -12,21 +68,15 @@ which is also a set of (x, y) elements. Dilation sets all the pixels that match 
 element to foreground whenever there is any intersection between the foreground of the structuring element and
 the image foreground. Erosion sets all pixels that match the geometry of the structutring element to background
 whenever the intersection between foreground of the structuring element and foreground of image is not complete
-(i.e. intersection = original structuring set).
+(i.e. intersection = original structuring set). If the intersection is complete, the image is left untouched.
 Opening is an erosion followed by a dilation; Closing is an dilation followed by an erosion.
-*/
 
-/*pub trait Morphology {
+For any center pixel c in the output:
+(Erosion) c = 1 iff all 1-neighbors match structuring element. c = 0 otherwise.
+Conversely, if any one of the pixels matching structuring element are background, all pixels matching
+structuring element are set to background.
 
-}
-
-impl Morphology for Erosion {
-
-}
-
-impl Morphology for Dilation {
-
-}
+(Dilation) c = 1 iff at least one 1-neighbor match structuring element. c = 0 otherwise.
 */
 
 #[derive(Clone, Debug)]
@@ -143,6 +193,141 @@ where
     }
 
 }
+
+#[cfg(feature="ipp")]
+pub struct IppiMorph {
+    spec : Vec<u8>,
+    buf : Vec<u8>,
+    kernel : Image<u8>,
+    is_dilate : bool
+}
+
+#[cfg(feature="ipp")]
+impl IppiMorph {
+
+    pub fn new(kernel : Image<u8>, img_sz : (usize, usize), is_dilate : bool) -> Self {
+        unsafe {
+            let kernel_sz = kernel.full_window().shape();
+            let img_roi_sz = crate::foreign::ipp::ippcv::IppiSizeL { width : img_sz.1 as i64, height : img_sz.0 as i64 };
+            let kernel_roi_sz = crate::foreign::ipp::ippcv::IppiSizeL { width : kernel_sz.1 as i64, height : kernel_sz.0 as i64 };
+            // let img_roi_sz : IppiSizeL = (img_sz.0 * img_sz.1) as i128;
+            // let kernel_roi_sz = (kernel_sz.0 * kernel_sz.1) as i128;
+            let num_channels = 1;
+            let mut buf_sz = 0i64;
+            let mut spec_sz = 0i64;
+            let ans = if is_dilate {
+                crate::foreign::ipp::ippcv::ippiDilateGetBufferSize_L(
+                    img_roi_sz,
+                    kernel_roi_sz,
+                    crate::foreign::ipp::ippcv::IppDataType_ipp8u,
+                    num_channels,
+                    &mut buf_sz as *mut _
+                )
+            } else {
+                crate::foreign::ipp::ippcv::ippiErodeGetBufferSize_L(
+                    img_roi_sz,
+                    kernel_roi_sz,
+                    crate::foreign::ipp::ippcv::IppDataType_ipp8u,
+                    num_channels,
+                    &mut buf_sz as *mut _
+                )
+            };
+            assert!(ans == 0);
+            let ans = if is_dilate {
+                crate::foreign::ipp::ippcv::ippiDilateGetSpecSize_L(
+                    img_roi_sz,
+                    kernel_roi_sz,
+                    &mut spec_sz as *mut _
+                )
+            } else {
+                crate::foreign::ipp::ippcv::ippiErodeGetSpecSize_L(
+                    img_roi_sz,
+                    kernel_roi_sz,
+                    &mut spec_sz as *mut _
+                )
+            };
+            assert!(ans == 0);
+            let mut buf = Vec::from_iter((0..(buf_sz as usize)).map(|_| 0u8 ));
+            let mut spec = Vec::from_iter((0..(spec_sz as usize)).map(|_| 0u8 ));
+            let ans = if is_dilate {
+                crate::foreign::ipp::ippcv::ippiDilateInit_L(
+                    img_roi_sz,
+                    kernel.full_window().as_ptr(),
+                    kernel_roi_sz,
+                    std::mem::transmute(spec.as_mut_ptr())
+                )
+            } else {
+                crate::foreign::ipp::ippcv::ippiErodeInit_L(
+                    img_roi_sz,
+                    kernel.full_window().as_ptr(),
+                    kernel_roi_sz,
+                    std::mem::transmute(spec.as_mut_ptr())
+                )
+            };
+            assert!(ans == 0);
+            Self { spec, buf, kernel, is_dilate }
+        }
+    }
+
+    pub fn apply(&mut self, src : &Window<'_, u8>, dst : &mut WindowMut<'_, u8>) {
+
+        assert!(src.shape() == dst.shape());
+
+        unsafe {
+            let (src_step, src_sz) = crate::image::ipputils::step_and_size_for_window(src);
+            let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_window_mut(&dst);
+
+            let src_roi = crate::foreign::ipp::ippcv::IppiSizeL { width : src.width() as i64, height : src.height() as i64 };
+            let border_const_val = &0u8 as *const _;
+            unsafe {
+                let ans = if self.is_dilate {
+                    crate::foreign::ipp::ippcv::ippiDilate_8u_C1R_L(
+                        src.as_ptr(),
+                        src_step as i64,
+                        dst.as_mut_ptr(),
+                        dst_step as i64,
+                        src_roi,
+                        crate::foreign::ipp::ippcv::_IppiBorderType_ippBorderRepl,
+                        border_const_val,
+                        std::mem::transmute(self.spec.as_ptr()),
+                        self.buf.as_mut_ptr()
+                    )
+                } else {
+                    crate::foreign::ipp::ippcv::ippiErode_8u_C1R_L(
+                        src.as_ptr(),
+                        src_step as i64,
+                        dst.as_mut_ptr(),
+                        dst_step as i64,
+                        src_roi,
+                        crate::foreign::ipp::ippcv::_IppiBorderType_ippBorderRepl,
+                        border_const_val,
+                        std::mem::transmute(self.spec.as_ptr()),
+                        self.buf.as_mut_ptr()
+                    )
+                };
+                assert!(ans == 0);
+            }
+        }
+    }
+
+}
+
+/*pub trait Morphology {
+
+}
+
+impl<'a> Morphology for Window<'a, u8> {
+
+    // pub fn dilate(&self, morph : &mut IppiMorph)
+
+}
+
+impl Morphology for Dilation {
+
+}*/
+
+// ippiMorphGetSpecSize_L(IppiSizeL roiSize, IppiSizeL maskSize, IppDataType dataType, int
+// numChannels, IppSizeL* pSpecSize);
 
 // TODO opening=erosion followed by dilation; closing=dilationn followed by erosion.
 

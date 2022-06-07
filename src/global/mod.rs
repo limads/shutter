@@ -34,42 +34,6 @@ pub fn is_pairwise_min(a : &Window<'_, u8>, b : &Window<'_, u8>, mut dst : Windo
     unimplemented!()
 }
 
-// a < b ? a else b
-pub fn pairwise_compare(a : &Window<'_, u8>, b : &Window<'_, u8>, mut dst : WindowMut<'_, u8>, max : bool) {
-
-    #[cfg(feature="ipp")]
-    unsafe {
-        let (a_stride, a_roi) = crate::image::ipputils::step_and_size_for_window(a);
-        let (b_stride, b_roi) = crate::image::ipputils::step_and_size_for_window(b);
-        let (dst_stride, dst_roi) = crate::image::ipputils::step_and_size_for_window_mut(&dst);
-        let ans = if max {
-            crate::foreign::ipp::ippi::ippiMaxEvery_8u_C1R(
-                a.as_ptr(),
-                a_stride,
-                b.as_ptr(),
-                b_stride,
-                dst.as_mut_ptr(),
-                dst_stride,
-                a_roi
-            )
-        } else {
-            crate::foreign::ipp::ippi::ippiMinEvery_8u_C1R(
-                a.as_ptr(),
-                a_stride,
-                b.as_ptr(),
-                b_stride,
-                dst.as_mut_ptr(),
-                dst_stride,
-                a_roi
-            )
-        };
-        assert!(ans == 0);
-        return;
-    }
-
-    unimplemented!()
-}
-
 pub fn max<N>(win : &Window<'_, N>) -> N
 where
     N : PartialOrd + Any + Clone + Copy + Debug,
@@ -94,8 +58,8 @@ where
 pub fn mean<N, S>(win : &Window<'_, N>, n_pxs : usize) -> Option<S>
 where
     N : Scalar + Any + Clone + Copy + Debug + Zero,
-    S : Zero + From<f64> + From<N> + Add<Output=S> + Div<Output=S>,
-    f64 : From<N>
+    S : Zero + From<f32> + From<N> + Add<Output=S> + Div<Output=S>,
+    f32 : From<N>
 {
 
     // TODO ipp version is ignoring subsampling parameter
@@ -103,18 +67,18 @@ where
     #[cfg(feature="ipp")]
     {
         let s = sum::<N, S>(win, n_pxs);
-        return Some(s / S::from(win.area() as f64));
+        return Some(s / S::from(win.area() as f32));
     }
 
-    let sum_f = win.shrink_to_subsample(n_pxs)?.pixels(n_pxs).map(|px| f64::from(*px) ).sum::<f64>();
-    let avg = S::from(sum_f / (win.area() as f64));
+    let sum_f = win.shrink_to_subsample(n_pxs)?.pixels(n_pxs).map(|px| f32::from(*px) ).sum::<f32>();
+    let avg = S::from(sum_f / (win.area() as f32));
     Some(avg)
 }
 
 pub fn sum<N, S>(win : &Window<'_, N>, n_pxs : usize) -> S
 where
     N : Scalar + Any + Clone + Copy + Debug + Zero,
-    S : Zero + From<f64> + From<N> + Add<Output=S>
+    S : Zero + From<f32> + From<N> + Add<Output=S>
 {
 
     // TODO ignoring n_pxs parameter
@@ -128,7 +92,7 @@ where
         if win.pixel_is::<u8>() {
             let ans = crate::foreign::ipp::ippi::ippiSum_8u_C1R(std::mem::transmute(win.as_ptr()), byte_stride, roi, &mut sum as *mut _);
             assert!(ans == 0);
-            return S::from(sum);
+            return S::from(sum as f32);
         }
     }
 

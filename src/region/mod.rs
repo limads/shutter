@@ -679,7 +679,7 @@ impl PointExtractor {
 }
 
 #[cfg(feature="opencv")]
-pub fn connected_components(win : &Window<'_, u8>, mut out : WindowMut<'_, u16>) -> Vec<(usize, usize, usize, usize)> {
+pub fn connected_components(win : &Window<'_, u8>, out : &mut WindowMut<'_, u16>) -> Vec<(usize, usize, usize, usize)> {
 
     use opencv::core::*;
     use opencv::imgproc::*;

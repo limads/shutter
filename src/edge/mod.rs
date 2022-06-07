@@ -1,3 +1,10 @@
+/* Distante & Distante (p. 291)
+(1) Find pixel with magn > thresh
+(2) Take neighbor at 4 or 8-connected region w/ highest magnitude and similar orientation (within pi/4).
+Repeat this step while condition is met.
+(3) Case (2) not met
+*/
+
 /*IppStatus ippiCannyBorderGetSize(IppiSize roiSize, IppiDifferentialKernel filterType,
 IppiMaskSize mask, IppDataType dataType, int* pBufferSize);
 

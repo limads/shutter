@@ -33,6 +33,11 @@ pub trait Raster {
     // current object.
     unsafe fn original_slice(&mut self) -> Self::Slice;
 
+    // Returns the subsection of the original slice that is
+    // effectively used to represent this window. slice.as_ptr()
+    // will be the same as self.ptr().
+    unsafe fn essential_slice(&mut self) -> Self::Slice;
+
 }
 
 impl<'a, T> Raster for Window<'a, T>
@@ -78,6 +83,10 @@ where
         self.win
     }
 
+    unsafe fn essential_slice(&mut self) -> Self::Slice {
+        std::slice::from_raw_parts(self.as_ptr(), self.original_width() * self.height())
+    }
+
 }
 
 impl<'a, T> Raster for WindowMut<'a, T>
@@ -121,6 +130,10 @@ where
 
     unsafe fn original_slice(&mut self) -> Self::Slice {
         std::slice::from_raw_parts_mut(self.win.as_mut_ptr(), self.win.len())
+    }
+
+    unsafe fn essential_slice(&mut self) -> Self::Slice {
+        std::slice::from_raw_parts_mut(self.as_mut_ptr(), self.original_width() * self.height())
     }
 
 }
@@ -222,7 +235,7 @@ where
 
 impl<'a, N> Iterator for WindowIteratorMut<'a, N>
 where
-    N : Scalar + Copy
+    N : Scalar + Copy + Default
 {
 
     type Item = WindowMut<'a, N>;

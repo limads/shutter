@@ -2,6 +2,79 @@ use crate::image::*;
 use std::default::Default;
 use crate::prelude::Raster;
 
+pub fn copy_if_above_threshold(dst_orig : &Window<'_, u8>, orig : (usize, usize), win_dim : (usize, usize), threshold : i32, dst : &mut Image<u8>) {
+    if crate::global::sum::<_, f32>(&dst_orig.sub_window(orig, win_dim).unwrap(), 1) as i32 > threshold {
+        dst.window_mut(orig, win_dim).unwrap().copy_from(&dst_orig.sub_window(orig, win_dim).unwrap());
+    }
+}
+
+pub fn zero_sparse_regions(dst : &mut Image<u8>, sum : &mut WindowMut<'_, i32>, win_dim : (usize, usize), min_pts : usize) {
+
+    let sum_sz = (126 / win_dim.0, 126 / win_dim.1);
+
+    crate::local::local_sum(dst.as_ref(), sum);
+
+    let threshold = (255*min_pts) as i32;
+
+    // Overwrite with disjoint windows (faster)
+    println!("{:?}", sum);
+    for i in 0..sum_sz.0 {
+        for j in 0..sum_sz.1 {
+            let origin = ((i*win_dim.0) as usize, (j*win_dim.1) as usize);
+            if sum[(i, j)] <= threshold {
+                dst.window_mut(origin, win_dim).unwrap().fill(0);
+            } else {
+                // Copying case the value is greater will overwrite the edges of a previous zeroed
+                // window region, thus preserving large object edges, and leaving isolated
+                // objects at zero. TODO this would happen only for a convolution-like sliding.
+                // It is irrelevant for disjoint sliding.
+                // dst.window_mut(origin, win_dim).unwrap().copy_from(&dst_orig.window(origin, win_dim).unwrap());
+            }
+        }
+    }
+
+    // Do another pass starting at half window height, this time copying the original values
+    // from source when the sum is matched at the current sub-window but the previous window
+    // at the side or top was not matched (or vice-versa). This is done to preserve
+    // object edges at the transitions from a region that was matched to a region that was not.
+    let dst_orig = dst.clone();
+    for i in 0..(sum_sz.0-1) {
+        for j in 0..(sum_sz.1-1) {
+
+            // Identify this as a left-to-right transition
+            let ltr_transition = (sum[(i, j)] > threshold && sum[(i, j+1)] <= threshold) ||
+                (sum[(i, j)] <= threshold && sum[(i, j+1)] > threshold);
+            if ltr_transition {
+                let ltr_origin = ((i*win_dim.0) as usize, (j*win_dim.1 + win_dim.1 / 2) as usize);
+                copy_if_above_threshold(dst_orig.as_ref(), ltr_origin, win_dim, threshold, dst);
+            }
+
+            // Identify this as a top-to-bottom transition
+            let ttb_transition = (sum[(i, j)] > threshold && sum[(i+1, j)] <= threshold) ||
+                (sum[(i, j)] <= threshold && sum[(i+1, j)] > threshold);
+            if ttb_transition {
+                let ttb_origin = ((i*win_dim.0 + win_dim.0 / 2) as usize, (j*win_dim.1) as usize);
+                copy_if_above_threshold(dst_orig.as_ref(), ttb_origin, win_dim, threshold, dst);
+            }
+
+        }
+    }
+
+}
+
+pub fn binary_coordinates(win : &Window<'_, u8>, coords : Option<Vec<(usize, usize)>>) -> Vec<(usize, usize)> {
+    let mut coords = coords.unwrap_or(Vec::new());
+    coords.clear();
+    for i in 0..win.height() {
+        for j in 0..win.width() {
+            if win[(i, j)] != 0 {
+                coords.push((i, j));
+            }
+        }
+    }
+    coords
+}
+
 pub fn count_range(win : &Window<'_, u8>, low : u8, high : u8) -> usize {
 
     #[cfg(feature="ipp")]
@@ -125,7 +198,7 @@ pub enum Foreground {
 
 pub trait Threshold {
 
-    fn threshold_to<'a>(&'a self, src : &'a Window<'a, u8>, out : &'a mut WindowMut<'a, u8>);
+    fn threshold_to<'a>(&self, src : &'a Window<'a, u8>, out : &mut WindowMut<'a, u8>);
 
     fn threshold(&self, src : &Window<'_, u8>) -> Image<u8> {
         let mut img = Image::<u8>::new_constant(src.height(), src.width(), 0);
@@ -147,7 +220,7 @@ impl FixedThreshold {
 
 impl Threshold for FixedThreshold {
 
-    fn threshold_to<'a>(&'a self, src : &'a Window<'a, u8>, out : &'a mut WindowMut<'a, u8>) {
+    fn threshold_to<'a>(&self, src : &Window<'a, u8>, out : &mut WindowMut<'a, u8>) {
 
         assert!(src.shape() == out.shape());
 
@@ -188,16 +261,18 @@ impl Threshold for FixedThreshold {
                     // results for v == 0 and v == 255, since the sum/subtraction is saturating).
                     let less_than = b.saturating_add(1);
                     let greater_than = a.saturating_sub(1);
+
+                    // Actually, this but rerversed (init image to zero; then set lt, gt to 255.
                     let ans = crate::foreign::ipp::ippi::ippiThreshold_LTValGTVal_8u_C1R(
                         src.as_ptr(),
                         src_byte_stride,
                         out.as_mut_ptr(),
                         dst_byte_stride,
                         roi,
+                        greater_than,
+                        255,
                         less_than,
                         255,
-                        greater_than,
-                        255
                     );
                     assert!(ans == 0);
                 }
@@ -234,7 +309,7 @@ impl Threshold for FixedThreshold {
             // return;
         }*/
 
-        match self.0 {
+        /*match self.0 {
             Foreground::Below(v) => {
                 out.pixels_mut(1).zip(src.pixels(1))
                     .for_each(|(px_out, px_in)| if *px_in <= v { *px_out = 255 } else { *px_out = 0 });
@@ -247,7 +322,7 @@ impl Threshold for FixedThreshold {
                 out.pixels_mut(1).zip(src.pixels(1))
                     .for_each(|(px_out, px_in)| if *px_in >= a && *px_in <= b { *px_out = 255 } else { *px_out = 0 });
             }
-        }
+        }*/
     }
 
 }
@@ -483,49 +558,55 @@ pub struct BalancedHist {
 
     // Binds below this value at either end of the histogram won't count towards histogram equilibrium point
     // (but values below this that are not at extreme values will).
-    min_count : usize,
+    min_count : u32,
 
+}
+
+fn relative_to_max(bins : &[u32]) -> Vec<f32> {
+    let max = bins.iter().copied().max().unwrap() as f32;
+    bins.iter().map(move |count| *count as f32 / max ).collect()
 }
 
 impl BalancedHist {
 
-    pub fn new(min_count : usize) -> Self {
+    pub fn new(min_count : u32) -> Self {
         Self { min_count }
     }
 
-    pub fn estimate(&self, profile : &ColorProfile, step : usize) -> u8 {
-        let bins = profile.bins();
+    pub fn estimate(&self, bins : &[u32], step : u32) -> u32 {
+        // let bins = profile.bins();
+        let probabilities = relative_to_max(bins);
 
         // Those delimit the left region if the histogram follows a bimodal distribution.
-        let mut left_limit = 0;
-        let mut right_limit = 255;
+        let mut left_limit : u32 = 0;
+        let mut right_limit : u32 = 255;
 
-        while bins[left_limit] < self.min_count && left_limit < (right_limit - step) {
+        while bins[left_limit as usize] < self.min_count && left_limit < (right_limit - step) {
             left_limit += step;
         }
 
-        while bins[right_limit] < self.min_count && right_limit > left_limit {
+        while bins[right_limit as usize] < self.min_count && right_limit > left_limit {
             right_limit -= step;
         }
 
         // Take histogram expected value as first center guess.
-        let mut center = partial_mean(0, 256, &profile.probabilities()[..]) as usize;
+        let mut center = partial_mean(0, 256, &probabilities[..]) as usize;
 
         // TODO propagate step to increment/decrement
         // for th in (start..end) /*.step_by(step)*/ {
 
-        let mut weight_a = bins[..center].iter().copied().sum::<usize>();
-        let mut weight_b = bins[center..].iter().copied().sum::<usize>();
+        let mut weight_a = bins[..center].iter().copied().sum::<u32>() as f32;
+        let mut weight_b = bins[center..].iter().copied().sum::<u32>() as f32;
 
         while left_limit < right_limit {
 
             if weight_a > weight_b {
                 // Left part heavier (skew left limit towars histogram end)
-                weight_a -= bins[left_limit];
+                weight_a -= bins[left_limit as usize] as f32;
                 left_limit += step;
             } else {
                 // Right part heavier (skew right limit towards histogram beginning)
-                weight_b -= bins[right_limit];
+                weight_b -= bins[right_limit as usize] as f32;
                 right_limit -= step;
             }
 
@@ -535,14 +616,14 @@ impl BalancedHist {
             if new_center < center {
 
                 // Move bin at center from left to right
-                weight_a -= bins[center];
-                weight_b += bins[center];
+                weight_a -= bins[center] as f32;
+                weight_b += bins[center] as f32;
             } else {
                 if new_center > center {
 
                     // Move bin at center from right to left
-                    weight_a += bins[center];
-                    weight_b -= bins[center];
+                    weight_a += bins[center] as f32;
+                    weight_b -= bins[center] as f32;
                 }
 
                 // If new_center = center, do nothing
@@ -550,7 +631,7 @@ impl BalancedHist {
 
             center = new_center;
         }
-        center as u8
+        center as u32
     }
 
 }

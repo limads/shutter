@@ -13,6 +13,7 @@ use num_traits::cast::{AsPrimitive, ToPrimitive};
 use num_traits::ops::inv::Inv;
 use num_traits::One;
 use std::any::Any;
+use std::mem;
 
 impl From<Image<u8>> for Image<f32> {
 
@@ -283,6 +284,59 @@ where
 
     fn convert_from(&'a mut self, other : W, conv : Conversion) {
         self.as_mut().convert_from(other, conv);
+    }
+
+}
+
+pub trait ConvertInto<'a, N>
+where
+    N : Copy + Scalar + Clone + Debug
+{
+
+    fn convert_into(&self, conv : Conversion, other : &mut WindowMut<'a, N>);
+
+    fn convert_owned(&self, conv : Conversion) -> Image<N>;
+
+}
+
+impl<'a, M, N> ConvertInto<'a, N> for Window<'a, M>
+where
+
+    WindowMut<'a, N> : Convert<'a, Window<'a, M>, N, M>,
+    N : Zero + Copy + Scalar + Default + Bounded + AsPrimitive<M> + Mul<Output=N> + Div<Output=N> + One + Any + ToPrimitive + PartialOrd,
+    u8 : AsPrimitive<M>,
+    M : Scalar + Default + num_traits::cast::AsPrimitive<N> + Zero + Bounded + Mul<Output=M> + Div<Output=M> + One + Any + ToPrimitive + PartialOrd,
+{
+
+    fn convert_into(&self, conv : Conversion, other : &mut WindowMut<'a, N>) {
+        unsafe { mem::transmute::<_, &'a mut WindowMut<'a, N>>(other).convert_from(self.clone(), conv); }
+    }
+
+    fn convert_owned(&self, conv : Conversion) -> Image<N> {
+        let mut out = Image::<N>::new_constant(self.height(), self.width(), N::zero());
+        unsafe { self.convert_into(conv, mem::transmute::<_, &'a mut WindowMut<'a, N>>(&mut out.full_window_mut())) };
+        out
+    }
+
+}
+
+impl<'a, M, N> ConvertInto<'a, N> for Image<M>
+where
+    WindowMut<'a, N> : Convert<'a, Window<'a, M>, N, M>,
+    N : Zero + Copy + Scalar + Default + Bounded + AsPrimitive<M> + Mul<Output=N> + Div<Output=N> + One + Any + ToPrimitive + PartialOrd,
+    u8 : AsPrimitive<M>,
+    M : Scalar + Default + num_traits::cast::AsPrimitive<N> + Zero + Bounded + Mul<Output=M> + Div<Output=M> + One + Any + ToPrimitive + PartialOrd,
+{
+
+    fn convert_into(&self, conv : Conversion, other : &mut WindowMut<'a, N>) {
+        let other = unsafe {  mem::transmute::<_, &'a mut WindowMut<'a, N>>(other) };
+        unsafe { other.convert_from(mem::transmute::<_, Window<'a, M>>(self.full_window()), conv) };
+    }
+
+    fn convert_owned(&self, conv : Conversion) -> Image<N> {
+        let mut out = Image::<N>::new_constant(self.height(), self.width(), N::zero());
+        unsafe { self.convert_into(conv, mem::transmute::<_, &'a mut WindowMut<'a, N>>(&mut out.full_window_mut())) };
+        out
     }
 
 }

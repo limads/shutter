@@ -23,6 +23,9 @@ use std::mem;
 use crate::raster::*;
 use crate::draw::*;
 
+// TODO make indexing operations checked at debug builds. They are segfaulting if the
+// user passes an overflowing index, since the impl is using get_unchecked regardless for now.
+
 #[cfg(feature="opencv")]
 use opencv::core;
 
@@ -224,6 +227,40 @@ where
 
 }*/
 
+fn join_windows<N>(s : &[Window<'_, N>], horizontal : bool) -> Option<Image<N>>
+where
+    N : Scalar + Debug + Clone + Copy + Default + Zero
+{
+    if s.len() == 0 {
+        return None;
+    }
+    let shape = s[0].shape();
+    if !s.iter().skip(1).all(|w| w.shape() == shape ) {
+        return None;
+    }
+    let width = if horizontal { shape.1 * s.len() } else { shape.1 };
+    let height = if horizontal { shape.0 } else { shape.0 * s.len() };
+    let n = width * height;
+    let mut buf = Vec::with_capacity(n);
+    unsafe { buf.set_len(n); }
+    let mut img = Image {
+        buf : buf.into_boxed_slice(),
+        offset : (0, 0),
+        width,
+        size : (height, width)
+    };
+    println!("{:?}", shape);
+    for ix in 0..s.len() {
+        let mut win_mut = if horizontal {
+            img.window_mut((0, ix*shape.1), shape)
+        } else {
+            img.window_mut((ix*shape.0, 0), shape)
+        };
+        win_mut.unwrap().copy_from(&s[ix]);
+    }
+    Some(img)
+}
+
 impl<N> Image<N>
 where
     N : Scalar + Copy + Default + Zero + Copy + Any
@@ -254,6 +291,11 @@ where
             .transpose_to(&mut DMatrixSliceMut::from_slice(&mut self.buf[..], src.width(), src.height()));
     }
 
+    pub fn transpose_mut(&mut self) {
+        let original = self.clone();
+        self.transpose_from(&original);
+    }
+
     // Splits this image over S owning, memory-contiguous blocks. This does not
     // copy the underlying data and is useful to split the work across multiple threads
     // using ownership-based mechanisms (such as channels).
@@ -267,8 +309,12 @@ where
     // whose buffers are not memory-contigous returns None, since the underlying vector
     // is built assuming zero-copy by just reclaiming ownership of the blocks, and this
     // cannot be done with images with non-contiguous memory blocks.
-    pub fn join(s : &[Image<N>]) -> Option<Image<N>> {
-        unimplemented!()
+    pub fn concatenate(s : &[Window<'_, N>]) -> Option<Image<N>> {
+        join_windows(s, true)
+    }
+
+    pub fn stack(s : &[Window<'_, N>]) -> Option<Image<N>> {
+        join_windows(s, false)
     }
 
     pub unsafe fn unchecked_linear_index(&self, ix : usize) -> &N {
@@ -332,6 +378,12 @@ where
             buf.extend(r.into_iter());
         }
         Self { buf : buf.into_boxed_slice(), width : C, offset : (0, 0), size : (R, C) }
+    }
+
+    pub fn from_cols<const R : usize, const C : usize>(pxs : [[N; C]; R]) -> Self {
+        let mut img = Image::from_rows(pxs);
+        img.transpose_mut();
+        img
     }
 
     pub fn new_constant(height : usize, width : usize, value : N) -> Self {
@@ -405,7 +457,8 @@ where
 
         // IppStatus ippiCopy_8uC1R(const Ipp<datatype>* pSrc, int srcStep, Ipp<datatype>* pDst,
         // int dstStep, IppiSize roiSize);
-        self.buf.copy_from_slice(&other.buf[..]);
+        // self.buf.copy_from_slice(&other.buf[..]);
+        self.full_window_mut().copy_from(&other.full_window());
     }
     
     pub fn copy_from_slice(&mut self, slice : &[N]) {
@@ -728,10 +781,10 @@ where
         self.get((0, 0)).unwrap() as *const N
     }
 
-    /// Converts this image from the range[0, 1] (floating-point) to the quantized range defined by max
+    /*/// Converts this image from the range[0, 1] (floating-point) to the quantized range defined by max
     pub fn quantize<M : Scalar + >(&self, mut out : WindowMut<'_, M>)
     where
-        N : Copy + Mul<Output=N> + num_traits::float::Float + num_traits::cast::AsPrimitive<M>,
+        N : Copy + Mul<Output=N> + num_traits::float::Float + num_traits::cast::AsPrimitive<M> + Scalar,
         M : num_traits::cast::AsPrimitive<N> + Copy + num_traits::Bounded
     {
         let max : N = M::max_value().as_();
@@ -740,9 +793,9 @@ where
                 out[(i, j)] = (self[(i, j)] * max).min(max).as_();
             }
         }
-    }
+    }*/
 
-    /// Converts this image to the range [0, 1] (floating-point) by dividing by its maximum
+    /*/// Converts this image to the range [0, 1] (floating-point) by dividing by its maximum
     /// attainable value.
     pub fn smoothen<M : Scalar + >(&self, mut out : WindowMut<'_, M>)
     where
@@ -755,7 +808,7 @@ where
                 out[(i, j)] = (self[(i, j)]).as_() / max;
             }
         }
-    }
+    }*/
 
     /// The cartesian index is defined as (img.height() - pt[1], pt[0]).
     /// It indexes the image by imposing the cartesian analytical plane over it,
@@ -789,6 +842,14 @@ where
     pub fn height(&self) -> usize {
         self.shape().1
     }*/
+
+    /// Returns either the given sub window, or trim it to the window borders and return a smaller but also valid window
+    pub fn largest_valid_sub_window(&'a self, offset : (usize, usize), dims : (usize, usize)) -> Option<Window<'a, N>> {
+        let diff_h = offset.0 as i64 + dims.0 as i64 - self.height() as i64;
+        let diff_w = offset.1 as i64 + dims.1 as i64 - self.width() as i64;
+        let valid_dims = (dims.0 - diff_h.max(0) as usize, dims.1 - diff_w.max(0) as usize);
+        self.sub_window(offset, valid_dims)
+    }
 
     pub fn sub_window(&'a self, offset : (usize, usize), dims : (usize, usize)) -> Option<Window<'a, N>> {
         let new_offset = (self.offset.0 + offset.0, self.offset.1 + offset.1);
@@ -1032,7 +1093,13 @@ where
         sub_wins
     }
 
-    pub fn far_thin_neighborhood(&'a self, center_tl : (usize, usize), win_sz : (usize, usize), dist : usize) -> Option<WindowNeighborhood<'a, N>> {
+    pub fn four_distant_window_neighborhood(
+        &'a self,
+        center_tl : (usize, usize),
+        win_sz : (usize, usize),
+        neigh_ext : usize,
+        dist : usize
+    ) -> Option<WindowNeighborhood<'a, N>> {
         let outside_bounds = center_tl.0 < win_sz.0 + dist ||
             center_tl.0 > self.height().checked_sub(win_sz.0 + dist)? ||
             center_tl.1 > self.width().checked_sub(win_sz.1 + dist)? ||
@@ -1040,16 +1107,26 @@ where
         if outside_bounds {
             return None;
         }
+        let vert_sz = (neigh_ext, win_sz.1);
+        let horiz_sz = (win_sz.0, neigh_ext);
         Some(WindowNeighborhood {
             center : self.sub_window(center_tl, win_sz)?,
-            left : self.sub_window((center_tl.0, center_tl.1 - win_sz.1 - dist), win_sz)?,
-            top : self.sub_window((center_tl.0 - win_sz.0 - dist, center_tl.1), win_sz)?,
-            right : self.sub_window((center_tl.0, center_tl.1 + win_sz.1 + dist), win_sz)?,
-            bottom : self.sub_window((center_tl.0 + win_sz.0 + dist, center_tl.1), win_sz)?
+            left : self.sub_window((center_tl.0, center_tl.1 - win_sz.1 - dist), horiz_sz)?,
+            top : self.sub_window((center_tl.0 - win_sz.0 - dist, center_tl.1), vert_sz)?,
+            right : self.sub_window((center_tl.0, center_tl.1 + win_sz.1 + dist), horiz_sz)?,
+            bottom : self.sub_window((center_tl.0 + win_sz.0 + dist, center_tl.1), vert_sz)?
         })
     }
 
-    pub fn thin_neighborhood(&'a self, center_tl : (usize, usize), win_sz : (usize, usize)) -> Option<WindowNeighborhood<'a, N>> {
+    // Get the four windows at top, left, bottom and right of a center window
+    // identified by its top-left position, where top/bottom neighboring windows are
+    // neigh_ext x win_sz.1 and left/right neighboring windows are win_sz.0 x win_sz.0
+    pub fn four_window_neighborhood(
+        &'a self,
+        center_tl : (usize, usize),
+        win_sz : (usize, usize),
+        neigh_ext : usize
+    ) -> Option<WindowNeighborhood<'a, N>> {
         let outside_bounds = center_tl.0 < win_sz.0 ||
             center_tl.0 > self.height().checked_sub(win_sz.0)? ||
             center_tl.1 > self.width().checked_sub(win_sz.1)? ||
@@ -1057,12 +1134,14 @@ where
         if outside_bounds {
             return None;
         }
+        let vert_sz = (neigh_ext, win_sz.1);
+        let horiz_sz = (win_sz.0, neigh_ext);
         Some(WindowNeighborhood {
             center : self.sub_window(center_tl, win_sz)?,
-            left : self.sub_window((center_tl.0, center_tl.1 - win_sz.1), win_sz)?,
-            top : self.sub_window((center_tl.0 - win_sz.0, center_tl.1), win_sz)?,
-            right : self.sub_window((center_tl.0, center_tl.1 + win_sz.1), win_sz)?,
-            bottom : self.sub_window((center_tl.0 + win_sz.0, center_tl.1), win_sz)?
+            left : self.sub_window((center_tl.0, center_tl.1 - win_sz.1), horiz_sz)?,
+            top : self.sub_window((center_tl.0 - win_sz.0, center_tl.1), vert_sz)?,
+            right : self.sub_window((center_tl.0, center_tl.1 + win_sz.1), horiz_sz)?,
+            bottom : self.sub_window((center_tl.0 + win_sz.0, center_tl.1), vert_sz)?
         })
     }
 
@@ -1482,12 +1561,21 @@ impl<'a> Window<'a, u8> {
     }
 
     /// Gets pos or the nearest pixel to it that satisfies a condition.
-    pub fn nearest_matching(&self, seed : (usize, usize), px_spacing : usize, f : impl Fn(u8)->bool, max_dist : usize) -> Option<(usize, usize)> {
+    pub fn nearest_matching(
+        &self,
+        seed : (usize, usize),
+        px_spacing : usize,
+        f : impl Fn(u8)->bool, max_dist : usize
+    ) -> Option<(usize, usize)> {
         if f(self[seed]) {
             Some(seed)
         } else {
             self.expanding_pixels(seed, px_spacing)
-                .take_while(|(pos, _)| ((pos.0 as i64 - seed.0 as i64).abs() as usize) < max_dist && ((pos.1 as i64 - seed.1 as i64).abs() as usize) < max_dist)
+                .take_while(|(pos, _)| {
+                    let row_close_seed = ((pos.0 as i64 - seed.0 as i64).abs() as usize) < max_dist;
+                    let col_close_seed = ((pos.1 as i64 - seed.1 as i64).abs() as usize) < max_dist;
+                    row_close_seed && col_close_seed
+                })
                 .find(|(_, px)| f(**px) )
                 .map(|(pos, _)| pos )
         }
@@ -1869,6 +1957,21 @@ where
 
 impl<'a, N> WindowMut<'a, N>
 where
+    N : Scalar + Copy
+{
+    pub fn as_mut_ptr(&mut self) -> *mut N {
+        // self.win.as_ptr()
+        &mut self[(0usize,0usize)] as *mut _
+    }
+
+    pub fn as_ptr(&self) -> *const N {
+        // self.win.as_ptr()
+        &self[(0usize,0usize)] as *const _
+    }
+}
+
+impl<'a, N> WindowMut<'a, N>
+where
     N : Scalar + Copy + Debug + Default
 {
 
@@ -1895,16 +1998,6 @@ where
 
     pub fn area(&self) -> usize {
         self.width() * self.height()
-    }
-
-    pub fn as_mut_ptr(&mut self) -> *mut N {
-        // self.win.as_ptr()
-        &mut self[(0usize,0usize)] as *mut _
-    }
-
-    pub fn as_ptr(&self) -> *const N {
-        // self.win.as_ptr()
-        &self[(0usize,0usize)] as *const _
     }
 
     pub fn byte_stride(&self) -> usize {
@@ -2027,7 +2120,7 @@ where
         N : Mul<Output=N> + MulAssign
     {
         let (step_v, step_h) = sz;
-        if sz.0 >= self.win_sz.0 || sz.1 >= self.win_sz.1 {
+        if sz.0 > self.win_sz.0 || sz.1 > self.win_sz.1 {
             panic!("Child window size bigger than parent window size");
         }
         if self.height() % sz.0 != 0 || self.width() % sz.1 != 0 {
@@ -2097,6 +2190,7 @@ impl<'a> WindowMut<'a, u8> {
             let row = self.row_mut(ix);
             std::ptr::write_bytes(&mut row[0] as *mut _, byte, row.len());
         }*/
+        unimplemented!()
     }
 
     pub fn patches(&self, px_spacing : usize) -> Vec<Patch> {
@@ -2243,7 +2337,7 @@ where
 
 fn verify_border_dims<N>(src : &Window<'_, N>, dst : &WindowMut<'_, N>)
 where
-    N : Scalar + Copy + Debug
+    N : Scalar + Copy + Debug + Default
 {
     assert!(src.height() < dst.height());
     assert!(src.width() < dst.width());
@@ -2257,7 +2351,7 @@ where
 
 fn border_dims<N>(src : &Window<'_, N>, dst : &WindowMut<'_, N>) -> (usize, usize)
 where
-    N : Scalar + Copy + Debug
+    N : Scalar + Copy + Debug + Default
 {
     let diffw = dst.width() - src.width();
     let diffh = dst.height() - src.height();
@@ -2377,6 +2471,44 @@ where
         unimplemented!()
     }
 
+    // Copies entries from true_other into self only where pixels at the mask are nonzero,
+    // and from false_other into self when mask is zero.
+    // self[px] = mask[px] == 0 ? false_other else true_other[px].
+    pub fn binary_conditional_copy_from<'b>(&'a mut self, mask : &'b Window<'b, u8>, true_other : &'b Window<'b, N>, false_other : &'b Window<'b, N>) {
+        // TODO remove unsafe (cannot borrow `*self` as mutable more than once at a time)
+        unsafe { (&mut *(self as *mut WindowMut<'a, N>)).copy_from(false_other) };
+        self.conditional_copy_from(mask, true_other);
+    }
+
+    // Copies entries from other into self only where pixels at the mask are nonzero.
+    // self[px] = mask[px] == 0 ? nothing else other[px]
+    pub fn conditional_copy_from<'b>(&'a mut self, mask : &'b Window<'b, u8>, other : &'b Window<'b, N>) {
+
+        assert!(self.shape() == other.shape(), "Windows differ in shape");
+        assert!(self.shape() == mask.shape(), "Windows differ in shape");
+        #[cfg(feature="ipp")]
+        unsafe {
+            let (src_step, src_sz) = crate::image::ipputils::step_and_size_for_window(other);
+            let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_window_mut(&self);
+            let (mask_step, mask_sz) = crate::image::ipputils::step_and_size_for_window(mask);
+            if self.pixel_is::<f32>() {
+                let ans = crate::foreign::ipp::ippi::ippiCopy_32f_C1MR(
+                    mem::transmute(other.as_ptr()),
+                    src_step,
+                    mem::transmute(self.as_mut_ptr()),
+                    dst_step,
+                    src_sz,
+                    mask.as_ptr(),
+                    mask_step
+                );
+                assert!(ans == 0);
+                return;
+            }
+        }
+
+        unimplemented!()
+    }
+
     // Copies elements into self from other, assuming same dims.
     pub fn copy_from<'b>(&'a mut self, other : &'b Window<'b, N>) {
         assert!(self.shape() == other.shape(), "Mutable windows differ in shape");
@@ -2442,8 +2574,24 @@ where
     N : Scalar + Copy + Mul<Output=N> + MulAssign + PartialOrd + Default
 {
 
-    pub fn fill(&'a mut self, color : N) {
-        self.pixels_mut(1).for_each(|px| *px = color );
+    pub fn fill(&mut self, color : N) {
+
+        #[cfg(feature="ipp")]
+        unsafe {
+            let (step, sz) = crate::image::ipputils::step_and_size_for_window_mut(&self);
+            if self.pixel_is::<f32>() {
+                let ans = crate::foreign::ipp::ippi::ippiSet_32f_C1R(
+                    *mem::transmute::<_, &f32>(&color) ,
+                    mem::transmute(self.as_mut_ptr()),
+                    step,
+                    sz
+                );
+                assert!(ans == 0);
+                return;
+            }
+        }
+
+        unsafe { mem::transmute::<_, &'a mut WindowMut<'a, N>>(self).pixels_mut(1).for_each(|px| *px = color ); }
     }
 
     pub fn paint(&'a mut self, min : N, max : N, color : N) {
@@ -2637,7 +2785,7 @@ where
 
 impl<N> fmt::Display for WindowMut<'_, N> 
 where
-    N : Scalar + Copy,
+    N : Scalar + Copy + Default,
     f64 : From<N>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

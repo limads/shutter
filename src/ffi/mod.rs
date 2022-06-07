@@ -40,7 +40,7 @@ pub extern "C" fn peaks(
     num_found : &mut i64
 ) -> i64 {
 
-    if width % 256 != 0 {
+    if 256 % width != 0 {
         return -1;
     }
 

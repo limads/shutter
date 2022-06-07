@@ -5,6 +5,57 @@ use serde::{Serialize, Deserialize, de::DeserializeOwned};
 use num_traits::Zero;
 use nalgebra::Scalar;
 use std::iter::FromIterator;
+pub use ripple::conv::*;
+
+pub fn local_sum(src : &Window<'_, u8>, dst : &mut WindowMut<'_, i32>) {
+
+    assert!(src.height() % dst.height() == 0);
+    assert!(src.width() % dst.width() == 0);
+
+    let local_win_sz = (src.height() / dst.height(), src.width() / dst.width());
+
+    /*#[cfg(feature="ipp")]
+    unsafe {
+        let (src_step, src_sz) = crate::image::ipputils::step_and_size_for_window(src);
+        let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_window_mut(&dst);
+        let mask_sz = crate::foreign::ipp::ippi::IppiSize {
+            width : local_win_sz.1 as i32,
+            height : local_win_sz.0 as i32
+        };
+        let mut num_channels = 1;
+        let mut buf_sz : i32 = 0;
+        let ans = crate::foreign::ipp::ippi::ippiSumWindowGetBufferSize(
+            dst_sz,
+            mask_sz,
+            crate::foreign::ipp::ippi::IppDataType_ipp8u,
+            num_channels,
+            &mut buf_sz as *mut _
+        );
+        assert!(ans == 0);
+        let mut buffer = Vec::from_iter((0..buf_sz).map(|_| 0u8 ));
+        println!("Buffer allocated");
+        let border_val = 0u8;
+        let ans = crate::foreign::ipp::ippi::ippiSumWindow_8u32s_C1R(
+            src.as_ptr(),
+            src_step,
+            dst.as_mut_ptr(),
+            dst_step,
+            dst_sz,
+            mask_sz,
+            crate::foreign::ipp::ippi::_IppiBorderType_ippBorderConst,
+            &border_val,
+            buffer.as_mut_ptr()
+        );
+        assert!(ans == 0);
+        return;
+    }*/
+    for i in 0..dst.height() {
+        for j in 0..dst.width() {
+            dst[(i, j)] = crate::global::sum::<_, f32>(&src.sub_window((i*local_win_sz.0, j*local_win_sz.1), local_win_sz).unwrap(), 1) as i32;
+        }
+    }
+
+}
 
 // Implements median filter by histogram (Huang & Yang, 1979)
 fn histogram_median_filter(src : &Window<'_, u8>, mut dst : WindowMut<'_, u8>, win_sz : (usize, usize)) {
@@ -21,7 +72,10 @@ fn histogram_median_filter(src : &Window<'_, u8>, mut dst : WindowMut<'_, u8>, w
 }
 
 // This implements min-pool or max-pool.
-pub fn block_min_or_max(win : &Window<'_, u8>, dst : &mut WindowMut<'_, u8>, is_maximum : bool) {
+pub fn block_min_or_max<N>(win : &Window<'_, N>, dst : &mut WindowMut<'_, N>, is_maximum : bool)
+where
+    N : Scalar + Copy + Default + Zero + Copy
+{
 
     assert!(win.width() % dst.width() == 0);
     assert!(win.height() % dst.height() == 0);
@@ -33,11 +87,9 @@ pub fn block_min_or_max(win : &Window<'_, u8>, dst : &mut WindowMut<'_, u8>, is_
     unsafe {
         let (src_step, src_sz) = crate::image::ipputils::step_and_size_for_window(win);
         let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_window_mut(&dst);
-        let mut global_min = 0u8;
-        let mut global_max = 0u8;
 
         // If pdstmin or pdstmax are null, the corresponding result is not calculated.
-        let (ptr_dst_min, ptr_dst_max) : (*mut u8, *mut u8) = match is_maximum {
+        let (ptr_dst_min, ptr_dst_max) : (*mut N, *mut N) = match is_maximum {
             true => (std::ptr::null_mut(), dst.as_mut_ptr()),
             false => (dst.as_mut_ptr(), std::ptr::null_mut())
         };
@@ -49,18 +101,41 @@ pub fn block_min_or_max(win : &Window<'_, u8>, dst : &mut WindowMut<'_, u8>, is_
 
         println!("{:?}", block_sz);
 
-        let ans = crate::foreign::ipp::ippi::ippiBlockMinMax_8u_C1R(
-            win.as_ptr(),
-            src_step,
-            src_sz,
-            ptr_dst_min,
-            dst_step,
-            ptr_dst_max,
-            dst_step,
-            crate::foreign::ipp::ippi::IppiSize  { width : block_sz.1 as i32, height : block_sz.0 as i32 },
-            &mut global_min as *mut _,
-            &mut global_max as *mut _
-        );
+        let block_size = crate::foreign::ipp::ippi::IppiSize  { width : block_sz.1 as i32, height : block_sz.0 as i32 };
+        let src_ptr = win.as_ptr();
+        let ans = if win.pixel_is::<u8>() {
+            let mut global_min = 0u8;
+            let mut global_max = 0u8;
+            crate::foreign::ipp::ippi::ippiBlockMinMax_8u_C1R(
+                mem::transmute(src_ptr),
+                src_step,
+                src_sz,
+                mem::transmute(ptr_dst_min),
+                dst_step,
+                mem::transmute(ptr_dst_max),
+                dst_step,
+                block_size,
+                &mut global_min as *mut _,
+                &mut global_max as *mut _
+            )
+        } else if win.pixel_is::<f32>() {
+            let mut global_min = 0.0f32;
+            let mut global_max = 0.0f32;
+            crate::foreign::ipp::ippi::ippiBlockMinMax_32f_C1R(
+                mem::transmute(src_ptr),
+                src_step,
+                src_sz,
+                mem::transmute(ptr_dst_min),
+                dst_step,
+                mem::transmute(ptr_dst_max),
+                dst_step,
+                block_size,
+                &mut global_min as *mut _,
+                &mut global_max as *mut _
+            )
+        } else {
+            unimplemented!()
+        };
         assert!(ans == 0);
 
         // println!("{} {}", global_min, global_max);
@@ -69,6 +144,73 @@ pub fn block_min_or_max(win : &Window<'_, u8>, dst : &mut WindowMut<'_, u8>, is_
 
     unimplemented!()
 
+}
+
+// This returns the minimum and maximum values and indices. Can be applied block-wise to get indices at many points.
+pub fn min_max_idx(
+    win : &Window<'_, u8>,
+    min : bool,
+    max : bool
+) -> (Option<(usize, usize, u8)>, Option<(usize, usize, u8)>) {
+
+    #[cfg(feature="ipp")]
+    unsafe {
+
+        use crate::foreign::ipp::ippcv::IppiPoint;
+
+        let (step, sz) = crate::image::ipputils::step_and_size_for_window(win);
+        if min && max {
+            let (mut min, mut max) : (f32, f32) = (0., 0.);
+            let (mut min_ix, mut max_ix) : (IppiPoint, IppiPoint) = (
+                IppiPoint { x : 0, y : 0 },
+                IppiPoint { x : 0, y : 0 }
+            );
+            let ans = crate::foreign::ipp::ippcv::ippiMinMaxIndx_8u_C1R(
+                win.as_ptr(),
+                step,
+                mem::transmute(sz),
+                &mut min as *mut _,
+                &mut max as *mut _,
+                &mut min_ix as *mut _,
+                &mut max_ix as *mut _
+            );
+            assert!(ans == 0);
+            return (
+                Some((min_ix.y as usize, min_ix.x as usize, min as u8)),
+                Some((max_ix.y as usize, max_ix.x as usize, max as u8))
+            );
+        } else if min {
+            let mut min : u8 = 0;
+            let mut min_x : i32 = 0;
+            let mut min_y : i32 = 0;
+            let ans = crate::foreign::ipp::ippi::ippiMinIndx_8u_C1R(
+                win.as_ptr(),
+                step,
+                mem::transmute(sz),
+                &mut min as *mut _,
+                &mut min_x as *mut _,
+                &mut min_y as *mut _
+            );
+            assert!(ans == 0);
+            return (Some((min_y as usize, min_x as usize, min)), None);
+        } else if max {
+            let mut max : u8 = 0;
+            let mut max_x : i32 = 0;
+            let mut max_y : i32 = 0;
+            let ans = crate::foreign::ipp::ippi::ippiMaxIndx_8u_C1R(
+                win.as_ptr(),
+                step,
+                mem::transmute(sz),
+                &mut max as *mut _,
+                &mut max_x as *mut _,
+                &mut max_y as *mut _
+            );
+            assert!(ans == 0);
+            return (None, Some((max_y as usize, max_x as usize, max)));
+        }
+    }
+
+    unimplemented!()
 }
 
 pub fn find_peaks(win : &Window<'_, i32>, threshold : i32, max_peaks : usize) -> Vec<(usize, usize)> {
@@ -141,8 +283,6 @@ pub struct AvgPool {
 
 }
 
-pub use ripple::conv::*;
-
 /// Implements separable convolution, representing the filter as a one-row filter.
 pub trait ConvolveSep {
 
@@ -150,9 +290,9 @@ pub trait ConvolveSep {
 
     type OwnedOutput;
 
-    fn convolve_mut(&self, filter : &Self, conv : Convolution, out : &mut Self::Output);
+    fn convolve_sep_mut(&self, filter : &Self, conv : Convolution, out : &mut Self::Output);
 
-    fn convolve(&self, filter : &Self, conv : Convolution) -> Self::OwnedOutput;
+    fn convolve_sep(&self, filter : &Self, conv : Convolution) -> Self::OwnedOutput;
 
 }
 
@@ -213,7 +353,7 @@ pub mod edge {
     ]);
 
     // Symmetric Laplacian of Gaussian (LoG) filter
-    pub const LAPLACE_GAUSS : Window<'static, f32> = Window::from_static::<25, 5>(&[
+    pub const LAPLAC_OF_GAUSS : Window<'static, f32> = Window::from_static::<25, 5>(&[
         0., 0., 1., 0., 0.,
         0., 1., 2., 1., 0.,
         1., 2., -16., 2., 1.,
@@ -333,6 +473,88 @@ where
 }
 
 #[cfg(feature="ipp")]
+unsafe fn ipp_sep_convolution_f32(
+    img : &Window<f32>,
+    row_kernel : &Window<f32>,
+    col_kernel : &Window<f32>,
+    out : &mut WindowMut<f32>
+) {
+
+    use crate::foreign::ipp::ippi::*;
+
+    // assert!(out.width() == img.width() - kernel.width() + 1);
+    // assert!(out.height() == img.height() - kernel.height() + 1);
+
+    // Separable convolution is implemented with border only
+
+    assert!(row_kernel.height() == 1 || row_kernel.width() == 1);
+    assert!(col_kernel.height() == 1 || col_kernel.width() == 1);
+    assert!(row_kernel.width() == col_kernel.width());
+    assert!(row_kernel.height() == col_kernel.height());
+
+    let kernel_dim = row_kernel.width().max(row_kernel.height());
+    let kernel_sz = crate::foreign::ipp::ippi::IppiSize { width : kernel_dim as i32, height : kernel_dim as i32  };
+
+    let img_sz = crate::image::ipputils::window_size(img);
+
+    let img_stride = crate::image::ipputils::byte_stride_for_window(img);
+    // let kernel_stride = crate::image::ipputils::byte_stride_for_window(kernel);
+    let out_stride = crate::image::ipputils::byte_stride_for_window_mut(out);
+
+    let src_ty = crate::foreign::ipp::ippcore::IppDataType_ipp32f;
+    let kernel_ty = src_ty;
+    let n_channels = 1;
+
+    let mut buf_sz = 0;
+    let ans = crate::foreign::ipp::ippcv::ippiFilterSeparableGetBufferSize(
+        mem::transmute(img_sz),
+        mem::transmute(kernel_sz),
+        src_ty,
+        kernel_ty,
+        n_channels,
+        &mut buf_sz as *mut _
+    );
+    assert!(ans == 0);
+
+    let mut spec_sz = 0;
+    let ans = crate::foreign::ipp::ippcv::ippiFilterSeparableGetSpecSize(
+        mem::transmute(kernel_sz),
+        src_ty,
+        n_channels,
+        &mut spec_sz as *mut _
+    );
+    assert!(ans == 0);
+
+    let mut buffer : Vec<u8> = Vec::from_iter((0..buf_sz).map(|_| 0u8 ) );
+    let mut spec : Vec<u8> = Vec::from_iter((0..spec_sz).map(|_| 0u8 ) );
+
+    let num_channels = 1;
+    let ans = crate::foreign::ipp::ippcv::ippiFilterSeparableInit_32f(
+        row_kernel.as_ptr(),
+        col_kernel.as_ptr(),
+        mem::transmute(kernel_sz),
+        crate::foreign::ipp::ippcore::IppDataType_ipp32f,
+        num_channels,
+        mem::transmute(spec.as_mut_ptr())
+    );
+    assert!(ans == 0);
+
+    let border_const_val = 0.0f32;
+    let ans = crate::foreign::ipp::ippcv::ippiFilterSeparable_32f_C1R(
+        img.as_ptr(),
+        img_stride,
+        out.as_mut_ptr(),
+        out_stride,
+        mem::transmute(img_sz),
+        crate::foreign::ipp::ippcv::_IppiBorderType_ippBorderRepl,
+        border_const_val,
+        mem::transmute(spec.as_ptr()),
+        buffer.as_mut_ptr()
+    );
+    assert!(ans == 0);
+}
+
+#[cfg(feature="ipp")]
 unsafe fn ipp_convolution_f32(img : &Window<f32>, kernel : &Window<f32>, out : &mut WindowMut<f32>) {
 
     use crate::foreign::ipp::ippi::*;
@@ -352,12 +574,13 @@ unsafe fn ipp_convolution_f32(img : &Window<f32>, kernel : &Window<f32>, out : &
     let kernel_stride = crate::image::ipputils::byte_stride_for_window(kernel);
     let out_stride = crate::image::ipputils::byte_stride_for_window_mut(out);
 
+    let num_channels = 1;
     let mut buf_sz : c_int = 0;
     let status = ippiConvGetBufferSize(
         img_sz,
         kernel_sz,
         crate::foreign::ipp::ippcore::IppDataType_ipp32f,
-        1,
+        num_channels,
         alg_ty.clone() as i32,
         &mut buf_sz
     );
@@ -390,8 +613,8 @@ where
 
 impl<'a, N> Convolve for Window<'a, N>
 where
-    N : Scalar + Copy + Default + Zero + Copy + Serialize + DeserializeOwned +
-        Any + std::ops::Mul<Output = N> + std::ops::AddAssign
+N : Scalar + Copy + Default + Zero + Copy + Serialize + DeserializeOwned +
+    Any + std::ops::Mul<Output = N> + std::ops::AddAssign
 {
 
     type Output = WindowMut<'a, N>;

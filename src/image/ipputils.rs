@@ -144,22 +144,32 @@ impl IppiResize {
 
         let t : T = Default::default();
         let is_u8 = (&t as &dyn Any).is::<u8>();
-
+        let is_f32 = (&t as &dyn Any).is::<f32>();
+        let interp_ty = IppiInterpolationType_ippNearest;
         if is_u8 {
             let status_code = ippiResizeGetSize_8u(
                 src_size,
                 dst_size,
-                IppiInterpolationType_ippNearest,
+                interp_ty,
                 antialiasing,
                 &mut spec_size,
                 &mut init_buf_size
             );
-            // assert!(spec_size > 0);
-            // assert!(init_buf_size > 0);
+            check_status("Resize get size", status_code);
+            status_get_size = Some(status_code);
+        } else if is_f32 {
+            let status_code = ippiResizeGetSize_32f(
+                src_size,
+                dst_size,
+                interp_ty,
+                antialiasing,
+                &mut spec_size,
+                &mut init_buf_size
+            );
             check_status("Resize get size", status_code);
             status_get_size = Some(status_code);
         } else {
-            panic!("Image expected to be u8");
+            panic!("Image expected to be u8 or f32");
         }
 
         // Allocating an initialization buffer with init_buf_size is only required for
@@ -181,27 +191,33 @@ impl IppiResize {
             let status_code = ippiResizeNearestInit_8u(src_size, dst_size, spec);
             check_status("Resize init", status_code);
             status_init = Some(status_code);
+        } else if is_f32 {
+            let status_code = ippiResizeNearestInit_32f(src_size, dst_size, spec);
+            check_status("Resize init", status_code);
+            status_init = Some(status_code);
         } else {
-            panic!("Image expected to be u8");
+            panic!("Image expected to be u8 or f32");
         }
 
         // Get buffer size for the current spec
         let n_channels = 1;
         let mut work_buf_sz = 0;
 
-        // let mut buf_ptr : *mut ffi::c_void = ptr::null_mut();
-        let mut work_buf_bytes = Vec::new();
         if is_u8 {
             let status_code = ippiResizeGetBufferSize_8u(spec, dst_size, n_channels, &mut work_buf_sz as *mut _);
             check_status("Allocate resize buffer", status_code);
             assert!(work_buf_sz > 0);
-            // buf_ptr = ipps::ippsMalloc_8u(work_buf_sz) as *mut ffi::c_void;
-            work_buf_bytes = Vec::from_iter((0..(work_buf_sz as usize)).map(|_| 0u8 ));
+            status_get_buf_size = Some(status_code);
+        } else if is_f32 {
+            let status_code = ippiResizeGetBufferSize_32f(spec, dst_size, n_channels, &mut work_buf_sz as *mut _);
+            check_status("Allocate resize buffer", status_code);
+            assert!(work_buf_sz > 0);
             status_get_buf_size = Some(status_code);
         } else {
             panic!("Expected u8");
         }
 
+        let work_buf_bytes = Vec::from_iter((0..(work_buf_sz as usize)).map(|_| 0u8 ));
         if status_get_size.is_some() && status_init.is_some() && status_get_buf_size.is_some() {
             IppiResize { spec_bytes, init_buf_bytes, work_buf_bytes }
         } else {
@@ -216,26 +232,39 @@ where
     T : Scalar + Copy + Default
 {
     let mut status : Option<i32> = None;
-    let src_size = window_size(src);
-    let dst_size = window_mut_size(&dst);
-    if (&src[(0usize, 0usize)] as &dyn Any).is::<u8>() {
-
-        // let (spec, buf_ptr) = init_resize_state::<u8>(src_size, dst_size);
+    let (src_size, dst_size) = (window_size(src), window_mut_size(&dst));
+    let (src_step, dst_step) = (byte_stride_for_window(src), byte_stride_for_window_mut(&dst));
+    let (src_ptr, dst_ptr) = (src.as_ptr() as *const ffi::c_void, dst.as_mut_ptr() as *mut ffi::c_void);
+    let (is_u8, is_f32) = (src.pixel_is::<u8>(), src.pixel_is::<f32>());
+    let pt = IppiPoint{ x : 0, y : 0 };
+    if is_u8 {
         let mut resize = IppiResize::new::<u8>(src_size, dst_size);
         let status_code = ippiResizeNearest_8u_C1R(
-            (src.as_ptr() as *const ffi::c_void) as *const u8,
-            byte_stride_for_window(src),
-            (dst.as_mut_ptr() as *mut ffi::c_void) as *mut u8,
-            byte_stride_for_window_mut(&dst),
-            IppiPoint{ x : 0, y : 0 },
+            src_ptr as *const u8,
+            src_step,
+            dst_ptr as *mut u8,
+            dst_step,
+            pt,
             dst_size,
             resize.spec_ptr(),
             resize.buf_ptr()
         );
-        // ipps::ippsFree(buf_ptr);
+        status = Some(status_code);
+    } else if is_f32 {
+        let mut resize = IppiResize::new::<f32>(src_size, dst_size);
+        let status_code = crate::foreign::ipp::ippi::ippiResizeNearest_32f_C1R(
+            src_ptr as *const f32,
+            src_step,
+            dst_ptr as *mut f32,
+            dst_step,
+            pt,
+            dst_size,
+            resize.spec_ptr(),
+            resize.buf_ptr()
+        );
         status = Some(status_code);
     } else {
-        panic!("Expected u8 image");
+        panic!("Expected u8 or f32 image for resize op");
     }
     match status {
         Some(status) => check_status("Resize", status),

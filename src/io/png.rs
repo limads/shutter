@@ -40,23 +40,36 @@ pub fn decode_from_file(
 pub fn decode(
     data : Vec<u8>
 ) -> Result<Image<u8>, &'static str> {
+
+    use image::buffer::ConvertBuffer;
+
     let dec = png::PngDecoder::new(&data[..])
         .map_err(|_| { "Error building decoder" })?;
-    let color_type = dec.color_type();
-    if color_type != ColorType::L8 {
-        return Err("Image import error: Unsupported color type. Convert image to L8 first.");
-    }
-
-    let ext_color_type = dec.original_color_type();
-    if ext_color_type != ExtendedColorType::L8 {
-        return Err("Image import error: Unsupported color type. Convert image to L8 first.");
-    }
+    // let color_type = dec.color_type();
+    // if color_type != ColorType::L8 {
+    //    return Err("Image import error: Unsupported color type : {}. Convert image to L8 first.");
+    // }
 
     let nrows = dec.dimensions().1 as usize;
     let ncols = dec.dimensions().0 as usize;
-    let mut buf = Vec::<u8>::from_iter((0..(nrows * ncols)).map(|_| 0 ));
-    let img = dec.read_image(&mut buf[..])
-        .map_err(|_| { "Error reading image" })?;
+    match dec.original_color_type() {
+        ExtendedColorType::L8 => {
+            let mut buf = Vec::<u8>::from_iter((0..(nrows * ncols)).map(|_| 0 ));
+            let img = dec.read_image(&mut buf[..]).map_err(|_| { "Error reading image" })?;
+            Ok(Image::from_vec(buf, ncols))
+        },
+        ExtendedColorType::Rgb8 => {
+            let mut buf = Vec::<u8>::from_iter((0..(nrows * ncols * 3)).map(|_| 0 ));
+            let img = dec.read_image(&mut buf[..]).map_err(|_| { "Error reading image" })?;
+            let rgbimg = image::RgbImage::from_raw(ncols as u32, nrows as u32, buf).unwrap();
+            let gray_image: image::GrayImage = rgbimg.convert();
+            Ok(Image::from_vec(gray_image.into_raw(), ncols))
+        },
+        _ => {
+            Err("Image import error: Unsupported color type. Convert image to L8/RGB/RGBA first.")
+        }
+    }
+
     /*match color_type {
         ColorType::L8 => {
             for byte in img.iter() {
@@ -68,7 +81,7 @@ pub fn decode(
             return Err("Unsupported color type");
         }
     };*/
-    Ok(Image::from_vec(buf, ncols))
+
 }
 
 pub fn encode(

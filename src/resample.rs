@@ -18,17 +18,18 @@ use nalgebra::Scalar;
 use crate::image::*;
 pub use ripple::resample::*;
 use std::fmt::Debug;
+use std::any::Any;
 
 impl<'a, N> Resample for Window<'a, N>
 where
-    N : Scalar + Clone + Copy + Debug + Default
+    N : Scalar + Clone + Copy + Debug + Any + Default + num_traits::Zero
 {
 
     type Output = WindowMut<'a, N>;
 
     type OwnedOutput = Image<N>;
 
-    fn downsample_to(&self, out : &mut Self::Output, down : Downsample, by : usize) {
+    fn downsample_to(&self, out : &mut Self::Output, down : Downsample) {
 
         assert!(self.height() % out.height() == 0 && self.width() % out.width() == 0);
 
@@ -54,12 +55,15 @@ where
         unimplemented!()
     }
 
-    fn upsample_to(&self, out : &mut Self::Output, up : Upsample, by : usize) {
+    fn upsample_to(&self, out : &mut Self::Output, up : Upsample) {
         unimplemented!()
     }
 
     fn downsample(&self, down : Downsample, by : usize) -> Self::OwnedOutput {
-        unimplemented!()
+        assert!(self.height() % by == 0 && self.width() % by == 0);
+        let mut downsampled = Image::<N>::new_constant(self.height() / by, self.width() / by, N::zero());
+        self.downsample_to(&mut downsampled.full_window_mut(), down);
+        downsampled
     }
 
     fn upsample(&self, up : Upsample, by : usize) -> Self::OwnedOutput {

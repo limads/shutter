@@ -1,8 +1,9 @@
 use crate::image::*;
 use std::iter::FromIterator;
 use std::mem;
-use std::cmp::Ord;
+use std::cmp::{Ord, Ordering};
 
+#[derive(Debug, Clone)]
 pub struct GrayHistogram([u32; 256]);
 
 pub fn smoothen(hist : &mut GrayHistogram, interval : usize) {
@@ -55,7 +56,7 @@ where
 
     // The nice property about looking for local maxima at the peak minimum width is
     // that we can guarantee peaks located two chunks apart will always be valid candidates,
-    // so we can remove peaks one-chunk apart if they are two close by only compairing
+    // so we can remove peaks one-chunk apart if they are two close by compairing
     // only the contiguous pairs.
 
     let labeled : Vec<(usize, T)> = s.iter().copied().enumerate().collect();
@@ -81,30 +82,89 @@ where
         }
     }
 
-    for ix in (0..peaks.len()).rev() {
+    /*for ix in (0..peaks.len()).rev() {
         if !is_strict_maximum(&s[..], peaks[ix].0, min_width) {
             peaks.remove(ix);
         }
-    }
+    }*/
 
     peaks.drain(..).map(|p| p.0 ).collect()
 }
 
-// Return triplets (peak, valley, peak)
+// Returns triplets (lim_min, peak, lim_max) given the result of peaks_and_valleys.
+pub fn delimited_peaks(peaks_valleys : &[(usize, usize, usize)]) -> Vec<(usize, usize, usize)> {
+    let mut out = Vec::new();
+    match peaks_valleys.len() {
+        0 => { },
+        1 => {
+            out.push((0, peaks_valleys[0].0, peaks_valleys[0].1));
+            out.push((peaks_valleys[0].1, peaks_valleys[0].2, 255));
+        },
+        n => {
+            out.push((0, peaks_valleys[0].0, peaks_valleys[0].1));
+            for ix in 0..peaks_valleys.len() {
+                if ix > 0 {
+                    out.push((peaks_valleys[ix-1].2, peaks_valleys[ix].0, peaks_valleys[ix].1));
+                }
+                if ix < n-1 {
+                    out.push((peaks_valleys[ix].1, peaks_valleys[ix].2, peaks_valleys[ix+1].0));
+                }
+            }
+            out.push((peaks_valleys[n-1].1, peaks_valleys[n-1].2, 255));
+        }
+    }
+    out
+}
+
+// Return triplets (peak, valley, peak). Returns empty vector for N<2 peaks.
 pub fn peaks_and_valleys<T>(s : &[T], min_width : usize, min_height : T) -> Vec<(usize, usize, usize)>
 where
     T : Ord + Copy
 {
     let peaks = peaks(s, min_width, min_height);
+    if peaks.len() < 2 {
+        return Vec::new();
+    }
+
     let mut triplets = Vec::new();
+    let mut curr_mins : Vec<(usize, T)> = Vec::new();
     for (p1, p2) in peaks[0..(peaks.len()-1)].iter().zip(peaks[1..peaks.len()].iter()) {
-        let min = s[*p1..*p2].iter().enumerate().min_by(|a, b| a.1.cmp(&b.1) ).unwrap();
+
+        // Take minimum value. If there are multiple minimums w/ same value,
+        // take the one closest to the midpoint between p1 and p2.
+        curr_mins.clear();
+        curr_mins.push((0, s[*p1]));
+        for (local_ix, val) in s[(*p1+1)..*p2].iter().enumerate() {
+            if *val < curr_mins[0].1 {
+                curr_mins.clear();
+                curr_mins.push((local_ix + 1, *val));
+            } else if *val == curr_mins[0].1 {
+                curr_mins.push((local_ix + 1, *val));
+            }
+        }
+        let half_len = ((p2 - p1) / 2) as f32;
+        let min = curr_mins.iter()
+            .min_by(|a, b| (a.0 as f32 - half_len).abs().partial_cmp(&(b.0 as f32 - half_len).abs()).unwrap_or(Ordering::Equal) )
+            .copied()
+            .unwrap();
         triplets.push((*p1, *p1 + min.0, *p2));
     }
     triplets
 }
 
 impl GrayHistogram {
+
+    pub fn draw(&self, win : &mut WindowMut<'_, u8>, color : u8) {
+        assert!(win.width() % 256 == 0);
+        assert!(win.width() >= 256);
+        let max = self.0.iter().copied().max().unwrap() as f32;
+        let col_w = win.width() / 256;
+        for ix in 0..256 {
+            let h = ((self.0[ix] as f32 / max) * win.height() as f32) as usize;
+            let h_compl = win.height() - h;
+            win.apply_to_sub((h_compl, ix*col_w), (h, col_w), |mut w| { w.fill(color); } );
+        }
+    }
 
     pub fn as_slice(&self) -> &[u32] {
         &self.0[..]
