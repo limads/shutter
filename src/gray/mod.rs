@@ -1,6 +1,7 @@
 use crate::image::*;
 use std::default::Default;
 use crate::prelude::Raster;
+use std::mem;
 
 pub fn copy_if_above_threshold(dst_orig : &Window<'_, u8>, orig : (usize, usize), win_dim : (usize, usize), threshold : i32, dst : &mut Image<u8>) {
     if crate::global::sum::<_, f32>(&dst_orig.sub_window(orig, win_dim).unwrap(), 1) as i32 > threshold {
@@ -191,9 +192,15 @@ pub fn distance_transform(src : &Window<'_, u8>, dst : &mut WindowMut<'_, u8>, m
 
 #[derive(Debug, Clone, Copy)]
 pub enum Foreground {
+
     Below(u8),
+
     Above(u8),
-    Between(u8, u8)
+
+    Inside(u8, u8),
+
+    Outside(u8, u8)
+
 }
 
 pub trait Threshold {
@@ -223,6 +230,10 @@ impl Threshold for FixedThreshold {
     fn threshold_to<'a>(&self, src : &Window<'a, u8>, out : &mut WindowMut<'a, u8>) {
 
         assert!(src.shape() == out.shape());
+
+        // IPP functions work by filling matched values and leaving unmatched values
+        // alone - To build a binary image, we must make sure it is pre-filled with 0.
+        out.fill(0);
 
         #[cfg(feature="ipp")]
         unsafe {
@@ -255,42 +266,33 @@ impl Threshold for FixedThreshold {
                     );
                     assert!(ans == 0);
                 },
-                Foreground::Between(a, b) => {
+                Foreground::Inside(a, b) => {
                     // IPP does not offer less-than-or-equal-to here.  We add and remove one from
                     // the user-supplied values to have the same effect (which will give wrong
                     // results for v == 0 and v == 255, since the sum/subtraction is saturating).
                     let less_than = b.saturating_add(1);
                     let greater_than = a.saturating_sub(1);
 
-                    // Actually, this but rerversed (init image to zero; then set lt, gt to 255.
+                    let out_c = out as *mut WindowMut<'a, u8>;
+                    FixedThreshold::new(Foreground::Outside(less_than, greater_than)).threshold_to(src, mem::transmute(out_c));
+                    crate::binary::inplace_not(out);
+                },
+                Foreground::Outside(a, b) => {
                     let ans = crate::foreign::ipp::ippi::ippiThreshold_LTValGTVal_8u_C1R(
                         src.as_ptr(),
                         src_byte_stride,
                         out.as_mut_ptr(),
                         dst_byte_stride,
                         roi,
-                        greater_than,
+                        a,
                         255,
-                        less_than,
+                        b,
                         255,
                     );
                     assert!(ans == 0);
                 }
             }
 
-            // The IPP calls above sets matching pixels to 255, leaving unmatching pixels at their original values.
-            // Now, to produce a binary image, we set all pixels below 255 to zero inplace. TODO there is a problem
-            // if the original pixels were originally at 255, since in this case they would be ambiguous with the values
-            // set by the threshold op..
-            let ans = crate::foreign::ipp::ippi::ippiThreshold_LTVal_8u_C1IR(
-                out.as_mut_ptr(),
-                dst_byte_stride,
-                roi,
-                255,
-                0,
-            );
-            assert!(ans == 0);
-            return;
         }
 
         /*#[cfg(feature="opencv")]

@@ -42,7 +42,7 @@ ripple = { path = "../ripple" }
 # away = { path = "../away" }
 bayes = { path = "../bayes" }
 itertools = "0.10.1"
-parry2d="0.8.0"
+parry2d="0.9.0"
 base64 = "0.13.0"
 image = "0.23.14"
 # showable = { path = "../showable" }

@@ -21,6 +21,12 @@ pub mod stereo;
 
 pub mod object;
 
+pub mod graph;
+
+/// Structures and algorithms for sparse binary image representation (in terms of graphs, ordered arrays, etc).
+/// Offers Run-length encoding of binary image representation, and other alternative representations.
+pub mod sparse;
+
 // Contains algorithms to partition the images over homogeneous regions, with a criterion for
 // homegeneity that is algorithm-specific. Contains dense and sparse data structures to represent
 // image regions.

@@ -11,8 +11,13 @@ use std::mem;
 use num_traits::Float;
 use crate::gray::Foreground;
 
+/*
+Perhaps the normalize_bound method could be part of a Bounded trait, for images
+with an upper pixel bound.
+*/
+
 // a < b ? a else b
-pub fn pairwise_compare<N>(a : &Window<'_, N>, b : &Window<'_, N>, mut dst : WindowMut<'_, N>, max : bool)
+pub fn pairwise_compare<N>(a : &Window<N>, b : &Window<N>, mut dst : WindowMut<N>, max : bool)
 where
     N : Scalar + Copy + Debug + Clone + Default
 {
@@ -129,29 +134,33 @@ where
 }
 
 /// Normalizes the image relative to the max(infinity) norm. This limits values to [0., 1.]
-pub fn normalize_max_mut<'a, N>(win : &'a Window<'a, N>, dst : &'a mut WindowMut<'a, N>)
+pub fn normalize_max_mut<'a, N>(win : &'a Window<'a, N>, dst : &'a mut WindowMut<'a, N>) -> N
 where
     N : Div<Output=N> + Copy + PartialOrd + Any + Debug + Default,
     u8 : AsPrimitive<N>
 {
     let max = global::max(win);
     point_div_mut(win, max, dst);
+    max
 }
 
 /// Normalizes the image, so that the sum of its pixels is 1.0. Useful for convolution filters,
 /// which must preserve the original image norm so that convolution output does not overflow its integer
 /// or float maximum.
-pub fn normalize_unit_mut<'a, N>(win : &'a Window<'a, N>, dst : &'a mut WindowMut<'a, N>)
+pub fn normalize_unit_mut<'a, N>(win : &'a Window<'a, N>, dst : &'a mut WindowMut<'a, N>) -> N
 where
     N : Div<Output=N> + Copy + PartialOrd + Serialize + DeserializeOwned + Any + Debug + Zero + From<f32> + Default,
     f32 : From<N>
 {
     let sum = global::sum(win, 1);
     point_div_mut(win, sum, dst);
+    sum
 }
 
 /// Normalizes the image relative to the max(infinity) norm. This limits values to [0., 1.]
-pub fn normalize_max_inplace<'a, N>(dst : &'a mut WindowMut<'a, N>)
+/// This only really makes sense for float images, since integer bounded images (u8, i32)
+/// will generate divisions at are either 0 or 1, effectively creating a dark image.
+pub fn normalize_max_inplace<'a, N>(dst : &'a mut WindowMut<'a, N>) -> N
 where
     N : Div<Output=N> + Copy + PartialOrd + Any + Debug + Default,
     u8 : AsPrimitive<N>
@@ -159,13 +168,14 @@ where
     unsafe {
         let max = global::max(mem::transmute(dst as *mut _));
         point_div_inplace(dst, max);
+        max
     }
 }
 
 /// Normalizes the image, so that the sum of its pixels is 1.0. Useful for convolution filters,
 /// which must preserve the original image norm so that convolution output does not overflow its integer
 /// or float maximum.
-pub fn normalize_unit_inplace<'a, N>(dst : &'a mut WindowMut<'a, N>)
+pub fn normalize_unit_inplace<'a, N>(dst : &'a mut WindowMut<'a, N>) -> N
 where
     N : Div<Output=N> + Copy + PartialOrd + Serialize + DeserializeOwned + Any + Debug + Zero + From<f32> + Default,
     f32 : From<N>
@@ -173,6 +183,7 @@ where
     unsafe {
         let sum = global::sum(mem::transmute(dst as *mut _), 1);
         point_div_inplace(dst, sum);
+        sum
     }
 }
 
@@ -212,7 +223,7 @@ pub trait PointOp<N> {
 
 }
 
-impl <'a, N> PointOp<N> for WindowMut<'a, N>
+impl <N> PointOp<N> for WindowMut<'_, N>
 where
     N : MulAssign + AddAssign + Debug + Scalar + Copy + Default + Any + Sized + PartialOrd + num_traits::Zero
 {
@@ -222,8 +233,6 @@ where
         if self.pixel_is::<u8>() || self.pixel_is::<u64>() {
             return;
         }
-
-
 
         #[cfg(feature="ipp")]
         unsafe {
@@ -262,7 +271,7 @@ where
                     *mem::transmute::<_, &f32>(&by)
                 );
                 assert!(ans == 0);
-                (&mut *(self as *mut WindowMut<'a, N>)).copy_from(&dst.full_window());
+                (&mut *(self as *mut WindowMut<'_, N>)).copy_from(&dst.full_window());
                 return;
             }
         }
@@ -357,10 +366,10 @@ where
         unsafe {
             match above {
                 true => {
-                    mem::transmute::<_, &'a mut WindowMut<'a, N>>(self).pixels_mut(1).for_each(|px| if *px >= val { *px = N::zero(); });
+                    mem::transmute::<_, &mut WindowMut<'_, N>>(self).pixels_mut(1).for_each(|px| if *px >= val { *px = N::zero(); });
                 },
                 false => {
-                    mem::transmute::<_, &'a mut WindowMut<'a, N>>(self).pixels_mut(1).for_each(|px| if *px <= val { *px = N::zero(); });
+                    mem::transmute::<_, &mut WindowMut<'_, N>>(self).pixels_mut(1).for_each(|px| if *px <= val { *px = N::zero(); });
                 },
             }
         }
@@ -422,12 +431,12 @@ where
 
 }
 
-impl<'a, N> SubAssign<Window<'a, N>> for WindowMut<'a, N>
+impl<N> SubAssign<Window<'_, N>> for WindowMut<'_, N>
 where
     N : Scalar + Copy + Clone + Debug + SubAssign + Default + Any + 'static
 {
 
-    fn sub_assign(&mut self, rhs: Window<'a, N>) {
+    fn sub_assign(&mut self, rhs: Window<'_, N>) {
 
         assert!(self.shape() == rhs.shape());
 
@@ -466,7 +475,7 @@ where
 
         // Unsafe required because we cannot specify that Self : 'a using the trait signature.
         unsafe {
-            for (out, input) in mem::transmute::<_, &'a mut WindowMut<'a, N>>(self).pixels_mut(1).zip(rhs.pixels(1)) {
+            for (out, input) in mem::transmute::<_, &mut WindowMut<'_, N>>(self).pixels_mut(1).zip(rhs.pixels(1)) {
                 *out -= *input;
             }
         }
@@ -475,12 +484,12 @@ where
 
 }
 
-impl<'a, N> MulAssign<Window<'a, N>> for WindowMut<'a, N>
+impl<N> MulAssign<Window<'_, N>> for WindowMut<'_, N>
 where
     N : Scalar + MulAssign + Copy + Clone + Debug + AddAssign + Default + Any + 'static
 {
 
-    fn mul_assign(&mut self, rhs: Window<'a, N>) {
+    fn mul_assign(&mut self, rhs: Window<'_, N>) {
         assert!(self.shape() == rhs.shape());
         #[cfg(feature="ipp")]
         unsafe {
@@ -515,7 +524,7 @@ where
 
         // Unsafe required because we cannot specify that Self : 'a using the trait signature.
         unsafe {
-            for (out, input) in mem::transmute::<_, &'a mut WindowMut<'a, N>>(self).pixels_mut(1).zip(rhs.pixels(1)) {
+            for (out, input) in mem::transmute::<_, &'_ mut WindowMut<'_, N>>(self).pixels_mut(1).zip(rhs.pixels(1)) {
                 *out *= *input;
             }
         }
@@ -524,12 +533,12 @@ where
 
 }
 
-impl<'a, N> DivAssign<Window<'a, N>> for WindowMut<'a, N>
+impl<N> DivAssign<Window<'_, N>> for WindowMut<'_, N>
 where
     N : DivAssign + Scalar + Copy + Clone + Debug + AddAssign + Default + Any + 'static
 {
 
-    fn div_assign(&mut self, rhs: Window<'a, N>) {
+    fn div_assign(&mut self, rhs: Window<'_, N>) {
         assert!(self.shape() == rhs.shape());
         #[cfg(feature="ipp")]
         unsafe {
@@ -564,7 +573,7 @@ where
 
         // Unsafe required because we cannot specify that Self : 'a using the trait signature.
         unsafe {
-            for (out, input) in mem::transmute::<_, &'a mut WindowMut<'a, N>>(self).pixels_mut(1).zip(rhs.pixels(1)) {
+            for (out, input) in mem::transmute::<_, &mut WindowMut<'_, N>>(self).pixels_mut(1).zip(rhs.pixels(1)) {
                 *out /= *input;
             }
         }
@@ -572,6 +581,61 @@ where
     }
 
 }
+
+/*// Options: saturate, reflect
+pub trait SignedToUnsignedConversion {
+
+}
+
+// Options: flatten, shrink
+pub trait UnsignedToFloatConversion {
+
+}
+
+// Options: stretch, preserve
+pub trait FloatToUnsignedConversion {
+
+}*/
+
+pub trait Pixel where Self : Scalar + Clone + Copy + Debug + Default + num_traits::Zero { }
+
+impl Pixel for u8 { }
+
+impl Pixel for u16 { }
+
+impl Pixel for u32 { }
+
+impl Pixel for i16 { }
+
+impl Pixel for i32 { }
+
+impl Pixel for i64 { }
+
+impl Pixel for f32 { }
+
+impl Pixel for f64 { }
+
+pub trait UnsignedPixel where Self : Pixel { }
+
+impl UnsignedPixel for u8 { }
+
+impl UnsignedPixel for u16 { }
+
+impl UnsignedPixel for u32 { }
+
+pub trait SignedPixel where Self : Pixel { }
+
+impl SignedPixel for i16 { }
+
+impl SignedPixel for i32 { }
+
+impl SignedPixel for i64 { }
+
+pub trait FloatPixel where Self : Pixel { }
+
+impl FloatPixel for f32 { }
+
+impl FloatPixel for f64 { }
 
 pub trait BinaryFloatOp<O> {
 
@@ -583,6 +647,43 @@ pub trait BinaryFloatOp<O> {
     fn abs_diff_assign(&mut self, rhs : O);
 
     fn add_weighted_assign(&mut self, rhs : O, by : f32);
+
+}
+
+pub trait BinaryIntegerOp<O> {
+
+    fn abs_diff_assign(&mut self, rhs : O);
+
+}
+
+impl<'a, N> BinaryIntegerOp<Window<'a, N>> for WindowMut<'a, N>
+where
+    N : UnsignedPixel
+{
+
+    fn abs_diff_assign(&mut self, rhs : Window<'a, N>) {
+        #[cfg(feature="ipp")]
+        unsafe {
+            let mut copy = self.clone_owned();
+            let (copy_step, copy_roi) = crate::image::ipputils::step_and_size_for_window(&copy.full_window());
+            let (rhs_step, rhs_roi) = crate::image::ipputils::step_and_size_for_window(&rhs);
+            let (this_step, this_roi) = crate::image::ipputils::step_and_size_for_window_mut(&self);
+            if self.pixel_is::<u8>() {
+                let ans = crate::foreign::ipp::ippcv::ippiAbsDiff_8u_C1R(
+                    mem::transmute(copy.full_window().as_ptr()),
+                    copy_step,
+                    mem::transmute(rhs.as_ptr()),
+                    rhs_step,
+                    mem::transmute(self.as_mut_ptr()),
+                    this_step,
+                    mem::transmute(this_roi)
+                );
+                assert!(ans == 0);
+                return;
+            }
+        }
+        unimplemented!()
+    }
 
 }
 

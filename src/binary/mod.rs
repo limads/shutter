@@ -82,6 +82,23 @@ impl<'a> BinaryOp<'a> for Window<'a, u8> {
 
 }
 
+pub fn inplace_not(win : &mut WindowMut<u8>) {
+
+    #[cfg(feature="ipp")]
+    unsafe {
+        let (dst_stride, dst_roi) = crate::image::ipputils::step_and_size_for_window_mut(&win);
+        let ans = crate::foreign::ipp::ippi::ippiNot_8u_C1IR(
+            win.as_mut_ptr(),
+            dst_stride,
+            dst_roi
+        );
+        assert!(ans == 0);
+        return;
+    }
+
+    unsafe { (&mut *(win as *mut WindowMut<u8>)).foreach_pixel(1, |px : &mut u8| *px = if *px == 0 { 255 } else { 0 } ) };
+}
+
 /*IppStatus ippiAnd_<mod> ( const Ipp<datatype>* pSrc1 , int src1Step , const Ipp<datatype>*
 pSrc2 , int src2Step , Ipp<datatype>* pDst , int dstStep , IppiSize roiSize );
 

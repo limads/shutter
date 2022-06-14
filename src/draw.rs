@@ -277,7 +277,7 @@ pub fn draw_cross(
     }
 }
 
-pub fn mark_window_with_color(mut win : WindowMut<'_, u8>, pts : &[(usize, usize)], color : u8) {
+pub fn mark_window_with_color(win : &mut WindowMut<u8>, pts : &[(usize, usize)], color : u8) {
     unsafe { mark_slice_with_color(win.essential_slice(), pts, color, win.original_width()); }
 }
 

@@ -2,10 +2,11 @@ use crate::image::*;
 use std::mem;
 use std::any::Any;
 use serde::{Serialize, Deserialize, de::DeserializeOwned};
-use num_traits::Zero;
+use num_traits::{Zero, AsPrimitive};
 use nalgebra::Scalar;
 use std::iter::FromIterator;
 pub use ripple::conv::*;
+use std::fmt::Debug;
 
 pub fn local_sum(src : &Window<'_, u8>, dst : &mut WindowMut<'_, i32>) {
 
@@ -146,12 +147,17 @@ where
 
 }
 
-// This returns the minimum and maximum values and indices. Can be applied block-wise to get indices at many points.
-pub fn min_max_idx(
-    win : &Window<'_, u8>,
+// This returns the minimum and maximum values and indices.
+// Can be applied block-wise to get indices at many points.
+pub fn min_max_idx<N>(
+    win : &Window<N>,
     min : bool,
     max : bool
-) -> (Option<(usize, usize, u8)>, Option<(usize, usize, u8)>) {
+) -> (Option<(usize, usize, N)>, Option<(usize, usize, N)>)
+where
+    N : Debug + Clone + Copy + Scalar + AsPrimitive<f32>,
+    f32 : AsPrimitive<N>
+{
 
     #[cfg(feature="ipp")]
     unsafe {
@@ -165,48 +171,96 @@ pub fn min_max_idx(
                 IppiPoint { x : 0, y : 0 },
                 IppiPoint { x : 0, y : 0 }
             );
-            let ans = crate::foreign::ipp::ippcv::ippiMinMaxIndx_8u_C1R(
-                win.as_ptr(),
-                step,
-                mem::transmute(sz),
-                &mut min as *mut _,
-                &mut max as *mut _,
-                &mut min_ix as *mut _,
-                &mut max_ix as *mut _
-            );
+            let ans = if win.pixel_is::<u8>() {
+                crate::foreign::ipp::ippcv::ippiMinMaxIndx_8u_C1R(
+                    mem::transmute(win.as_ptr()),
+                    step,
+                    mem::transmute(sz),
+                    &mut min as *mut _,
+                    &mut max as *mut _,
+                    &mut min_ix as *mut _,
+                    &mut max_ix as *mut _
+                )
+            } else if win.pixel_is::<f32>() {
+                crate::foreign::ipp::ippcv::ippiMinMaxIndx_32f_C1R(
+                    mem::transmute(win.as_ptr()),
+                    step,
+                    mem::transmute(sz),
+                    &mut min as *mut _,
+                    &mut max as *mut _,
+                    &mut min_ix as *mut _,
+                    &mut max_ix as *mut _
+                )
+            } else {
+                panic!("Invalid type");
+            };
             assert!(ans == 0);
             return (
-                Some((min_ix.y as usize, min_ix.x as usize, min as u8)),
-                Some((max_ix.y as usize, max_ix.x as usize, max as u8))
+                Some((min_ix.y as usize, min_ix.x as usize, min.as_())),
+                Some((max_ix.y as usize, max_ix.x as usize, max.as_()))
             );
         } else if min {
-            let mut min : u8 = 0;
             let mut min_x : i32 = 0;
             let mut min_y : i32 = 0;
-            let ans = crate::foreign::ipp::ippi::ippiMinIndx_8u_C1R(
-                win.as_ptr(),
-                step,
-                mem::transmute(sz),
-                &mut min as *mut _,
-                &mut min_x as *mut _,
-                &mut min_y as *mut _
-            );
-            assert!(ans == 0);
-            return (Some((min_y as usize, min_x as usize, min)), None);
+            if win.pixel_is::<u8>() {
+                let mut min : u8 = 0;
+                let ans = crate::foreign::ipp::ippi::ippiMinIndx_8u_C1R(
+                    mem::transmute(win.as_ptr()),
+                    step,
+                    mem::transmute(sz),
+                    &mut min as *mut _,
+                    &mut min_x as *mut _,
+                    &mut min_y as *mut _
+                );
+                assert!(ans == 0);
+                let min_f : f32 = min.as_();
+                return (Some((min_y as usize, min_x as usize, min_f.as_())), None);
+            } else if win.pixel_is::<f32>() {
+                let mut min : f32 = 0.;
+                let ans = crate::foreign::ipp::ippi::ippiMinIndx_32f_C1R(
+                    mem::transmute(win.as_ptr()),
+                    step,
+                    mem::transmute(sz),
+                    &mut min as *mut _,
+                    &mut min_x as *mut _,
+                    &mut min_y as *mut _
+                );
+                assert!(ans == 0);
+                return (Some((min_y as usize, min_x as usize, min.as_())), None);
+            } else {
+                panic!("Invalid type");
+            }
         } else if max {
-            let mut max : u8 = 0;
             let mut max_x : i32 = 0;
             let mut max_y : i32 = 0;
-            let ans = crate::foreign::ipp::ippi::ippiMaxIndx_8u_C1R(
-                win.as_ptr(),
-                step,
-                mem::transmute(sz),
-                &mut max as *mut _,
-                &mut max_x as *mut _,
-                &mut max_y as *mut _
-            );
-            assert!(ans == 0);
-            return (None, Some((max_y as usize, max_x as usize, max)));
+            if win.pixel_is::<u8>() {
+                let mut max : u8 = 0;
+                let ans = crate::foreign::ipp::ippi::ippiMaxIndx_8u_C1R(
+                    mem::transmute(win.as_ptr()),
+                    step,
+                    mem::transmute(sz),
+                    &mut max as *mut _,
+                    &mut max_x as *mut _,
+                    &mut max_y as *mut _
+                );
+                assert!(ans == 0);
+                let max_f : f32 = max.as_();
+                return (None, Some((max_y as usize, max_x as usize, max_f.as_())));
+            } else if win.pixel_is::<f32>() {
+                let mut max : f32 = 0.;
+                let ans = crate::foreign::ipp::ippi::ippiMaxIndx_32f_C1R(
+                    mem::transmute(win.as_ptr()),
+                    step,
+                    mem::transmute(sz),
+                    &mut max as *mut _,
+                    &mut max_x as *mut _,
+                    &mut max_y as *mut _
+                );
+                assert!(ans == 0);
+                return (None, Some((max_y as usize, max_x as usize, max.as_())));
+            } else {
+                panic!("Invalid type");
+            }
         }
     }
 
@@ -283,24 +337,103 @@ pub struct AvgPool {
 
 }
 
-/// Implements separable convolution, representing the filter as a one-row filter.
+/// Implements separable convolution, if the filter can be represented as the outer product
+/// of a row and column (which themselves are represented as windows). After Szelisky (2010):
+/// If K = vh^T, K is separable if the first singular value of K is non-zero, and
+/// sqrt(sigma_0) u0 and sqrt(sigma_0) v0^T (first left and right singular vectors weighted
+/// by first singular value) are the separate components of the filter. Separable convolutions
+/// reduces the number of operations from K^2 multiply-adds per pixel to 2K multiply-adds per pixel.
 pub trait ConvolveSep {
 
     type Output;
 
     type OwnedOutput;
 
-    fn convolve_sep_mut(&self, filter : &Self, conv : Convolution, out : &mut Self::Output);
+    fn convolve_sep_mut(&self, filter_vert : &Self, filter_horiz : &Self, conv : Convolution, out : &mut Self::Output);
 
-    fn convolve_sep(&self, filter : &Self, conv : Convolution) -> Self::OwnedOutput;
+    fn convolve_sep(&self, filter_vert : &Self, filter_horiz : &Self, conv : Convolution) -> Self::OwnedOutput;
 
 }
+
+impl<'a, N> ConvolveSep for Window<'a, N>
+where
+    N : Scalar + Clone + Copy + Debug
+{
+
+    type Output = WindowMut<'a, N>;
+
+    type OwnedOutput = Image<N>;
+
+    fn convolve_sep_mut(&self, filter_vert : &Self, filter_horiz : &Self, conv : Convolution, out : &mut Self::Output) {
+
+        #[cfg(feature="ipp")]
+        unsafe {
+            if self.pixel_is::<f32>() {
+                ipp_sep_convolution_f32(
+                    self,
+                    filter_horiz,
+                    filter_vert,
+                    out
+                );
+                return;
+            }
+        }
+
+        unimplemented!();
+    }
+
+    fn convolve_sep(&self, filter_vert : &Self, filter_horiz : &Self, conv : Convolution) -> Self::OwnedOutput {
+        let mut out = Image::new_constant_like(self);
+        self.convolve_mut(filter, conv, &mut out.full_window_mut());
+        out
+    }
+
+}
+
+const FRAC_NEG_2_4 : f32 = -0.5;
+
+const FRAC_4_4 : f32 = 1.0;
+
+const FRAC_2_4 : f32 = 0.5;
+
+const FRAC_1_4 : f32 = 0.25;
+
+const FRAC_1_2 : f32 = 0.5;
+
+const FRAC_NEG_2_2 : f32 = -1.;
+
+const FRAC_1_16 : f32 = 0.0625;
+
+const FRAC_2_16 : f32 = 0.125;
+
+const FRAC_4_16 : f32 = 0.25;
+
+const FRAC_6_16 : f32 = 0.375;
+
+const FRAC_1_256 : f32 = 0.00390625;
+
+const FRAC_4_256 : f32 = 0.015625;
+
+const FRAC_6_256 : f32 = 0.0234375;
+
+const FRAC_16_256 : f32 = 0.0625;
+
+const FRAC_24_256 : f32 = 0.09375;
+
+const FRAC_36_256 : f32 = 0.140625;
+
+const FRAC_1_3 : f32 = 0.333333333;
+
+const FRAC_1_9 : f32 = 0.111111111;
+
+const FRAC_1_25 : f32 = 0.04;
 
 /// Common difference (edge-detection) filters
 pub mod edge {
 
     use crate::image::Window;
     use std::f32::consts::SQRT_2;
+    use super::*;
 
     const NEG_SQRT_2 : f32 = -1.41421356237309504880168872420969808f32;
 
@@ -309,9 +442,16 @@ pub mod edge {
     // pub const ROBERTS_VERT : Window<'static, f32> = Window::from_static::<4, 2>(&[0., 1., -1., 0.]);
 
     // 3x3 directional filters
+
+    // The sobel operator must be normalized by 1/8 (sum of absolute values of nonzero entries).
+    // Perhaps call this "scaled" and "unscaled" sobel.
     pub const SOBEL_HORIZ : Window<'static, f32> = Window::from_static::<9, 3>(&[
         -1., 0., 1.,
         -2., 0., 2.,
+        -1., 0., 1.
+    ]);
+
+    pub const SOBEL_SEP : Window<'static, f32> = Window::from_static::<3, 3>(&[
         -1., 0., 1.
     ]);
 
@@ -361,6 +501,28 @@ pub mod edge {
         0., 0., 1., 0., 0.
     ]);
 
+    // Bilinear filter (Szelisky (p.116))
+    pub const BILINEAR : Window<'static, f32> = Window::from_static::<9, 3>(&[
+        FRAC_1_16, FRAC_2_16, FRAC_1_16,
+        FRAC_2_16, FRAC_4_16, FRAC_2_16,
+        FRAC_1_16, FRAC_2_16, FRAC_1_16
+    ]);
+
+    pub const BILINEAR_SEP : Window<'static, f32> = Window::from_static::<3, 3>(&[
+        FRAC_1_4,  FRAC_2_4, FRAC_1_4
+    ]);
+
+    // Corner filter (Szelisky, p. 116)
+    pub const CORNER : Window<'static, f32> = Window::from_static::<9, 3>(&[
+        FRAC_1_4, FRAC_NEG_2_4, FRAC_1_4,
+        FRAC_NEG_2_4, FRAC_4_4, FRAC_NEG_2_4,
+        FRAC_1_4, FRAC_NEG_2_4, FRAC_1_4
+    ]);
+
+    pub const CORNER_SEP : Window<'static, f32> = Window::from_static::<3, 3>(&[
+        FRAC_1_2, FRAC_NEG_2_2, FRAC_1_2
+    ]);
+
     // TODO difference of gaussian 5x5 with DOG_21 with var(2) - var(1); DOG_31 with var(3) - var(1) and so on.
 
 }
@@ -369,35 +531,43 @@ pub mod edge {
 pub mod blur {
 
     use crate::image::Window;
+    use super::*;
 
-    const FRAC_1_9 : f32 = 0.111111111;
-
-    // TODO build all scaled versions of gauss_3 and gauss_5.
-    // const FRAC_1_
-
-    pub const UNSCALED_BOX_5 : Window<'static, f32> = Window::from_static::<25, 5>(&[
-        0., 0., 0., 0., 0.,
-        0., 1., 1., 1., 0.,
-        0., 1., 1., 1., 0.,
-        0., 1., 1., 1., 0.,
-        0., 0., 0., 0., 0.
+    pub const BOX3_SEP : Window<'static, f32> = Window::from_static::<3, 3>(&[
+        FRAC_1_3, FRAC_1_3, FRAC_1_3
     ]);
 
-    pub const BOX_5 : Window<'static, f32> = Window::from_static::<25, 5>(&[
-        0., 0., 0., 0., 0.,
-        0., FRAC_1_9, FRAC_1_9, FRAC_1_9, 0.,
-        0., FRAC_1_9, FRAC_1_9, FRAC_1_9, 0.,
-        0., FRAC_1_9, FRAC_1_9, FRAC_1_9, 0.,
-        0., 0., 0., 0., 0.
+    pub const BOX3 : Window<'static, f32> = Window::from_static::<9, 3>(&[
+        FRAC_1_9, FRAC_1_9, FRAC_1_9,
+        FRAC_1_9, FRAC_1_9, FRAC_1_9,
+        FRAC_1_9, FRAC_1_9, FRAC_1_9,
     ]);
 
-    pub const UNSCALED_GAUSS_5 : Window<'static, f32> = Window::from_static::<25, 5>(&[
-        1., 4., 6., 4., 1.,
-        4., 16., 24., 16., 4.,
-        6., 24., 36., 24., 6.,
-        4., 16., 24., 16., 4.,
-        1., 4., 6., 4., 1.
+    pub const BOX5_SEP : Window<'static, f32> = Window::from_static::<5, 5>(&[
+        1., 1., 1., 1., 1.
     ]);
+
+    pub const BOX5 : Window<'static, f32> = Window::from_static::<25, 5>(&[
+        FRAC_1_25,FRAC_1_25,FRAC_1_25,FRAC_1_25,FRAC_1_25,
+        FRAC_1_25,FRAC_1_25,FRAC_1_25,FRAC_1_25,FRAC_1_25,
+        FRAC_1_25,FRAC_1_25,FRAC_1_25,FRAC_1_25,FRAC_1_25,
+        FRAC_1_25,FRAC_1_25,FRAC_1_25,FRAC_1_25,FRAC_1_25,
+        FRAC_1_25,FRAC_1_25,FRAC_1_25,FRAC_1_25,FRAC_1_25
+    ]);
+
+    // Gaussian filter (Szelisky, p. 116).
+    pub const GAUSS : Window<'static, f32> = Window::from_static::<25, 5>(&[
+        FRAC_1_256, FRAC_4_256, FRAC_6_256, FRAC_4_256, FRAC_1_256,
+        FRAC_4_256, FRAC_16_256, FRAC_24_256, FRAC_16_256, FRAC_4_256,
+        FRAC_6_256, FRAC_24_256, FRAC_36_256, FRAC_24_256, FRAC_6_256,
+        FRAC_4_256, FRAC_16_256, FRAC_24_256, FRAC_16_256, FRAC_4_256,
+        FRAC_1_256, FRAC_4_256, FRAC_6_256, FRAC_4_256, FRAC_1_256
+    ]);
+
+    pub const GAUSS_SEP : Window<'static, f32> = Window::from_static::<5, 5>(&[
+        FRAC_1_16, FRAC_4_16, FRAC_6_16, FRAC_4_16, FRAC_1_16
+    ]);
+
 }
 
 pub fn convolution_buffer<N>(img_sz : (usize, usize), kernel_sz : (usize, usize)) -> Image<N>
@@ -482,6 +652,9 @@ unsafe fn ipp_sep_convolution_f32(
 
     use crate::foreign::ipp::ippi::*;
 
+    // Separable convolution is with border only.
+    assert!(img.shape() == out.shape());
+
     // assert!(out.width() == img.width() - kernel.width() + 1);
     // assert!(out.height() == img.height() - kernel.height() + 1);
 
@@ -490,7 +663,7 @@ unsafe fn ipp_sep_convolution_f32(
     assert!(row_kernel.height() == 1 || row_kernel.width() == 1);
     assert!(col_kernel.height() == 1 || col_kernel.width() == 1);
     assert!(row_kernel.width() == col_kernel.width());
-    assert!(row_kernel.height() == col_kernel.height());
+    assert!(row_kernel.height() * row_kernel.width() == col_kernel.height() * col_kernel.width());
 
     let kernel_dim = row_kernel.width().max(row_kernel.height());
     let kernel_sz = crate::foreign::ipp::ippi::IppiSize { width : kernel_dim as i32, height : kernel_dim as i32  };
@@ -703,6 +876,49 @@ pub fn sobel(img : &Window<u8>, dst : WindowMut<'_, i16>, sz : usize, dx : i32, 
     opencv::imgproc::sobel(&src, &mut dst, core::CV_16S, dx, dy, sz as i32, 1.0, 0.0, core::BORDER_DEFAULT).unwrap();
 }
 
+pub fn median_filter(src : &Window<u8>, dst : &mut WindowMut<u8>, mask_sz : usize) {
+
+    assert_eq!(src.shape(), dst.shape());
+
+    #[cfg(feature="ipp")]
+    unsafe {
+        let (src_step, roi_sz) = crate::image::ipputils::step_and_size_for_window(src);
+        let (dst_step, _) = crate::image::ipputils::step_and_size_for_window_mut(&dst);
+        let mask_sz = crate::foreign::ipp::ippi::IppiSize { width : mask_sz as i32, height : mask_sz as i32 };
+        let mut buf_sz : i32 = 0;
+        let num_channels = 1;
+        let ans = crate::foreign::ipp::ippi::ippiFilterMedianBorderGetBufferSize(
+            roi_sz,
+            mask_sz,
+            crate::foreign::ipp::ippi::IppDataType_ipp8u,
+            num_channels,
+            &mut buf_sz as *mut _
+        );
+        assert!(ans == 0);
+        let mut buffer = Vec::<u8>::with_capacity(buf_sz as usize);
+        buffer.set_len(buf_sz as usize);
+
+        let anchor = crate::foreign::ipp::ippi::IppiPoint { x : mask_sz.width/2, y : mask_sz.height/2 };
+        let border_val = 0;
+        let border_ty = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderConst;
+        let ans = crate::foreign::ipp::ippi::ippiFilterMedianBorder_8u_C1R(
+            src.as_ptr(),
+            src_step,
+            dst.as_mut_ptr(),
+            dst_step,
+            roi_sz,
+            mask_sz,
+            border_ty,
+            border_val,
+            buffer.as_mut_ptr()
+        );
+        assert!(ans == 0);
+        return;
+    }
+
+    unimplemented!()
+}
+
 /*IppStatus ippiFilterBilateral_<mod>(const Ipp<srcdatatype>* pSrc, int srcStep,
 Ipp<dstdatatype>* pDst, int dstStep, IppiSize dstRoiSize, IppiBorderType borderType,
 const Ipp<datatype> pBorderValue[1], const IppiFilterBilateralSpec* pSpec, Ipp8u*
@@ -710,10 +926,6 @@ pBuffer );
 
 IppStatus ippiFilterBox_64f_C1R(const Ipp<datatype>* pSrc, int srcStep, Ipp<datatype>*
 pDst, int dstStep, IppiSize dstRoiSize, IppiSize maskSize, IppiPoint anchor );
-
-IppStatus ippiFilterMedian_<mod>(const Ipp<datatype>* pSrc, int srcStep, Ipp<datatype>*
-pDst, int dstStep, IppiSize dstRoiSize, IppiSize maskSize, IppiPoint anchor, Ipp8u*
-pBuffer );
 
 IppStatus ippiFilterSeparable_<mod>(const Ipp<datatype>* pSrc, int srcStep,
 Ipp<datatype>* pDst, int dstStep, IppiSize roiSize, IppiBorderType borderType,

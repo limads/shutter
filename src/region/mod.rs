@@ -668,9 +668,13 @@ impl PointExtractor {
                 win.labeled_pixels::<usize, _>(1)
                     .for_each(|(r, c, px)| if px >= v { self.pts.push((r, c)) } );
             },
-            Foreground::Between(a, b) => {
+            Foreground::Inside(a, b) => {
                 win.labeled_pixels::<usize, _>(1)
                     .for_each(|(r, c, px)| if px >= a && px <= b { self.pts.push((r, c)) } );
+            },
+            Foreground::Outside(a, b) => {
+                win.labeled_pixels::<usize, _>(1)
+                    .for_each(|(r, c, px)| if px <= a && px >= b { self.pts.push((r, c)) } );
             }
         }
         &self.pts[..]

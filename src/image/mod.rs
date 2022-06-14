@@ -79,7 +79,11 @@ pub(crate) mod iter;
 
 }*/
 
-/// Digital image, represented row-wise. Fundamentally, an image differs from a matrix because
+/// Owned digital image occupying a dynamically-allocated buffer. If you know your image content
+/// at compile time, consider using Window::from_constant, which saves up the allocation.
+/// Images are backed by Box<[N]>, because once a buffer is allocated, it cannot grow or
+/// shrink like Vec<N>.
+/// Fundamentally, an image differs from a matrix because
 /// it is oriented row-wise in memory, while a matrix is oriented column-wise. Also, images are
 /// bounded at a low and high end, because they are the product of a saturated digital quantization
 /// process. But indexing, following OpenCV convention, happens from the top-left point, following
@@ -122,6 +126,10 @@ where
 impl<N> Image<N>
 where
     N : Scalar + Copy + Any {
+
+    pub fn leak(self) {
+        Box::leak(self.buf);
+    }
 
     pub fn shape(&self) -> (usize, usize) {
         (self.buf.len() / self.width, self.width)
@@ -261,6 +269,298 @@ where
     Some(img)
 }
 
+pub trait PixelCopy<N>
+where
+    N : Scalar + Copy + Default + Zero + Copy + Any
+{
+
+    // Copies the content of this image into the center of a larger buffer with size new_sz,
+    // setting the remaining border entries to the pad value.
+    fn padded_copy(&self, new_sz : (usize, usize), pad : N) -> Image<N>;
+
+    /// Copies the content of this image into the center of a larger buffer with size
+    /// new_sz, mirroring the left margin into the right margin (and vice-versa), and mirroring
+    /// the top-margin into the bottom-margin (and vice-versa).
+    fn wrapped_copy(&self, new_sz : (usize, usize)) -> Image<N>;
+
+    /// Copies the content of this image into the center of a larger buffer with
+    /// size new_sz, replicating the first value of each row to the left border;
+    /// the last value of each row to the right border, the first value of each column
+    /// to the top border, and the last value of each column to the bottom border.
+    fn replicated_copy(&self, new_sz : (usize, usize)) -> Image<N>;
+
+    // If true, copy from self. If not, copy from other.
+    fn conditional_alt_copy(&self, mask : &Window<'_, u8>, false_alt : &Window<'_, N>) -> Image<N>;
+
+    // If true at nonzero mask, copy from self. No nothing otherwise.
+    fn conditional_copy(&self, mask : &Window<'_, u8>) -> Image<N>;
+
+}
+
+impl<N> PixelCopy<N> for Window<'_, N>
+where
+    N : Scalar + Copy + Default + Zero + Copy + Any
+{
+
+    fn padded_copy(&self, new_sz : (usize, usize), pad : N) -> Image<N> {
+        assert!(new_sz.0 > self.height() && new_sz.1 > self.width());
+        let mut new = unsafe { Image::new_empty(new_sz.0, new_sz.1) };
+        new.full_window_mut().padded_copy_from(self, pad);
+        new
+    }
+
+    fn wrapped_copy(&self, new_sz : (usize, usize)) -> Image<N> {
+        assert!(new_sz.0 > self.height() && new_sz.1 > self.width());
+        let mut new = unsafe { Image::new_empty(new_sz.0, new_sz.1) };
+        new.full_window_mut().wrapped_copy_from(self);
+        new
+    }
+
+    fn replicated_copy(&self, new_sz : (usize, usize)) -> Image<N> {
+        assert!(new_sz.0 > self.height() && new_sz.1 > self.width());
+        let mut new = unsafe { Image::new_empty(new_sz.0, new_sz.1) };
+        new.full_window_mut().replicated_copy_from(self);
+        new
+    }
+
+    fn conditional_alt_copy(&self, mask : &Window<'_, u8>, alternative : &Window<'_, N>) -> Image<N> {
+        let mut new = unsafe { Image::new_empty_like(self) };
+        new.full_window_mut().conditional_alt_copy_from(mask, self, alternative);
+        new
+    }
+
+    fn conditional_copy(&self, mask : &Window<'_, u8>) -> Image<N> {
+        let mut new = unsafe { Image::new_empty_like(self) };
+        new.full_window_mut().conditional_copy_from(mask, self);
+        new
+    }
+}
+
+impl<N> PixelCopy<N> for Image<N>
+where
+    N : Scalar + Copy + Default + Zero + Copy + Any
+{
+
+    // Copies the content of this image into the center of a larger buffer with size new_sz,
+    // setting the remaining border entries to the pad value.
+    fn padded_copy(&self, new_sz : (usize, usize), pad : N) -> Image<N> {
+        self.full_window().padded_copy(new_sz, pad)
+    }
+
+    /// Copies the content of this image into the center of a larger buffer with size
+    /// new_sz, mirroring the left margin into the right margin (and vice-versa), and mirroring
+    /// the top-margin into the bottom-margin (and vice-versa).
+    fn wrapped_copy(&self, new_sz : (usize, usize)) -> Image<N> {
+        self.full_window().wrapped_copy(new_sz)
+    }
+
+    /// Copies the content of this image into the center of a larger buffer with
+    /// size new_sz, replicating the first value of each row to the left border;
+    /// the last value of each row to the right border, the first value of each column
+    /// to the top border, and the last value of each column to the bottom border.
+    fn replicated_copy(&self, new_sz : (usize, usize)) -> Image<N> {
+        self.full_window().replicated_copy(new_sz)
+    }
+
+    // If true, copy from self. If not, copy from other.
+    fn conditional_alt_copy(&self, mask : &Window<'_, u8>, false_alt : &Window<'_, N>) -> Image<N> {
+        self.full_window().conditional_alt_copy(mask, false_alt)
+    }
+
+    // If true at nonzero mask, copy from self. No nothing otherwise.
+    fn conditional_copy(&self, mask : &Window<'_, u8>) -> Image<N> {
+        self.full_window().conditional_copy(mask)
+    }
+
+}
+
+impl<N> WindowMut<'_, N>
+where
+    N : Scalar + Copy + Default + Zero + Copy + Any
+{
+
+    // Copies elements into the center of self self from other, assuming dim(self) > dim(other), padding the
+    // border elements with a constant user-supplied value.
+    pub fn padded_copy_from(&mut self, other : &Window<'_, N>, pad : N) {
+        verify_border_dims(other, self);
+        let (bh, bw) = border_dims(other, self);
+
+        #[cfg(feature="ipp")]
+        unsafe {
+            let (src_step, src_sz) = crate::image::ipputils::step_and_size_for_window(other);
+            let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_window_mut(&self);
+            if self.pixel_is::<u8>() {
+                //let ans = self.apply_to_sub((bh, bw), *other.size(), |mut dst| {
+                let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_window_mut(&self);
+                let ans = crate::foreign::ipp::ippi::ippiCopyConstBorder_8u_C1R(
+                    mem::transmute(other.as_ptr()),
+                    src_step,
+                    src_sz,
+                    mem::transmute(self.as_mut_ptr()),
+                    dst_step,
+                    dst_sz,
+                    bh as i32,
+                    bw as i32,
+                    *std::mem::transmute::<_, &u8>(&pad)
+                );
+                // });
+                assert!(ans == 0);
+                return;
+            }
+        }
+
+        /*self.apply_to_sub_mut((0, 0), (100, 100), |mut win| {
+            self.shape();
+        });*/
+
+        unimplemented!()
+    }
+
+    // Copies elements into the center of self self from other, assuming dim(self) > dim(other), wrapping the
+    // border elements (i.e. border elements are copied by reflecting elements from the opposite border).
+    pub fn wrapped_copy_from(&mut self, other : &Window<'_, N>) {
+        verify_border_dims(other, self);
+
+        let (bh, bw) = border_dims(other, self);
+
+        #[cfg(feature="ipp")]
+        unsafe {
+            let (src_step, src_sz) = crate::image::ipputils::step_and_size_for_window(other);
+            let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_window_mut(&self);
+            if self.pixel_is::<f32>() {
+                //let ans = self.apply_to_sub((bh, bw), *other.size(), |mut dst| {
+
+                let ans = crate::foreign::ipp::ippi::ippiCopyWrapBorder_32f_C1R(
+                    mem::transmute(other.as_ptr()),
+                    src_step,
+                    src_sz,
+                    mem::transmute(self.as_mut_ptr()),
+                    dst_step,
+                    dst_sz,
+                    bh as i32,
+                    bw as i32,
+                );
+                // });
+                assert!(ans == 0);
+                return;
+            }
+        }
+
+        unimplemented!()
+    }
+
+
+    // Copies elements into the center of self self from other, assuming dim(self) > dim(other), padding the
+    // border elements with the last element of other at each border pixel.
+    pub fn replicated_copy_from(&mut self, other : &Window<'_, N>) {
+        verify_border_dims(other, self);
+
+        let (bh, bw) = border_dims(other, self);
+
+         #[cfg(feature="ipp")]
+        unsafe {
+            let (src_step, src_sz) = crate::image::ipputils::step_and_size_for_window(other);
+            let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_window_mut(&self);
+            let ans = if self.pixel_is::<u8>() {
+                crate::foreign::ipp::ippi::ippiCopyReplicateBorder_8u_C1R(
+                    mem::transmute(other.as_ptr()),
+                    src_step,
+                    src_sz,
+                    mem::transmute(self.as_mut_ptr()),
+                    dst_step,
+                    dst_sz,
+                    bh as i32,
+                    bw as i32,
+                )
+            } else if self.pixel_is::<f32>() {
+                crate::foreign::ipp::ippi::ippiCopyReplicateBorder_32f_C1R(
+                    mem::transmute(other.as_ptr()),
+                    src_step,
+                    src_sz,
+                    mem::transmute(self.as_mut_ptr()),
+                    dst_step,
+                    dst_sz,
+                    bh as i32,
+                    bw as i32,
+                )
+            } else {
+                panic!("Invalid type");
+            };
+            assert!(ans == 0);
+            return;
+        }
+
+        unimplemented!()
+    }
+
+    // Copies entries from true_other into self only where pixels at the mask are nonzero,
+    // and from false_other into self when mask is zero.
+    // self[px] = mask[px] == 0 ? false_other else true_other[px].
+    pub fn conditional_alt_copy_from(&mut self, mask : &Window<'_, u8>, true_alt : &Window<'_, N>, false_alt : &Window<'_, N>) {
+        // TODO remove unsafe (cannot borrow `*self` as mutable more than once at a time)
+        unsafe { (&mut *(self as *mut WindowMut<'_, N>)).copy_from(false_alt) };
+        self.conditional_copy_from(mask, true_alt);
+    }
+
+    // Copies entries from other into self only where pixels at the mask are nonzero.
+    // self[px] = mask[px] == 0 ? nothing else other[px]
+    pub fn conditional_copy_from(&mut self, mask : &Window<'_, u8>, other : &Window<'_, N>) {
+
+        assert!(self.shape() == other.shape(), "Windows differ in shape");
+        assert!(self.shape() == mask.shape(), "Windows differ in shape");
+        #[cfg(feature="ipp")]
+        unsafe {
+            let (src_step, src_sz) = crate::image::ipputils::step_and_size_for_window(other);
+            let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_window_mut(&self);
+            let (mask_step, mask_sz) = crate::image::ipputils::step_and_size_for_window(mask);
+            if self.pixel_is::<f32>() {
+                let ans = crate::foreign::ipp::ippi::ippiCopy_32f_C1MR(
+                    mem::transmute(other.as_ptr()),
+                    src_step,
+                    mem::transmute(self.as_mut_ptr()),
+                    dst_step,
+                    src_sz,
+                    mask.as_ptr(),
+                    mask_step
+                );
+                assert!(ans == 0);
+                return;
+            }
+        }
+
+        unimplemented!()
+    }
+
+    // Copies elements into self from other, assuming same dims.
+    pub fn copy_from(&mut self, other : & Window<'_, N>) {
+        assert!(self.shape() == other.shape(), "Mutable windows differ in shape");
+
+        #[cfg(feature="ipp")]
+        unsafe {
+            let (src_step, src_sz) = crate::image::ipputils::step_and_size_for_window(other);
+            let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_window_mut(&self);
+            if self.pixel_is::<u8>() {
+                let ans = crate::foreign::ipp::ippi::ippiCopy_8u_C1R(
+                    mem::transmute(other.as_ptr()),
+                    src_step,
+                    mem::transmute(self.as_mut_ptr()),
+                    dst_step,
+                    src_sz
+                );
+                assert!(ans == 0);
+                return;
+            }
+        }
+
+        unsafe {
+            (&mut *(self as *mut WindowMut<'_, N>) as &mut WindowMut<'_, N>).rows_mut().zip(other.rows())
+                .for_each(|(this, other)| this.copy_from_slice(other) );
+        }
+    }
+
+
+}
+
 impl<N> Image<N>
 where
     N : Scalar + Copy + Default + Zero + Copy + Any
@@ -386,23 +686,51 @@ where
         img
     }
 
+    // Creates a new image with the same dimensions as other, but with values set from the given scalar.
+    pub fn new_constant_like<'b, M>(other : &Window<'b, M>, value : N) -> Self
+    where
+        Window<'b, M> : Raster
+    {
+        Self::new_constant(other.height(), other.width(), value)
+    }
+
+    // Creates a new image with the same dimensions as other, with uninitialized values.
+    // Make sure you write to the allocated buffer before reading from it, otherwise
+    // the access is UB.
+    pub unsafe fn new_empty_like<'b, M>(other : &Window<'b, M>) -> Self
+    where
+        Window<'b, M> : Raster
+    {
+        Self::new_empty(other.height(), other.width())
+    }
+
     pub fn new_constant(height : usize, width : usize, value : N) -> Self {
         let mut buf = Vec::with_capacity(height * width);
         buf.extend((0..(height*width)).map(|_| value ));
         Self{ buf : buf.into_boxed_slice(), width, offset : (0, 0), size : (height, width) }
     }
     
-    /// Initializes an image with allocated, but undefined content.
+    /// Initializes an image with allocated, but undefined content. Reading the contents
+    /// of this image before writing to all entries is UB, which is why this funciton is marked
+    /// as unsafe. Make sure your program copies content from another image, or set
+    /// all its values with fill() before you attempt to read from it.
     pub unsafe fn new_empty(nrows : usize, ncols : usize) -> Self {
         let mut buf = Vec::<N>::with_capacity(nrows * ncols);
         buf.set_len(nrows * ncols);
         Self { buf : buf.into_boxed_slice(), width : ncols, offset : (0, 0), size : (nrows, ncols) }
     }
 
+    /// Returns a borrowed view over the whole window. Same as self.as_ref(). But is
+    /// convenient to have, since type inference for the AsRef impl might not be triggered
+    /// or you need an owned version of the window
     pub fn full_window<'a>(&'a self) -> Window<'a, N> {
         self.window((0, 0), self.shape()).unwrap()
     }
     
+    /// Returns a mutably borrowed view over the whole window. Note the current mutable reference
+    /// to the window is invalidated when this view enters into scope. Same as self.as_mut(). But is
+    /// convenient to have, since type inference for the AsMut impl might not be triggered, or you
+    /// need an owned version of the window.
     pub fn full_window_mut<'a>(&'a mut self) -> WindowMut<'a, N> {
         let shape = self.shape();
         self.window_mut((0, 0), shape).unwrap()
@@ -885,6 +1213,27 @@ where
     N : Scalar + Copy
 {
 
+    /// Iterate over windows of the given size. This iterator consumes the original window
+    /// so that we can implement windows(.) for Image by using move semantics, without
+    /// requiring the user to call full_windows(.).
+    pub fn windows(&self, sz : (usize, usize)) -> impl Iterator<Item=Window<'a, N>> {
+        let (step_v, step_h) = sz;
+        if sz.0 >= self.win_sz.0 || sz.1 >= self.win_sz.1 {
+            panic!("Child window size bigger than parent window size");
+        }
+        if self.height() % sz.0 != 0 || self.width() % sz.1 != 0 {
+            panic!("Image size should be a multiple of window size (Required window {:?} over parent window {:?})", sz, self.win_sz);
+        }
+        let offset = self.offset;
+        WindowIterator::<'a, N> {
+            source : self.clone(),
+            size : sz,
+            curr_pos : offset,
+            step_v,
+            step_h
+        }
+    }
+
     // Returns image corners with the given dimensions.
     pub fn corners(&'a self, height : usize, width : usize) -> Option<[Window<'a, N>; 4]> {
         let right = self.width() - width;
@@ -960,6 +1309,27 @@ where
             let start = tl + i*stride;
             &self.win[start..(start+self.win_sz.1)]
         })
+    }
+
+    /// Returns iterator over (subsampled row index, subsampled col index, pixel color).
+    /// Panics if L is an unsigend integer type that cannot represent one of the dimensions
+    /// of the image precisely.
+    pub fn labeled_pixels<L, E>(&'a self, px_spacing : usize) -> impl Iterator<Item=(L, L, N)> +'a + Clone
+    where
+        L : TryFrom<usize, Error=E> + Div<Output=L> + Mul<Output=L> + Rem<Output=L> + Clone + Copy + 'static,
+        E : Debug,
+        Range<L> : Iterator<Item=L>
+    {
+        let spacing = L::try_from(px_spacing).unwrap();
+        let w = (L::try_from(self.width()).unwrap() / spacing );
+        let h = (L::try_from(self.height()).unwrap() / spacing );
+        let range = Range { start : L::try_from(0usize).unwrap(), end : (w*h) };
+        range
+            .zip(self.pixels(px_spacing))
+            .map(move |(ix, px)| {
+                let (r, c) = (ix / w, ix % w);
+                (r, c, *px)
+            })
     }
 
     /// Iterate over all image pixels if spacing=1; or over pixels spaced
@@ -1203,27 +1573,6 @@ where
         unsafe{ self.win.get_unchecked(offset + ix) }
     }*/
 
-    /// Iterate over windows of the given size. This iterator consumes the original window
-    /// so that we can implement windows(.) for Image by using move semantics, without
-    /// requiring the user to call full_windows(.).
-    pub fn windows(self, sz : (usize, usize)) -> impl Iterator<Item=Window<'a, N>> {
-        let (step_v, step_h) = sz;
-        if sz.0 >= self.win_sz.0 || sz.1 >= self.win_sz.1 {
-            panic!("Child window size bigger than parent window size");
-        }
-        if self.height() % sz.0 != 0 || self.width() % sz.1 != 0 {
-            panic!("Image size should be a multiple of window size (Required window {:?} over parent window {:?})", sz, self.win_sz);
-        }
-        let offset = self.offset;
-        WindowIterator::<'a, N> {
-            source : self,
-            size : sz,
-            curr_pos : offset,
-            step_v,
-            step_h
-        }
-    }
-    
     /// Splits this window into equally-sized subwindows, iterating row-wise over the blocks.
     pub fn equivalent_windows(self, num_rows : usize, num_cols : usize) -> impl Iterator<Item=Window<'a, N>> {
         assert!(self.height() % num_rows == 0 && self.width() % num_cols == 0);
@@ -1600,27 +1949,6 @@ impl<'a> Window<'a, u8> {
     /// Iterate over pixels, as long as they are non-zero at the mask window.
     pub fn masked_labeled_pixels(&'a self, mask : &'a Window<'_, u8>) -> impl Iterator<Item=(usize, usize, u8)> +'a + Clone {
         mask.nonzero_labeled_pixels(1).map(move |(r, c, _)| (r, c, self[(r, c)]) )
-    }
-
-    /// Returns iterator over (subsampled row index, subsampled col index, pixel color).
-    /// Panics if L is an unsigend integer type that cannot represent one of the dimensions
-    /// of the image precisely.
-    pub fn labeled_pixels<L, E>(&'a self, px_spacing : usize) -> impl Iterator<Item=(L, L, u8)> +'a + Clone
-    where
-        L : TryFrom<usize, Error=E> + Div<Output=L> + Mul<Output=L> + Rem<Output=L> + Clone + Copy + 'static,
-        E : Debug,
-        Range<L> : Iterator<Item=L>
-    {
-        let spacing = L::try_from(px_spacing).unwrap();
-        let w = (L::try_from(self.width()).unwrap() / spacing );
-        let h = (L::try_from(self.height()).unwrap() / spacing );
-        let range = Range { start : L::try_from(0usize).unwrap(), end : (w*h) };
-        range
-            .zip(self.pixels(px_spacing))
-            .map(move |(ix, px)| {
-                let (r, c) = (ix / w, ix % w);
-                (r, c, *px)
-            })
     }
 
     /// Extract contiguous image regions of homogeneous color.
@@ -2335,7 +2663,7 @@ where
 
 }
 
-fn verify_border_dims<N>(src : &Window<'_, N>, dst : &WindowMut<'_, N>)
+fn verify_border_dims<N>(src : &Window<N>, dst : &WindowMut<N>)
 where
     N : Scalar + Copy + Debug + Default
 {
@@ -2349,7 +2677,7 @@ where
     assert!(src.width() + diffw == dst.width());
 }
 
-fn border_dims<N>(src : &Window<'_, N>, dst : &WindowMut<'_, N>) -> (usize, usize)
+fn border_dims<N>(src : &Window<N>, dst : &WindowMut<N>) -> (usize, usize)
 where
     N : Scalar + Copy + Debug + Default
 {
@@ -2368,171 +2696,6 @@ where
         assert!(self.area() == other.len());
         self.copy_from(&Window::from_slice(other, self.win_sz.1));
     }*/
-
-    // Copies elements into the center of self self from other, assuming dim(self) > dim(other), padding the
-    // border elements with a constant user-supplied value.
-    pub fn padded_copy_from<'b>(&'a mut self, other : &'b Window<'b, N>, pad : N) {
-        verify_border_dims(other, self);
-        let (bh, bw) = border_dims(other, self);
-
-        #[cfg(feature="ipp")]
-        unsafe {
-            let (src_step, src_sz) = crate::image::ipputils::step_and_size_for_window(other);
-            let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_window_mut(&self);
-            if self.pixel_is::<u8>() {
-                //let ans = self.apply_to_sub((bh, bw), *other.size(), |mut dst| {
-                let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_window_mut(&self);
-                let ans = crate::foreign::ipp::ippi::ippiCopyConstBorder_8u_C1R(
-                    mem::transmute(other.as_ptr()),
-                    src_step,
-                    src_sz,
-                    mem::transmute(self.as_mut_ptr()),
-                    dst_step,
-                    dst_sz,
-                    bh as i32,
-                    bw as i32,
-                    *std::mem::transmute::<_, &u8>(&pad)
-                );
-                // });
-                assert!(ans == 0);
-                return;
-            }
-        }
-
-        /*self.apply_to_sub_mut((0, 0), (100, 100), |mut win| {
-            self.shape();
-        });*/
-
-        unimplemented!()
-    }
-
-    // Copies elements into the center of self self from other, assuming dim(self) > dim(other), wrapping the
-    // border elements (i.e. border elements are copied by reflecting elements from the opposite border).
-    pub fn wrapped_copy_from<'b>(&'a mut self, other : &'b Window<'b, N>) {
-        verify_border_dims(other, self);
-
-        let (bh, bw) = border_dims(other, self);
-
-        #[cfg(feature="ipp")]
-        unsafe {
-            let (src_step, src_sz) = crate::image::ipputils::step_and_size_for_window(other);
-            let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_window_mut(&self);
-            if self.pixel_is::<f32>() {
-                //let ans = self.apply_to_sub((bh, bw), *other.size(), |mut dst| {
-
-                let ans = crate::foreign::ipp::ippi::ippiCopyWrapBorder_32f_C1R(
-                    mem::transmute(other.as_ptr()),
-                    src_step,
-                    src_sz,
-                    mem::transmute(self.as_mut_ptr()),
-                    dst_step,
-                    dst_sz,
-                    bh as i32,
-                    bw as i32,
-                );
-                // });
-                assert!(ans == 0);
-                return;
-            }
-        }
-
-        unimplemented!()
-    }
-
-    // Copies elements into the center of self self from other, assuming dim(self) > dim(other), padding the
-    // border elements with the last element of other at each border pixel.
-    pub fn replicated_copy_from<'b>(&'a mut self, other : &'b Window<'b, N>) {
-        verify_border_dims(other, self);
-
-        let (bh, bw) = border_dims(other, self);
-
-         #[cfg(feature="ipp")]
-        unsafe {
-            let (src_step, src_sz) = crate::image::ipputils::step_and_size_for_window(other);
-            let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_window_mut(&self);
-            if self.pixel_is::<u8>() {
-                // let ans = self.apply_to_sub((bh, bw), *other.size(), |mut dst| {
-                let ans = crate::foreign::ipp::ippi::ippiCopyReplicateBorder_8u_C1R(
-                    mem::transmute(other.as_ptr()),
-                    src_step,
-                    src_sz,
-                    mem::transmute(self.as_mut_ptr()),
-                    dst_step,
-                    dst_sz,
-                    bh as i32,
-                    bw as i32,
-                );
-                //});
-                assert!(ans == 0);
-                return;
-            }
-        }
-
-        unimplemented!()
-    }
-
-    // Copies entries from true_other into self only where pixels at the mask are nonzero,
-    // and from false_other into self when mask is zero.
-    // self[px] = mask[px] == 0 ? false_other else true_other[px].
-    pub fn binary_conditional_copy_from<'b>(&'a mut self, mask : &'b Window<'b, u8>, true_other : &'b Window<'b, N>, false_other : &'b Window<'b, N>) {
-        // TODO remove unsafe (cannot borrow `*self` as mutable more than once at a time)
-        unsafe { (&mut *(self as *mut WindowMut<'a, N>)).copy_from(false_other) };
-        self.conditional_copy_from(mask, true_other);
-    }
-
-    // Copies entries from other into self only where pixels at the mask are nonzero.
-    // self[px] = mask[px] == 0 ? nothing else other[px]
-    pub fn conditional_copy_from<'b>(&'a mut self, mask : &'b Window<'b, u8>, other : &'b Window<'b, N>) {
-
-        assert!(self.shape() == other.shape(), "Windows differ in shape");
-        assert!(self.shape() == mask.shape(), "Windows differ in shape");
-        #[cfg(feature="ipp")]
-        unsafe {
-            let (src_step, src_sz) = crate::image::ipputils::step_and_size_for_window(other);
-            let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_window_mut(&self);
-            let (mask_step, mask_sz) = crate::image::ipputils::step_and_size_for_window(mask);
-            if self.pixel_is::<f32>() {
-                let ans = crate::foreign::ipp::ippi::ippiCopy_32f_C1MR(
-                    mem::transmute(other.as_ptr()),
-                    src_step,
-                    mem::transmute(self.as_mut_ptr()),
-                    dst_step,
-                    src_sz,
-                    mask.as_ptr(),
-                    mask_step
-                );
-                assert!(ans == 0);
-                return;
-            }
-        }
-
-        unimplemented!()
-    }
-
-    // Copies elements into self from other, assuming same dims.
-    pub fn copy_from<'b>(&'a mut self, other : &'b Window<'b, N>) {
-        assert!(self.shape() == other.shape(), "Mutable windows differ in shape");
-
-        #[cfg(feature="ipp")]
-        unsafe {
-            let (src_step, src_sz) = crate::image::ipputils::step_and_size_for_window(other);
-            let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_window_mut(&self);
-            if self.pixel_is::<u8>() {
-                let ans = crate::foreign::ipp::ippi::ippiCopy_8u_C1R(
-                    mem::transmute(other.as_ptr()),
-                    src_step,
-                    mem::transmute(self.as_mut_ptr()),
-                    dst_step,
-                    src_sz
-                );
-                assert!(ans == 0);
-                return;
-            }
-        }
-
-        self.rows_mut().zip(other.rows())
-            .for_each(|(this, other)| this.copy_from_slice(other) );
-    }
 
     pub fn rows_mut(&'a mut self) -> impl Iterator<Item=&'a mut [N]> {
         let stride = self.original_size().1;
