@@ -6,6 +6,7 @@ use parry2d::utils::Interval;
 use petgraph::unionfind::UnionFind;
 use std::mem;
 use petgraph::graph::NodeIndex;
+use crate::graph::SplitGraph;
 
 #[repr(u8)]
 #[derive(Debug, Clone)]
@@ -79,6 +80,10 @@ impl RunLengthEncoder {
         this
     }
 
+    // pub fn split(&self) -> crate::graph::SplitGraph {
+    //    crate::graph::group_weights(&self.graph, &self.uf)
+    // }
+
     pub fn build_graph(&self) -> RunLengthGraph {
         let nrows = self.rows.len();
 
@@ -111,7 +116,7 @@ impl RunLengthEncoder {
                 // only the start and end matching RLEs).
                 let iter_above = self.rles[row_above.clone()].iter()
                     .enumerate()
-                    .skip_while(|(_, r)| (r.start.1+r.length) < rl_below.start.1-1 )
+                    .skip_while(|(_, r)| (r.start.1+r.length+1) < rl_below.start.1 )
                     .take_while(|(_, r)| r.start.1 < (rl_below.start.1+rl_below.length+1) );
 
                 // Add edges to top RLEs
@@ -127,6 +132,11 @@ impl RunLengthEncoder {
         RunLengthGraph { graph, uf }
     }
 
+    /*
+    Run-length encoding is trivially parallelizable by splitting an image with n
+    rows into 4 images with dimensions n/4 x m, running it separately on the images,
+    then polling the results back together.
+    */
     pub fn update(&mut self, w : &Window<u8>) -> (&[RunLength], &[Range<usize>]) {
         self.rles.clear();
         self.rows.clear();
@@ -155,6 +165,16 @@ impl RunLengthEncoder {
         (&self.rles[..], &self.rows[..])
     }
 
+}
+
+pub fn draw_distinct(img : &mut WindowMut<u8>, graph : &UnGraph<RunLength, Direction>, split : &SplitGraph) {
+    for range in &split.ranges  {
+        let r : f64 = rand::random();
+        let color : u8 = 64 + ((256. - 64.)*r) as u8;
+        for ix in split.indices[range.clone()].iter() {
+            img[graph[*ix]].iter_mut().for_each(|px| *px = color );
+        }
+    }
 }
 
 pub struct RunLengthGraph {

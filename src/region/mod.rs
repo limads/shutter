@@ -715,3 +715,21 @@ pub fn connected_components(win : &Window<'_, u8>, out : &mut WindowMut<'_, u16>
     }
     rects
 }
+
+pub struct GraphSegmenter {
+
+}
+
+impl GraphSegmenter {
+
+    pub fn calculate() {
+        // Declare: Graph with each pixel as an unconnected node.
+        // Begin:
+        // For all pixels:
+        //      Examine 8-neighborhood. Is difference < threshold? then add_edge(px, neighborhood)
+        // End;
+        // The threshold is a function of the set size and global segmentation scale.
+    }
+}
+
+

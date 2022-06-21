@@ -43,7 +43,7 @@ pub trait Tracer {
 
 }
 
-// Carries coordinate and label.
+// Carries coordinate and label. TODO also wrap the UnionFind here.
 pub type EdgeGraph = UnGraph<(usize, usize), Direction>;
 
 #[derive(Debug, Clone)]
@@ -66,6 +66,10 @@ pub struct EdgeGraphTracer {
 }*/
 
 impl EdgeGraphTracer {
+
+    pub fn grouped_weights(&self) -> crate::graph::SplitGraph {
+        crate::graph::group_weights(&self.graph, &self.edge_sets)
+    }
 
     // Makes two passes over the UnionFind (one at into_labeling, other at
     // the implementation here) BUT makes a single allocation and does not require moving content

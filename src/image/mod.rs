@@ -22,6 +22,7 @@ use std::borrow::{Borrow, BorrowMut};
 use std::mem;
 use crate::raster::*;
 use crate::draw::*;
+use crate::sparse::RunLength;
 
 // TODO make indexing operations checked at debug builds. They are segfaulting if the
 // user passes an overflowing index, since the impl is using get_unchecked regardless for now.
@@ -2813,7 +2814,47 @@ where
 
 }
 
-impl<N> Index<(usize, usize)> for WindowMut<'_, N> 
+impl<N> Index<RunLength> for Window<'_, N>
+where
+    N : Scalar + Copy
+{
+
+    type Output = [N];
+
+    fn index(&self, rl: RunLength) -> &Self::Output {
+        assert!(rl.start.1 + rl.length <= self.width() && rl.start.0 < self.height());
+        unsafe { std::slice::from_raw_parts(&self[rl.start] as *const _, rl.length) }
+    }
+
+}
+
+impl<N> Index<RunLength> for WindowMut<'_, N>
+where
+    N : Scalar + Copy
+{
+
+    type Output = [N];
+
+    fn index(&self, rl: RunLength) -> &Self::Output {
+        assert!(rl.start.1 + rl.length <= self.width() && rl.start.0 < self.height());
+        unsafe { std::slice::from_raw_parts(&self[rl.start] as *const _, rl.length) }
+    }
+
+}
+
+impl<N> IndexMut<RunLength> for WindowMut<'_, N>
+where
+    N : Scalar + Copy
+{
+
+    fn index_mut(&mut self, rl: RunLength) -> &mut Self::Output {
+        assert!(rl.start.1 + rl.length <= self.width() && rl.start.0 < self.height());
+        unsafe { std::slice::from_raw_parts_mut(&mut self[rl.start] as *mut _, rl.length) }
+    }
+
+}
+
+impl<N> Index<(usize, usize)> for WindowMut<'_, N>
 where
     N : Scalar + Copy
 {

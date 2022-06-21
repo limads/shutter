@@ -357,7 +357,7 @@ pub trait ConvolveSep {
 
 impl<'a, N> ConvolveSep for Window<'a, N>
 where
-    N : Scalar + Clone + Copy + Debug
+    N : Scalar + Clone + Copy + Debug + Default + Zero
 {
 
     type Output = WindowMut<'a, N>;
@@ -370,10 +370,10 @@ where
         unsafe {
             if self.pixel_is::<f32>() {
                 ipp_sep_convolution_f32(
-                    self,
-                    filter_horiz,
-                    filter_vert,
-                    out
+                    mem::transmute(self),
+                    mem::transmute(filter_horiz),
+                    mem::transmute(filter_vert),
+                    mem::transmute(out)
                 );
                 return;
             }
@@ -383,8 +383,8 @@ where
     }
 
     fn convolve_sep(&self, filter_vert : &Self, filter_horiz : &Self, conv : Convolution) -> Self::OwnedOutput {
-        let mut out = Image::new_constant_like(self);
-        self.convolve_mut(filter, conv, &mut out.full_window_mut());
+        let mut out = unsafe { Image::new_empty_like(self) };
+        self.convolve_sep_mut(filter_vert, filter_horiz, conv, &mut out.full_window_mut());
         out
     }
 

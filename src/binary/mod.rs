@@ -2,6 +2,35 @@
 
 use crate::image::*;
 
+/*/// A bit image uses each byte to represent the pixel values of 8 contiguous
+/// pixels. It is the cheapest dense image representation. (Contrast with ByteImage,
+/// which uses a u8 to represent grayscale values; and BinaryImage, which wraps a ByteImage
+/// to represent zero vs. nonzero elements.
+struct BitImage {
+
+    buf : Vec<u8>,
+
+    width : usize
+}
+
+struct BinaryWindow {
+
+}
+
+impl BinaryWindow {
+
+    pub fn local_sums(&self) -> Image<u8> {
+        self.buf.iter().for_each(|px|  px.count_ones() );
+        // leading_zeros
+        // trailing_zeros
+        // leading_ones
+        // trailing_ones
+        // swap_bytes
+        // checked_add
+    }
+
+}*/
+
 pub trait BinaryOp<'a> {
 
     fn and(&'a self, other : &Window<'a, u8>, dst : &'a mut WindowMut<'a, u8>);
