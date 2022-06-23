@@ -13,6 +13,16 @@ pub struct SplitGraph {
     pub ranges : Vec<Range<usize>>
 }
 
+impl SplitGraph {
+
+    // Return a handle to a unique element of each group. Can be used
+    // to start a search restricted to each group.
+    pub fn first_nodes<'a>(&'a self) -> impl Iterator<Item=NodeIndex> + 'a {
+        self.ranges.iter().map(move |r| self.indices[r.start] )
+    }
+
+}
+
 pub fn group_weights<N, E>(
     graph : &UnGraph<N, E>,
     uf : &UnionFind<NodeIndex>

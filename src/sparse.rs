@@ -12,28 +12,44 @@ use crate::graph::SplitGraph;
 #[derive(Debug, Clone)]
 pub enum Neigborhood {
 
-    /// Four-neighborhood (top, below, left, right pixels) (Aka. Von Neumann neighborhood)
+    /// Four-neighborhood (top, below, left, right pixels) (Aka. Von Neumann neighborhood),
+    /// characterized by CardinalDirection
     Immediate,
 
     /// Eight-neighborhood (all elements at immediate neighborhood plus
-    /// top-left, top-right, bottom-left and bottom-right pixels) (Aka. Moore neighborhood)
+    /// top-left, top-right, bottom-left and bottom-right pixels) (Aka. Moore neighborhood),
+    /// characterized by Direction
     Extended
 
 }
 
+/// Represents one of the four cardinal directions in a 4-neighborhood pixel connectivity graph
+#[derive(Debug, Clone, Copy)]
+#[repr(u8)]
+pub enum CardinalDirection {
+    North,
+    East,
+    South,
+    West
+}
+
+/// Represents one of the eight directions in a 8-neighborhood pixel connectivity graph
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
 pub enum Direction {
-    NorthWest,
     North,
     NorthEast,
     East,
     SouthEast,
     South,
     SouthWest,
-    West
+    West,
+    NorthWest
 }
 
+/// Represents a horizontal sequence of homogeneous pixels by the coordinate of
+/// the first pixel and the length of the sequence. The RunLength is the basis
+/// for a sparse representation of a binary image.
 #[derive(Debug, Clone, Copy)]
 pub struct RunLength {
     pub start : (usize, usize),
@@ -45,6 +61,16 @@ impl RunLength {
     /// Represents a closed interval covered by this run-length
     pub fn interval(&self) -> Interval<usize> {
         Interval(self.start.1, self.start.1+self.length-1)
+    }
+
+    pub fn intersect(&self, other : &Self) -> Option<RunLength> {
+        self.intersect_interval(other.interval())
+    }
+
+    /// Returns the subset of Self that intersects vertically with the given interval
+    pub fn intersect_interval(&self, intv : Interval<usize>) -> Option<RunLength> {
+        self.interval().intersect(intv)
+            .map(|intv| RunLength { start : (self.start.0, intv.0), length : intv.1-intv.0+1 } )
     }
 
     // It never makes sense to check for contact of RLEs at the same row,
@@ -87,7 +113,7 @@ impl RunLengthEncoder {
     pub fn build_graph(&self) -> RunLengthGraph {
         let nrows = self.rows.len();
 
-        let mut graph = UnGraph::<RunLength, Direction>::new_undirected();
+        let mut graph = UnGraph::<RunLength, Interval<usize>>::new_undirected();
         let mut uf = UnionFind::new(self.rles.len());
         if self.rows.len() == 0 {
             return RunLengthGraph { graph, uf };
@@ -102,6 +128,8 @@ impl RunLengthEncoder {
             past_ixs.push(graph.add_node(*rl));
         }
 
+        // println!("Intersection = {:?}", Interval(1usize,1usize).intersect(Interval(1usize,1usize)));
+
         let row_pair_iter = self.rows[0..(nrows-1)].iter()
             .zip(self.rows[1..nrows].iter());
         for (row_above, row_below) in row_pair_iter {
@@ -111,17 +139,29 @@ impl RunLengthEncoder {
                 let below_ix = graph.add_node(*rl_below);
                 curr_ixs.push(below_ix);
 
+                /* Decide on the RunLenght connectivity strategy: If the strict overlap
+                is desired, we are working with 4-neighborhood; If diagonal linking (8-neighborhood)
+                is desired, the diagonally-connecting intervals will not share an overlap */
+
                 // Iterate overr overlapping top RLEs (since they are ordered, there is no
                 // need to check the overlap of intermediate elements:
                 // only the start and end matching RLEs).
                 let iter_above = self.rles[row_above.clone()].iter()
                     .enumerate()
-                    .skip_while(|(_, r)| (r.start.1+r.length+1) < rl_below.start.1 )
-                    .take_while(|(_, r)| r.start.1 < (rl_below.start.1+rl_below.length+1) );
+
+                    // use this for diagonally-linking RLEs (CANNOT have intersections as weights)
+                    // .skip_while(|(_, above)| (above.start.1+above.length+1 ) < rl_below.start.1 )
+                    // .take_while(|(_, above)| above.start.1 < (rl_below.start.1+rl_below.length+1 ) )
+
+                    // Use this for strictly overlapping RLEs (intersections can be weights).
+                    .skip_while(|(_, above)| (above.start.1+above.length-1) < rl_below.start.1 )
+                    .take_while(|(_, above)| above.start.1 <= (rl_below.start.1+rl_below.length-1) )
+
+                    .map(|(ix, above)| (ix, rl_below.intersect(&above).unwrap().interval() ) );
 
                 // Add edges to top RLEs
-                for (above_ix, _) in iter_above {
-                    graph.add_edge(below_ix, past_ixs[above_ix], Direction::North);
+                for (above_ix, intv) in iter_above {
+                    graph.add_edge(below_ix, past_ixs[above_ix], intv);
                     uf.union(below_ix, past_ixs[above_ix]);
                 }
             }
@@ -167,7 +207,7 @@ impl RunLengthEncoder {
 
 }
 
-pub fn draw_distinct(img : &mut WindowMut<u8>, graph : &UnGraph<RunLength, Direction>, split : &SplitGraph) {
+pub fn draw_distinct(img : &mut WindowMut<u8>, graph : &UnGraph<RunLength, (usize, usize)>, split : &SplitGraph) {
     for range in &split.ranges  {
         let r : f64 = rand::random();
         let color : u8 = 64 + ((256. - 64.)*r) as u8;
@@ -177,15 +217,65 @@ pub fn draw_distinct(img : &mut WindowMut<u8>, graph : &UnGraph<RunLength, Direc
     }
 }
 
+/// A graph of connected RunLength elements is much cheaper to represent than a graph of connected pixels,
+/// and encode the same set of spatial relationships by making horizontal pixel
+/// connections implicit (all pixels represented by a RunLength are connected; horizontal
+/// pixels in the same row but different RunLengths are disconnected; vertical RunLengths
+/// are connected by graph edges). The weights can represent start column and end column of the
+/// relative overlap. RLEs stay ordered in the graph: A graph index B > graph Index A means
+/// row(B) >= row(A), and col(B) > col(A). graph.node_indices() therefore also represent a
+/// raster order.
 pub struct RunLengthGraph {
 
-    pub graph : UnGraph<RunLength, Direction>,
+    // Edges carry the intersection of the RunLenghts.
+    pub graph : UnGraph<RunLength, Interval<usize>>,
 
     pub uf : UnionFind<NodeIndex>
 
 }
 
 impl RunLengthGraph {
+
+    // Since the graph is in raster order, the index of all labels in the union find distinct
+    // from the previous in a serial iterator over the union find candidate top-left
+    // element in a new group. Sorting and taking the distinct of those candidates gives
+    // the first top-left element. The first index of each group can be used as a handle to start
+    // a depth or breadth search over the graph restricted to the current group. Consider using
+    // splitgraph::first_nodes instead to avoid calling into_labeling more than once.
+    pub fn first_nodes(&self) -> Vec<NodeIndex> {
+        let labels = self.uf.clone().into_labeling();
+        let mut fst_nodes = Vec::new();
+        if labels.len() == 0 {
+            return fst_nodes;
+        }
+        fst_nodes.push(NodeIndex::new(0));
+        for (pair_ix, (prev, curr)) in labels.iter().zip(labels.iter().skip(1)).enumerate() {
+            if *curr != *prev {
+                fst_nodes.push(NodeIndex::new(pair_ix+1));
+            }
+        }
+        fst_nodes.sort();
+        fst_nodes.dedup();
+        fst_nodes
+    }
+
+    /// Returns several rects contained in grouped  RunLengths. This returns
+    /// a separate rect for all possible depth-first searches.
+    pub fn inner_rects(&self) -> Vec<Vec<(usize, usize, usize, usize)>> {
+        /*let mut rects = Vec::new();
+        // The first nodeindex at each range is always the RLE to the top-left in raster order.
+        for fst_ix in self.first_nodes() {
+
+            let mut dfs = Dfs::new(&self.graph, &self.graph[fst_ix]);
+
+            let mut grouped_rects = Vec::new();
+            let mut overlap = self.graph[fst_ix];
+            while let Some(nx) = dfs.next() {
+
+            }
+        }*/
+        unimplemented!()
+    }
 
     pub fn split(&self) -> crate::graph::SplitGraph {
         crate::graph::group_weights(&self.graph, &self.uf)
