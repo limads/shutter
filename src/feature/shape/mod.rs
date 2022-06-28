@@ -8,6 +8,7 @@ use nalgebra::Vector2;
 use std::cmp::Ord;
 use std::ops::Add;
 use nalgebra;
+use std::mem;
 
 pub trait Quadrilateral {
 
@@ -186,10 +187,112 @@ pub fn point_centroid(pts : &[(usize, usize)]) -> (f32, f32) {
     (sum.0 / n, sum.1 / n)
 }
 
+#[cfg(feature="ipp")]
+pub struct IppiCentralMoments {
+    state : Vec<u8>
+}
+
+#[cfg(feature="ipp")]
+impl IppiCentralMoments {
+
+    pub fn new() -> Self {
+        unsafe {
+            let mut sz : i32 = 0;
+            let alg = crate::foreign::ipp::ippi::IppHintAlgorithm_ippAlgHintNone;
+            let ans = crate::foreign::ipp::ippi::ippiMomentGetStateSize_64f(
+                alg,
+                &mut sz as *mut _
+            );
+            assert!(ans == 0);
+            let mut state = Vec::with_capacity(sz as usize);
+            let ans = crate::foreign::ipp::ippi::ippiMomentInit_64f(
+                mem::transmute(state.as_mut_ptr()),
+                alg
+            );
+            assert!(ans == 0);
+            Self { state }
+        }
+    }
+
+    unsafe fn get_spatial_moment(&self, m : i32, n : i32) -> f32 {
+        let channel = 0;
+        let mut val : f64 = 0.;
+        let offset = crate::foreign::ipp::ippi::IppiPoint { x : 0, y : 0 };
+        let ans = crate::foreign::ipp::ippi::ippiGetSpatialMoment_64f(
+            mem::transmute(self.state.as_ptr()),
+            m,
+            n,
+            channel,
+            offset,
+            &mut val as *mut _
+        );
+        assert!(ans == 0);
+        val as f32
+    }
+
+    unsafe fn get_central_moment(&self, m : i32, n : i32) -> f32 {
+        let channel = 0;
+        let mut val : f64 = 0.;
+        let ans = crate::foreign::ipp::ippi::ippiGetCentralMoment_64f(
+            mem::transmute(self.state.as_ptr()),
+            m,
+            n,
+            channel,
+            &mut val as *mut _
+        );
+        assert!(ans == 0);
+        val as f32
+    }
+
+    pub fn calculate(&mut self, win : &Window<u8>) -> CentralMoments {
+        unsafe {
+            let (step, sz) = crate::image::ipputils::step_and_size_for_window(win);
+            let ans = crate::foreign::ipp::ippi::ippiMoments64f_8u_C1R(
+                win.as_ptr(),
+                step,
+                sz,
+                mem::transmute(self.state.as_mut_ptr())
+            );
+            assert!(ans == 0);
+
+            // 0th moment = area = number of pixels
+            let zero = self.get_spatial_moment(0, 0);
+            let center_x = self.get_spatial_moment(1, 0) / zero;
+            let center_y = self.get_spatial_moment(0, 1) / zero;
+
+            let zero = self.get_central_moment(2, 0);
+            let xx = self.get_central_moment(2, 0);
+            let yy = self.get_central_moment(0, 2);
+            let xy = self.get_central_moment(1, 1);
+            let xxy = self.get_central_moment(2, 1);
+            let yyx = self.get_central_moment(1, 2);
+            let xxx = self.get_central_moment(3, 0);
+            let yyy = self.get_central_moment(0, 3);
+            CentralMoments {
+                center : (center_y, center_x),
+                zero,
+                xx,
+                yy,
+                xy,
+                xxy,
+                yyx,
+                xxx,
+                yyy
+            }
+        }
+    }
+
+}
+
 // The central moments are translation invariant. Moments can be calculated over the
 // shape edge only, since the edge is equivalent to a binary image giving weight 1
 // to pixels at the edge and weight zero for pixels outside it.
 pub struct CentralMoments {
+
+    // (row, col) just convert to f32
+    pub center : (f32, f32),
+
+    pub zero : f32,
 
     pub xx : f32,
 
@@ -209,19 +312,95 @@ pub struct CentralMoments {
 
 impl CentralMoments {
 
+    // Calculate, with the result in cartesian orientation.
+    pub fn calculate_upright(pts : &[(usize, usize)], img_height : usize) -> Self {
+        let corrected : Vec<_> = pts.iter().map(|pt| (img_height - pt.0, pt.1) ).collect();
+        Self::calculate(&corrected, None)
+    }
+
     pub fn calculate(pts : &[(usize, usize)], centroid : Option<(f32, f32)>) -> Self {
         let centroid = centroid.unwrap_or(point_centroid(pts));
         let diffs : Vec<(f32, f32)> = pts.iter()
             .map(|pt| (pt.0 as f32 - centroid.0 as f32, pt.1 as f32 - centroid.1 as f32) )
             .collect();
-        let xx = diffs.iter().fold(0.0, |m, d| m + d.1.powf(2.) );
-        let yy = diffs.iter().fold(0.0, |m, d| m + d.0.powf(2.) );
-        let xy = diffs.iter().fold(0.0, |m, d| m + (d.0 * d.1) );
-        let xxx = diffs.iter().fold(0.0, |m, d| m + d.1.powf(3.) );
-        let yyy = diffs.iter().fold(0.0, |m, d| m + d.0.powf(3.) );
-        let xxy = diffs.iter().fold(0.0, |m, d| m + (d.1 * d.1 * d.0) );
-        let yyx = diffs.iter().fold(0.0, |m, d| m + (d.0 * d.0 * d.1) );
-        Self { xx, yy, xy, xxx, yyy, xxy, yyx }
+        let xx = diffs.iter().fold(0.0, |acc, d| acc + d.1.powf(2.) );
+        let yy = diffs.iter().fold(0.0, |acc, d| acc + d.0.powf(2.) );
+        let xy = diffs.iter().fold(0.0, |acc, d| acc + (d.0 * d.1) );
+        let xxx = diffs.iter().fold(0.0, |acc, d| acc + d.1.powf(3.) );
+        let yyy = diffs.iter().fold(0.0, |acc, d| acc + d.0.powf(3.) );
+        let xxy = diffs.iter().fold(0.0, |acc, d| acc + (d.1 * d.1 * d.0) );
+        let yyx = diffs.iter().fold(0.0, |acc, d| acc + (d.0 * d.0 * d.1) );
+        Self { zero : diffs.len() as f32, xx, yy, xy, xxx, yyy, xxy, yyx, center : centroid }
+    }
+
+    // After Burger & Burge (11.25), resulting in the range [-pi/2, pi/2] (positive and negative RIGHT quadrant)
+    // BUT inverted when the y coordinate of the image is inverted.
+    pub fn major_axis_orientation(&self) -> f32 {
+        0.5*( (2.0*self.xy) / (self.xx - self.yy) ).atan()
+    }
+
+    // Upright unit vector resulting from the orientation (Burger & Burge, 11.26),
+    // points in the same direction as the major ellipse axis.
+    pub fn oriented_unit_vector(&self) -> Vector2<f32> {
+
+        // Multiply by -1 (reflect y coordinate) when y moments are inverted wrt cartesian plane.
+        let theta = self.major_axis_orientation();
+
+        Vector2::new(theta.cos(), theta.sin())
+    }
+
+    // Resulting major and minor ellipse vectors (Burger & Burge, 11.31 and 11.32).
+    // num_pxs is the number of pixels in the region, required for
+    // scaling back the value (zero-th moment). vectors are relative to the ellipse center.
+    pub fn ellipse_vectors(&self) -> (Vector2<f32>, Vector2<f32>) {
+
+        // TODO if only the boundary is used for calculation, then num_pxs
+        // must be informed separately. num_pxs == area only if the pxs used
+        // to calculate the moments are a dense representation.
+        let num_pxs = self.zero;
+        let mut major = self.oriented_unit_vector();
+        //println!("{}", major);
+        let mut minor = nalgebra::geometry::Rotation2::new(std::f32::consts::PI/2.) * major;
+        //println!("{}", minor);
+
+        let (lambda1, lambda2) = self.eigenvalues();
+        assert!(lambda1 >= lambda2);
+
+        major.scale_mut(2.*(lambda1 / num_pxs).sqrt());
+        minor.scale_mut(2.*(lambda2 / num_pxs).sqrt());
+        (major, minor)
+    }
+
+    pub fn eigenvalues(&self) -> (f32, f32) {
+        let exc = self.excentricity_matrix();
+        let eigen = nalgebra::linalg::SymmetricEigen::new(exc);
+        (eigen.eigenvalues[0], eigen.eigenvalues[1])
+    }
+
+    // Burger & Burge (11.30). The excentricity is a ratio of the largest to
+    // smallest eigenvalue of the affine matrix. It is the length of the major axis
+    // of the ellipse axis that best approximate the object. Therefore self.oriented_unit_vector()
+    // scaled by the scalar resulting from this function gives the resulting ellipse.
+    pub fn excentricity(&self) -> f32 {
+        let (lambda1, lambda2) = self.eigenvalues();
+        lambda1 / lambda2
+    }
+
+    // Burger & Burge (11.30)
+    pub fn excentricity_matrix(&self) -> Matrix2<f32> {
+        Matrix2::from_rows(&[
+            RowVector2::new(self.xx, self.xy),
+            RowVector2::new(self.xy, self.yy)
+        ])
+    }
+
+    pub fn centroid_point(&self, img_height : usize) -> Vector2<f32> {
+        let center = self.center();
+        Vector2::new(center.1, img_height as f32 - center.0)
+    }
+
+    pub fn center(&self) -> (f32, f32) {
+        self.center
     }
 
 }
@@ -251,7 +430,8 @@ impl NormalizedMoments {
 
     // norm moment: mu_pq * (1/area)^((p + q + 2)/2.) for p+q >= 2
     pub fn calculate(pts : &[(usize, usize)], centroid : Option<(f32, f32)>, area : f32) -> Self {
-        let CentralMoments { mut xx, mut xy, mut yy, mut xxx, mut yyy, mut xxy, mut yyx } = CentralMoments::calculate(pts, centroid);
+        // area = pts.len()
+        let CentralMoments { mut xx, mut xy, mut yy, mut xxx, mut yyy, mut xxy, mut yyx, .. } = CentralMoments::calculate(pts, centroid);
         let area2 = (1. / area).powf((0. + 2. + 2.) / 2.);
         let area3 = (1. / area).powf((1. + 2. + 2.) / 2.);
         xx /= area2;
@@ -1218,6 +1398,8 @@ impl Ellipse {
         Ellipse {
             center,
             large_axis : major.magnitude_squared(),
+
+            // TODO minor?
             small_axis : major.magnitude_squared(),
             angle
         }
@@ -1473,8 +1655,7 @@ pub mod cvellipse {
     }
 
     // TODO make WindowMut
-    pub fn draw_ellipse(window : Window<'_, u8>, el : &Ellipse, color : u8) {
-        let thickness = 1;
+    pub fn draw_ellipse(window : Window<'_, u8>, el : &Ellipse, thickness : i32, color : u8) {
         let line_type = 8;
         let shift = 0;
         let mut m : core::Mat = window.into();
@@ -1681,6 +1862,4 @@ impl CircleFit {
     }
 
 }
-
-
 

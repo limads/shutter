@@ -30,12 +30,14 @@ pub trait Raster {
 
     // This takes the implementor because for mutable windows,
     // the only way to safely give the slice is to let go of the
-    // current object.
+    // current object. This is unsafe because the returned slice
+    // will be aliased with the original content.
     unsafe fn original_slice(&mut self) -> Self::Slice;
 
     // Returns the subsection of the original slice that is
     // effectively used to represent this window. slice.as_ptr()
-    // will be the same as self.ptr().
+    // will be the same as self.ptr(). This is unsafe because the returned slice
+    // will be aliased with the original content.
     unsafe fn essential_slice(&mut self) -> Self::Slice;
 
 }

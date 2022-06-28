@@ -11,6 +11,31 @@ use std::mem;
 use num_traits::Float;
 use crate::gray::Foreground;
 
+/*Organize as:
+
+ops {
+
+    unary {
+
+        logic;
+
+        gray;
+
+        float;
+    }
+
+    binary {
+
+        logic;
+
+        gray;
+
+        float;
+
+    }
+
+}*/
+
 /*
 Perhaps the normalize_bound method could be part of a Bounded trait, for images
 with an upper pixel bound.
@@ -216,11 +241,265 @@ pub trait PointOp<N> {
     // Increase/decrease brightness (add positive or negative scalar). Perhaps call brighten_mut/brighten
     fn brightess_mut(&mut self, by : N);
 
-    // Apply contrast enhancement (multiply by scalar > 1.0). Perhaps call enhance_contrast
+    // Apply contrast enhancement (multiply by scalar > 1.0). Perhaps call stretch/stretch_mut
     fn contrast_mut(&mut self, by : N);
+
+    // Perhaps add stretch_brighten/stretch_brighten_mut that apply both brighten and stretch in a single pass.
+
+    // Perhaps add threshold ops to this trait, since threshold is a unary image op.
 
     fn truncate_mut(&mut self, above : bool, val : N);
 
+}
+
+/* Noise removal routines. They would fit into shutter::local::logic, as would morphology ops */
+// Davies 2.18
+pub fn remove_salt_noise(src : &Window<u8>, mut dst : WindowMut<u8>, win_side : usize) {
+    let value_is = 255;
+    let neighbors_are = 0;
+    conditional_set_when_neighbors_sum_equal(src, dst, win_side, value_is, neighbors_are, 0);
+}
+
+pub fn conditional_set_when_neighbors_sum_equal(
+    src : &Window<u8>,
+    mut dst : WindowMut<u8>,
+    win_side : usize,
+    cond_val : u8,
+    eq_val : u64,
+    true_val : u8
+) -> usize {
+    assert!(win_side % 2 == 0);
+    assert!(src.shape() == dst.shape());
+    let center = (win_side / 2, win_side / 2);
+    let mut n_changes = 0;
+    for (mut d, s) in dst.windows_mut((win_side, win_side)).zip(src.windows((win_side, win_side))) {
+        if s[center] == 255 {
+            let sum = crate::global::accum::<_, u64>(&s) - s[center] as u64;
+            if sum == 0 {
+                d[center] = 0;
+                n_changes += 1;
+            } else {
+                d[center] = s[center];
+            }
+        } else {
+            d[center] = s[center];
+        }
+    }
+    n_changes
+}
+
+// Davies 2.19
+pub fn remove_pepper_noise(src : &Window<u8>, mut dst : WindowMut<u8>, win_side : usize) {
+    let noncentral_max_sum = ((win_side.pow(2) - 1)*255) as u64;
+    let value_is = 0;
+    conditional_set_when_neighbors_sum_equal(src, dst, win_side, value_is, noncentral_max_sum, 255);
+}
+
+// Davies 2.20
+pub fn remove_salt_and_pepper_noise(src : &Window<u8>, mut dst : WindowMut<u8>, win_side : usize) {
+    assert!(win_side % 2 == 0);
+    assert!(src.shape() == dst.shape());
+    let center = (win_side / 2, win_side / 2);
+    let noncentral_max_sum = ((win_side.pow(2) - 1)*255) as u64;
+    for (mut d, s) in dst.windows_mut((win_side, win_side)).zip(src.windows((win_side, win_side))) {
+        let sum = crate::global::accum::<_, u64>(&s) - s[center] as u64;
+        match s[center] {
+            0 => {
+                if sum == noncentral_max_sum {
+                    d[center] = 255;
+                } else {
+                    d[center] = s[center];
+                }
+            },
+            255 => {
+                if sum == 0 {
+                    d[center] = 0;
+                } else {
+                    d[center] = s[center];
+                }
+            },
+            _ => { }
+        }
+        if s[center] == 255 {
+            if sum == 0 {
+
+            } else {
+                d[center] = s[center];
+            }
+        } else {
+            d[center] = s[center];
+        }
+    }
+}
+
+pub fn binary_edges(src : &Window<u8>, mut dst : WindowMut<u8>, win_side : usize) {
+    let noncentral_max_sum = ((win_side.pow(2) - 1)*255) as u64;
+    set_when_neighbors_sum_equal(src, dst, win_side, noncentral_max_sum, 0, Some(255));
+}
+
+pub fn set_when_neighbors_sum_less(
+    src : &Window<u8>,
+    mut dst : WindowMut<u8>,
+    win_side : usize,
+    less_val : u64,
+    true_val : u8,
+    false_val : Option<u8>
+) -> usize {
+    assert!(win_side % 2 == 0);
+    assert!(src.shape() == dst.shape());
+    let mut n_changes = 0;
+    let center = (win_side / 2, win_side / 2);
+    for (mut d, s) in dst.windows_mut((win_side, win_side)).zip(src.windows((win_side, win_side))) {
+        let sum = crate::global::accum::<_, u64>(&s) - s[center] as u64;
+        if sum < less_val {
+            d[center] = true_val;
+            n_changes += 1;
+        } else {
+            d[center] = false_val.unwrap_or(src[center]);
+        }
+    }
+    n_changes
+}
+
+pub fn set_when_neighbors_sum_greater(
+    src : &Window<u8>,
+    mut dst : WindowMut<u8>,
+    win_side : usize,
+    gt_val : u64,
+    true_val : u8,
+    false_val : Option<u8>
+) -> usize {
+    assert!(win_side % 2 == 0);
+    assert!(src.shape() == dst.shape());
+    let center = (win_side / 2, win_side / 2);
+    let mut n_changes = 0;
+    for (mut d, s) in dst.windows_mut((win_side, win_side)).zip(src.windows((win_side, win_side))) {
+        let sum = crate::global::accum::<_, u64>(&s) - s[center] as u64;
+        if sum > gt_val {
+            d[center] = true_val;
+            n_changes += 1;
+        } else {
+            d[center] = false_val.unwrap_or(s[center]);
+        }
+    }
+    n_changes
+}
+
+pub fn conditional_set_when_neighbors_sum_greater(
+    src : &Window<u8>,
+    mut dst : WindowMut<u8>,
+    win_side : usize,
+    cond_val : u8,
+    gt_val : u64,
+    true_val : u8,
+    false_val : Option<u8>
+) -> usize {
+    assert!(win_side % 2 == 0);
+    assert!(src.shape() == dst.shape());
+    let center = (win_side / 2, win_side / 2);
+    let mut n_changes = 0;
+    for (mut d, s) in dst.windows_mut((win_side, win_side)).zip(src.windows((win_side, win_side))) {
+        if s[center] == cond_val {
+            let sum = crate::global::accum::<_, u64>(&s) - s[center] as u64;
+            if sum > gt_val {
+                d[center] = true_val;
+                n_changes += 1;
+            } else {
+                d[center] = false_val.unwrap_or(s[center]);
+            }
+        } else {
+            d[center] = false_val.unwrap_or(s[center]);
+        }
+    }
+    n_changes
+}
+
+pub fn conditional_set_when_neighbors_sum_less(
+    src : &Window<u8>,
+    mut dst : WindowMut<u8>,
+    win_side : usize,
+    cond_val : u8,
+    less_val : u64,
+    true_val : u8,
+    false_val : Option<u8>
+) -> usize {
+    assert!(win_side % 2 == 0);
+    assert!(src.shape() == dst.shape());
+    let center = (win_side / 2, win_side / 2);
+    let mut n_changes = 0;
+    for (mut d, s) in dst.windows_mut((win_side, win_side)).zip(src.windows((win_side, win_side))) {
+        if s[center] == cond_val {
+            let sum = crate::global::accum::<_, u64>(&s) - s[center] as u64;
+            if sum < less_val {
+                d[center] = true_val;
+                n_changes += 1;
+            } else {
+                d[center] = false_val.unwrap_or(s[center]);
+            }
+        } else {
+            d[center] = false_val.unwrap_or(s[center]);
+        }
+    }
+    n_changes
+}
+
+/// Take a binary image and sets shape borders to 1, and non-borders to zero.
+/// After Davies (2005) alg. 2.17
+pub fn set_when_neighbors_sum_equal(
+    src : &Window<u8>,
+    mut dst : WindowMut<u8>,
+    win_side : usize,
+    eq_val : u64,
+    true_val : u8,
+    false_val : Option<u8>
+) -> usize {
+    assert!(win_side % 2 == 0);
+    assert!(src.shape() == dst.shape());
+    let center = (win_side / 2, win_side / 2);
+    let mut n_changes = 0;
+    for (mut d, s) in dst.windows_mut((win_side, win_side)).zip(src.windows((win_side, win_side))) {
+        let sum = crate::global::accum::<_, u64>(&s) - s[center] as u64;
+        if sum == eq_val {
+            d[center] = true_val;
+            n_changes += 1;
+        } else {
+            d[center] = false_val.unwrap_or(s[center]);
+        }
+    }
+    n_changes
+}
+
+/// Take a binary image and transform thick into thin lines and shrink dense shapes. Ignore borders.
+/// After Davies (2005) alg. 2.15.
+pub fn shrink(src : &Window<u8>, mut dst : WindowMut<u8>, win_side : usize) {
+    assert!(win_side % 2 == 0);
+    assert!(src.shape() == dst.shape());
+    let center = (win_side / 2, win_side / 2);
+    let noncentral_max_sum = ((win_side.pow(2) - 1)*255) as u64;
+    for (mut d, s) in dst.windows_mut((win_side, win_side)).zip(src.windows((win_side, win_side))) {
+        let sum = crate::global::accum::<_, u64>(&s) - s[center] as u64;
+        if sum < noncentral_max_sum {
+            d[center] = 0;
+        } else {
+            d[center] = 255;
+        }
+    }
+}
+
+/// Take a binary image and transform thin into thick lines and stretch dense shapes. Ignore borders.
+/// After Davies (2005) alg. 2.16.
+pub fn expand(src : &Window<u8>, mut dst : WindowMut<u8>, win_side : usize) {
+    assert!(win_side % 2 == 0);
+    assert!(src.shape() == dst.shape());
+    let center = (win_side / 2, win_side / 2);
+    for (mut d, s) in dst.windows_mut((win_side, win_side)).zip(src.windows((win_side, win_side))) {
+        let sum = crate::global::accum::<_, u64>(&s) - s[center] as u64;
+        if sum > 0 {
+            d[center] = 255;
+        } else {
+            d[center] = 0;
+        }
+    }
 }
 
 impl <N> PointOp<N> for WindowMut<'_, N>

@@ -111,6 +111,7 @@ impl<'a> BinaryOp<'a> for Window<'a, u8> {
 
 }
 
+// The not op is analogous to the gray::invert and float::invert ops.
 pub fn inplace_not(win : &mut WindowMut<u8>) {
 
     #[cfg(feature="ipp")]

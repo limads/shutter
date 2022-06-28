@@ -706,9 +706,12 @@ where
     }
 
     pub fn new_constant(height : usize, width : usize, value : N) -> Self {
-        let mut buf = Vec::with_capacity(height * width);
+        /*let mut buf = Vec::with_capacity(height * width);
         buf.extend((0..(height*width)).map(|_| value ));
-        Self{ buf : buf.into_boxed_slice(), width, offset : (0, 0), size : (height, width) }
+        Self{ buf : buf.into_boxed_slice(), width, offset : (0, 0), size : (height, width) }*/
+        let mut img = unsafe { Image::new_empty(height, width) };
+        img.full_window_mut().fill(value);
+        img
     }
     
     /// Initializes an image with allocated, but undefined content. Reading the contents
@@ -1213,6 +1216,12 @@ impl<'a, N> Window<'a, N>
 where
     N : Scalar + Copy
 {
+
+    pub fn linear_index(&self, ix : usize) -> &N {
+        assert!(ix < self.width() * self.height());
+        let (row, col) = (ix / self.width(), ix % self.width());
+        unsafe { &*self.as_ptr().offset((self.width * row + col) as isize) as &N }
+    }
 
     /// Iterate over windows of the given size. This iterator consumes the original window
     /// so that we can implement windows(.) for Image by using move semantics, without
@@ -2288,6 +2297,13 @@ impl<'a, N> WindowMut<'a, N>
 where
     N : Scalar + Copy
 {
+
+    pub fn linear_index_mut(&mut self, ix : usize) -> &mut N {
+        assert!(ix < self.width() * self.height());
+        let (row, col) = (ix / self.width(), ix % self.width());
+        unsafe { &mut *self.as_mut_ptr().offset((self.width * row + col) as isize) as &mut N }
+    }
+
     pub fn as_mut_ptr(&mut self) -> *mut N {
         // self.win.as_ptr()
         &mut self[(0usize,0usize)] as *mut _
@@ -2731,13 +2747,6 @@ where
             })
     }
 
-}
-
-impl<'a, N> WindowMut<'a, N>
-where
-    N : Scalar + Copy + Mul<Output=N> + MulAssign + PartialOrd + Default
-{
-
     pub fn fill(&mut self, color : N) {
 
         #[cfg(feature="ipp")]
@@ -2753,10 +2762,28 @@ where
                 assert!(ans == 0);
                 return;
             }
+
+            if self.pixel_is::<u8>() {
+                let ans = crate::foreign::ipp::ippi::ippiSet_8u_C1R(
+                    *mem::transmute::<_, &u8>(&color),
+                    mem::transmute(self.as_mut_ptr()),
+                    step,
+                    sz
+                );
+                assert!(ans == 0);
+                return;
+            }
         }
 
         unsafe { mem::transmute::<_, &'a mut WindowMut<'a, N>>(self).pixels_mut(1).for_each(|px| *px = color ); }
     }
+
+}
+
+impl<'a, N> WindowMut<'a, N>
+where
+    N : Scalar + Copy + Mul<Output=N> + MulAssign + PartialOrd + Default
+{
 
     pub fn paint(&'a mut self, min : N, max : N, color : N) {
         self.pixels_mut(1).for_each(|px| if *px >= min && *px <= max { *px = color; } );

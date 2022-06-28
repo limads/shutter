@@ -9,6 +9,8 @@ use std::ops::Add;
 use nalgebra::Scalar;
 use num_traits::AsPrimitive;
 
+// TODO rename this module to fold
+
 // a < b ? 255 else 0
 pub fn is_pairwise_min(a : &Window<'_, u8>, b : &Window<'_, u8>, mut dst : WindowMut<'_, u8>) {
 
@@ -73,6 +75,14 @@ where
     let sum_f = win.shrink_to_subsample(n_pxs)?.pixels(n_pxs).map(|px| f32::from(*px) ).sum::<f32>();
     let avg = S::from(sum_f / (win.area() as f32));
     Some(avg)
+}
+
+pub fn accum<N, S>(win : &Window<'_, N>) -> S
+where
+    N : Scalar + Any + Clone + Copy + Debug + Zero,
+    S : Zero + From<N> + Add<Output=S>
+{
+    win.pixels(1).fold(S::zero(), |s, px| s + S::from(*px) )
 }
 
 pub fn sum<N, S>(win : &Window<'_, N>, n_pxs : usize) -> S

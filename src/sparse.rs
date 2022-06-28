@@ -207,7 +207,7 @@ impl RunLengthEncoder {
 
 }
 
-pub fn draw_distinct(img : &mut WindowMut<u8>, graph : &UnGraph<RunLength, (usize, usize)>, split : &SplitGraph) {
+pub fn draw_distinct(img : &mut WindowMut<u8>, graph : &UnGraph<RunLength, Interval<usize>>, split : &SplitGraph) {
     for range in &split.ranges  {
         let r : f64 = rand::random();
         let color : u8 = 64 + ((256. - 64.)*r) as u8;

@@ -7,6 +7,109 @@ use nalgebra::Scalar;
 use std::iter::FromIterator;
 pub use ripple::conv::*;
 use std::fmt::Debug;
+use crate::raster::Raster;
+
+/*
+The filling routines assumes 3x3 neighborhoods at object edges must have a given
+number of positive entries for the overall shape to be convex. The center pixel
+of the local 3x3 window is a potential concavity, that is filled whenever the local sum
+is too big.
+*/
+// After Davies (2005) Alg. 6.9. Makes shapes in a binary imageg convex.
+// (Ignore corners, but faster)
+pub fn fill_without_corners(src : &Window<u8>, mut dst : WindowMut<u8>) {
+    let win_sz = 3;
+    let gt_val = 3;
+    let cond_val = 0;
+    let mut n_changed = usize::MAX;
+    dst.copy_from(src);
+    while n_changed > 0 {
+        let mut dst = unsafe { WindowMut::sub_from_slice(dst.original_slice(), dst.original_width(), dst.offset(), dst.shape()).unwrap() };
+        n_changed = crate::point::conditional_set_when_neighbors_sum_greater(
+            src,
+            dst,
+            win_sz,
+            cond_val,
+            gt_val,
+            255,
+            None
+        );
+    }
+}
+
+fn bool_to_u64(b : bool) -> u64 {
+    if b { 255 } else { 0 }
+}
+
+// After Davies (2005) Alg. 6.10. Makes shapes in a binary imageg convex.
+// (Account for corners, but more costly). The notation of the author is:
+// A0 is the middle element; A1-A8 are the neighbors element in a clockwise
+// fashion around A0 starting from top-left.
+pub fn fill_with_corners(src : &Window<u8>, mut dst : WindowMut<u8>) {
+    assert!(src.shape() == dst.shape());
+    let center = (1usize,1usize);
+    let mut n_changed = usize::MAX;
+    dst.copy_from(src);
+    while n_changed > 0 {
+        n_changed = 0;
+        let mut dst = unsafe { WindowMut::sub_from_slice(dst.original_slice(), dst.original_width(), dst.offset(), dst.shape()).unwrap() };
+        for (mut d, s) in dst.windows_mut((3, 3)).zip(src.windows((3, 3))) {
+            if s[center] == 0 {
+                let q1 = bool_to_u64(*s.linear_index(0) == 255 && *s.linear_index(1) != 255 && *s.linear_index(2) == 255);
+                let q2 = bool_to_u64(*s.linear_index(2) == 255 && *s.linear_index(5) != 255 && *s.linear_index(8) == 255);
+                let q3 = bool_to_u64(*s.linear_index(8) == 255 && *s.linear_index(7) != 255 && *s.linear_index(6) == 255);
+                let q4 = bool_to_u64(*s.linear_index(6) == 255 && *s.linear_index(3) != 255 && *s.linear_index(0) == 255);
+                let sum = crate::global::accum::<_, u64>(&s) - s[center] as u64 + q1 + q2 + q3 + q4;
+                if sum > 3 {
+                    d[center] = 255;
+                    n_changed += 1;
+                } else {
+                    // Already solved by a first copy from at the start.
+                    // d[center] = s[center];
+                }
+            } else {
+                // Already solved by a first copy from at the start
+                // d[center] = s[center];
+            }
+        }
+    }
+}
+
+const MEDIAN_POS_3 : u64 = 5;
+
+pub fn median_filter3(src : &Window<u8>, mut dst : WindowMut<u8>) {
+    let mut hist : [u8; 256] = [0; 256];
+    for (d, s) in dst.windows_mut((3,3)).zip(src.windows((3,3))) {
+        local_median_filtering(s, d, &mut hist);
+    }
+}
+
+// After Davies (2005) Fig. 3.4. This is a single step of the median filter.
+fn local_median_filtering(win : Window<u8>, mut dst : WindowMut<u8>, hist : &mut [u8; 256])  {
+
+    // Clear histogram
+    hist.iter_mut().for_each(|h| *h = 0 );
+
+    /* Iteration assumes that in a 3x3 window, the linear indices 0..(N^2-1)
+    excluding the central (N^2-1)/2 index index the neighborhood, while
+    the central (N^2-1)/2 index the window center. */
+
+    // Iter neighbors
+    for m in [0, 1, 2, 3, 5, 6, 7, 8] {
+
+        // Update histogram
+        hist[*win.linear_index(m) as usize] += 1;
+
+        // Walk from start towards end of the histogram until the median is found.
+        let mut median : u8 = 0;
+        let mut sum : u64  = 0;
+        while sum < MEDIAN_POS_3 {
+            sum += hist[median as usize] as u64;
+            median += 1;
+        }
+        *(dst.linear_index_mut(5)) = median.saturating_sub(1);
+    }
+}
 
 pub fn local_sum(src : &Window<'_, u8>, dst : &mut WindowMut<'_, i32>) {
 

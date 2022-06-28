@@ -63,6 +63,7 @@ pub fn zero_sparse_regions(dst : &mut Image<u8>, sum : &mut WindowMut<'_, i32>, 
 
 }
 
+/// Returns coordinates of dense set of points that are nonzero.
 pub fn binary_coordinates(win : &Window<'_, u8>, coords : Option<Vec<(usize, usize)>>) -> Vec<(usize, usize)> {
     let mut coords = coords.unwrap_or(Vec::new());
     coords.clear();

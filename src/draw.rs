@@ -740,3 +740,18 @@ const FONT_8_BASIC : [[u8; 8]; 128] = [
     [ 0x6E, 0x3B, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],   // U+007E (~)
     [ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]    // U+007F
 ];
+
+/// Draw an axis-aligned ellipse (After Davies (2005) Fig. 6.6). The generated
+/// points can go through a pure rotation matrix to generate the generic affine-projection
+/// ellipse.
+pub fn ellipse_draw(win : &mut WindowMut<u8>, a : f32, b : f32, color : u8) {
+    for i in 0..360 {
+        let theta = i as f32 * 2. * (std::f32::consts::PI / 360.);
+        let x = a * theta.sin();
+        let y = b * theta.cos();
+        let h = win.height();
+        win[((h as f32 - y) as usize, x as usize)] = color;
+    }
+}
+
+
