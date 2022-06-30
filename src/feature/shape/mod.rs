@@ -371,6 +371,12 @@ impl CentralMoments {
         (major, minor)
     }
 
+    pub fn ellipse(&self, img_height : usize) -> crate::shape::Ellipse {
+        let (major, minor) = self.ellipse_vectors();
+        let center = self.centroid_point(img_height);
+        crate::shape::Ellipse { center, major, minor }
+    }
+
     pub fn eigenvalues(&self) -> (f32, f32) {
         let exc = self.excentricity_matrix();
         let eigen = nalgebra::linalg::SymmetricEigen::new(exc);

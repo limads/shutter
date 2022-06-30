@@ -95,7 +95,7 @@ pub mod integral;
 
 // pub mod edge;
 
-// pub mod shape;
+pub mod shape;
 
 // pub mod threshold;
 

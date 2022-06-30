@@ -6,6 +6,7 @@ use crate::image::*;
 use crate::raster::*;
 use serde::{Serialize, Deserialize};
 use crate::raster::*;
+use crate::shape::*;
 
 pub trait Draw {
 
@@ -160,6 +161,13 @@ impl<'a> Draw for WindowMut<'a, u8> {
                 }
 
                 println!("Warning: Arrow drawing require opencv feature");
+            },
+            Mark::EllipseArrows(coords) => {
+                self.draw(Mark::Arrow(coords.center, coords.major, 1, 127));
+                self.draw(Mark::Arrow(coords.center, coords.minor, 1, 127));
+            },
+            Mark::Ellipse(coords) => {
+
             }
         }
     }
@@ -207,7 +215,11 @@ pub enum Mark {
 
     Text((usize, usize), String, u8),
 
-    Arrow((usize, usize), (usize, usize), usize, u8)
+    Arrow((usize, usize), (usize, usize), usize, u8),
+
+    EllipseArrows(EllipseCoords),
+
+    Ellipse(EllipseCoords)
 
 }
 

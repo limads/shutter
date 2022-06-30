@@ -17,6 +17,7 @@ crate-type = ["rlib", "cdylib"]
 
 [dependencies]
 nalgebra = { version = "0.31.0", features = ["serde-serialize", "sparse"] }
+nalgebra-lapack = { version = "0.22.0" }
 simba="0.7.1"
 num-traits = "0.2.14"
 serde = { version = "1.0.111", features=["derive"] }
