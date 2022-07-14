@@ -109,6 +109,34 @@ where
     unimplemented!()
 }
 
+pub struct ShiftDiff {
+    pub dh : Image<u8>,
+    pub dw : Image<u8>
+}
+
+impl ShiftDiff {
+
+    pub fn calculate(img : &Window<u8>, step : usize) -> Self {
+        let red_shape_w = (img.height(), img.width()-step);
+        let red_shape_h = (img.height()-step, img.width());
+        let red_shape_both = (img.height()-step, img.width()-step);
+        let mut img_cw = img.sub_window((0, step), red_shape_w).unwrap().clone_owned();
+        let mut img_ch = img.sub_window((step, 0), red_shape_h).unwrap().clone_owned();
+
+        let mut dh = img.clone_owned();
+        let mut dw = img.clone_owned();
+
+        dw.window_mut((0, 0), red_shape_w).unwrap().abs_diff_assign(img_cw.full_window());
+        dh.window_mut((0, 0), red_shape_h).unwrap().abs_diff_assign(img_ch.full_window());
+        dh.window_mut((img.height() - step, 0), (step, img.width())).unwrap().fill(0);
+        dw.window_mut((0, img.width() - step), (img.height(), step)).unwrap().fill(0);
+
+        // dw.full_window_mut().add_assign(dh.full_window());
+        // let dwh = dw.window((0, 0), red_shape_both).unwrap().clone_owned();
+        Self { dh, dw }
+    }
+}
+
 /*/// Stretch the image profile such that the gray levels make the best use of the dynamic range.
 /// (Myler & Weeks, 1993). gray_max and gray_min are min and max intensities at the current image.
 /// Stretching makes better use of the gray value space.
@@ -239,7 +267,7 @@ pub trait PointOp<N> {
     fn abs_diff_mut(&mut self, by : N);
 
     // Increase/decrease brightness (add positive or negative scalar). Perhaps call brighten_mut/brighten
-    fn brightess_mut(&mut self, by : N);
+    fn brightnen_mut(&mut self, by : N);
 
     // Apply contrast enhancement (multiply by scalar > 1.0). Perhaps call stretch/stretch_mut
     fn contrast_mut(&mut self, by : N);
@@ -527,6 +555,16 @@ where
                 assert!(ans == 0);
                 return;
             }
+
+            if self.pixel_is::<i16>() {
+                let ans = crate::foreign::ipp::ippi::ippiAbs_16s_C1IR(
+                    mem::transmute(self.as_mut_ptr()),
+                    byte_stride,
+                    roi
+                );
+                assert!(ans == 0);
+                return;
+            }
         }
 
         unimplemented!()
@@ -558,11 +596,11 @@ where
         unimplemented!()
     }
 
-    fn brightess_mut(&mut self, by : N) {
+    fn brightnen_mut(&mut self, by : N) {
 
         #[cfg(feature="ipp")]
         unsafe {
-            let scale_factor = 1;
+            let scale_factor = 0;
             let (byte_stride, roi) = crate::image::ipputils::step_and_size_for_window_mut(&self);
 
             if self.pixel_is::<u8>() {
@@ -589,7 +627,8 @@ where
             }
         }
 
-        // self.pixels_mut(1).for_each(|p| *p += by );
+        // unsafe { mem::transmute::<_, &'static mut WindowMut<'static, N>>(self).pixels_mut(1).for_each(|p| *p = p.saturating_add(&by) ); }
+        // unsafe { mem::transmute::<_, &'static mut WindowMut<'static, N>>(self).pixels_mut(1).for_each(|p| *p += by );
         unimplemented!()
     }
 

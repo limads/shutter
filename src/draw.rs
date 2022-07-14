@@ -1,5 +1,5 @@
 use nalgebra::*;
-use std::iter::Iterator;
+use std::iter::{Iterator, IntoIterator};
 use std::convert::{TryFrom, AsMut};
 use std::ops::Range;
 use crate::image::*;
@@ -8,9 +8,35 @@ use serde::{Serialize, Deserialize};
 use crate::raster::*;
 use crate::shape::*;
 
+pub const DARK : u8 = 0;
+
+pub const DARK_GRAY : u8 = 65;
+
+pub const GRAY : u8 = 127;
+
+pub const LIGHT_GRAY : u8 = 191;
+
+pub const WHITE : u8 = 255;
+
 pub trait Draw {
 
     fn draw(&mut self, mark : Mark);
+
+    fn draw_many(&mut self, marks : impl IntoIterator<Item=Mark>) {
+        for mark in marks.into_iter() {
+            self.draw(mark);
+        }
+    }
+
+    // Color is decided adaptively based on the average intensity of the target pixels
+    // (255 - avg_px_col)
+    fn draw_contrasting(&mut self, mark : Mark) {
+
+    }
+
+    fn draw_many_contrasting(&mut self, marks : impl IntoIterator<Item=Mark>) {
+
+    }
 
 }
 
@@ -103,8 +129,8 @@ impl<'a> Draw for WindowMut<'a, u8> {
                 panic!("Circle draw require 'opencv' feature");
             },
             Mark::Dot(pos, radius, color) => {
-                for i in 0..self.height() {
-                    for j in 0..self.width() {
+                for i in pos.0.saturating_sub(radius)..(pos.0 + radius).min(self.width()) {
+                    for j in pos.1.saturating_sub(radius)..(pos.1 + radius).min(self.height()) {
                         if crate::feature::shape::point_euclidian((i, j), pos) <= radius as f32 {
                             self[(i, j)] = color;
                         }
@@ -166,8 +192,15 @@ impl<'a> Draw for WindowMut<'a, u8> {
                 self.draw(Mark::Arrow(coords.center, coords.major, 1, 127));
                 self.draw(Mark::Arrow(coords.center, coords.minor, 1, 127));
             },
-            Mark::Ellipse(coords) => {
-
+            Mark::Ellipse(el, n, color) => {
+                let pts = crate::shape::generate_ellipse_points(&el, n);
+                for n in 0..(pts.len()-1) {
+                    let a = crate::shape::coord::point_to_coord(&pts[n], self.shape());
+                    let b = crate::shape::coord::point_to_coord(&pts[n+1], self.shape());
+                    if let (Some(coord_a), Some(coord_b)) = (a, b) {
+                        self.draw(Mark::Line(coord_a, coord_b, color));
+                    }
+                }
             }
         }
     }
@@ -219,7 +252,15 @@ pub enum Mark {
 
     EllipseArrows(EllipseCoords),
 
-    Ellipse(EllipseCoords)
+    Ellipse(OrientedEllipse, usize, u8)
+
+}
+
+impl From<(usize, usize, usize, usize)> for Mark {
+
+    fn from(r : (usize, usize, usize, usize)) -> Self {
+        Mark::Rect((r.0, r.1), (r.2, r.3), 255)
+    }
 
 }
 

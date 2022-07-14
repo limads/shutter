@@ -2,6 +2,17 @@ use crate::image::*;
 use std::default::Default;
 use crate::prelude::Raster;
 use std::mem;
+use bayes::calc::*;
+use std::collections::BTreeMap;
+
+/*
+The binarization process can be throuht of as two steps:
+(1) Partition - Identify one or more optimal gray value(s) in [0,255] that generates a thresholded image with the content of interest;
+(2) Threshold - Use the partition(s) value at (1) to threshold the image according to a foreground rule.
+
+Some partitioning algorithms assume a bimodal histogram for foreground rules (above, below);
+others assume a unimodal histogram for foreground rules (inside, outside).
+*/
 
 pub fn copy_if_above_threshold(dst_orig : &Window<'_, u8>, orig : (usize, usize), win_dim : (usize, usize), threshold : i32, dst : &mut Image<u8>) {
     if crate::global::sum::<_, f32>(&dst_orig.sub_window(orig, win_dim).unwrap(), 1) as i32 > threshold {
@@ -61,20 +72,6 @@ pub fn zero_sparse_regions(dst : &mut Image<u8>, sum : &mut WindowMut<'_, i32>, 
         }
     }
 
-}
-
-/// Returns coordinates of dense set of points that are nonzero.
-pub fn binary_coordinates(win : &Window<'_, u8>, coords : Option<Vec<(usize, usize)>>) -> Vec<(usize, usize)> {
-    let mut coords = coords.unwrap_or(Vec::new());
-    coords.clear();
-    for i in 0..win.height() {
-        for j in 0..win.width() {
-            if win[(i, j)] != 0 {
-                coords.push((i, j));
-            }
-        }
-    }
-    coords
 }
 
 pub fn count_range(win : &Window<'_, u8>, low : u8, high : u8) -> usize {
@@ -194,6 +191,8 @@ pub fn distance_transform(src : &Window<'_, u8>, dst : &mut WindowMut<'_, u8>, m
 #[derive(Debug, Clone, Copy)]
 pub enum Foreground {
 
+    Exactly(u8),
+
     Below(u8),
 
     Above(u8),
@@ -204,97 +203,254 @@ pub enum Foreground {
 
 }
 
-pub trait Threshold {
+pub trait Threshold
+where
+    Self : Raster
+{
 
-    fn threshold_to<'a>(&self, src : &'a Window<'a, u8>, out : &mut WindowMut<'a, u8>);
+    // fn adaptive_threshold_to(&self, fg : Foreground, partition : &mut dyn Partition, out : &mut WindowMut<'a, u8>);
 
-    fn threshold(&self, src : &Window<'_, u8>) -> Image<u8> {
-        let mut img = Image::<u8>::new_constant(src.height(), src.width(), 0);
-        self.threshold_to(src, &mut img.full_window_mut());
+    // fn adaptive_threshold(&self, fg : Foreground, partition : &mut dyn Partition) -> Image<u8>;
+
+    // Binarize an image, setting foreground pixels to u8::MAX and background pixels to u8::MIN
+    fn threshold_to(&self, fg : Foreground, out : &mut WindowMut<u8>);
+
+    // Allocating version of threshold_to
+    fn threshold(&self, fg : Foreground) -> Image<u8> {
+        let mut img = Image::<u8>::new_constant(self.height(), self.width(), 0);
+        self.threshold_to(fg, &mut img.full_window_mut());
+        img
+    }
+}
+
+pub trait Truncate
+where
+    Self : Raster
+{
+
+    // fn adaptive_truncate_to
+    // fn adaptive_truncate
+
+    // Truncate an image, setting foreground pixels to the desired value, and copying
+    // unmatched pixels as they are.
+    fn truncate_to(&self, fg : Foreground, out : &mut WindowMut<u8>, fg_val : u8);
+
+    // Allocating version of truncate_to
+    fn truncate(&self, fg : Foreground, fg_val : u8) -> Image<u8> {
+        let mut img = Image::<u8>::new_constant(self.height(), self.width(), 0);
+        self.truncate_to(fg, &mut img.full_window_mut(), fg_val);
         img
     }
 
 }
 
-pub struct FixedThreshold(Foreground);
+impl<'a> Threshold for Window<'a, u8> {
 
-impl FixedThreshold {
-
-    pub fn new(fg : Foreground) -> Self {
-        Self(fg)
+    fn threshold_to(&self, fg : Foreground, out : &mut WindowMut<u8>) {
+        #[cfg(feature="ipp")]
+        unsafe { return ippi_full_threshold(fg, self, out); }
+        baseline_threshold(self, fg, out);
     }
 
 }
 
-impl Threshold for FixedThreshold {
+fn baseline_threshold(src : &Window<u8>, fg : Foreground, out : &mut WindowMut<u8>) {
+    match fg {
+        Foreground::Exactly(v) => {
+            out.pixels_mut(1).zip(src.pixels(1))
+                .for_each(|(px_out, px_in)| if *px_in == v { *px_out = 255 } else { *px_out = 0 });
+        },
+        Foreground::Below(v) => {
+            out.pixels_mut(1).zip(src.pixels(1))
+                .for_each(|(px_out, px_in)| if *px_in <= v { *px_out = 255 } else { *px_out = 0 });
+        },
+        Foreground::Above(v) => {
+            out.pixels_mut(1).zip(src.pixels(1))
+                .for_each(|(px_out, px_in)| if *px_in >= v { *px_out = 255 } else { *px_out = 0 });
+        },
+        Foreground::Inside(a, b) => {
+            out.pixels_mut(1).zip(src.pixels(1))
+                .for_each(|(px_out, px_in)| if *px_in >= a && *px_in <= b { *px_out = 255 } else { *px_out = 0 });
+        },
+        Foreground::Outside(a, b) => {
+            out.pixels_mut(1).zip(src.pixels(1))
+                .for_each(|(px_out, px_in)| if *px_in < a && *px_in > b { *px_out = 255 } else { *px_out = 0 });
+        }
+    }
+}
+
+fn baseline_truncate(src : &Window<u8>, fg : Foreground, out : &mut WindowMut<u8>, fg_val : u8) {
+    match fg {
+        Foreground::Exactly(v) => {
+            out.pixels_mut(1).zip(src.pixels(1))
+                .for_each(|(px_out, px_in)| if *px_in == v { *px_out = 255 } else { *px_out = *px_in });
+        },
+        Foreground::Below(v) => {
+            out.pixels_mut(1).zip(src.pixels(1))
+                .for_each(|(px_out, px_in)| if *px_in <= v { *px_out = 255 } else { *px_out = *px_in });
+        },
+        Foreground::Above(v) => {
+            out.pixels_mut(1).zip(src.pixels(1))
+                .for_each(|(px_out, px_in)| if *px_in >= v { *px_out = 255 } else { *px_out = *px_in });
+        },
+        Foreground::Inside(a, b) => {
+            out.pixels_mut(1).zip(src.pixels(1))
+                .for_each(|(px_out, px_in)| if *px_in >= a && *px_in <= b { *px_out = 255 } else { *px_out = *px_in });
+        },
+        Foreground::Outside(a, b) => {
+            out.pixels_mut(1).zip(src.pixels(1))
+                .for_each(|(px_out, px_in)| if *px_in < a && *px_in > b { *px_out = 255 } else { *px_out = *px_in });
+        }
+    }
+}
+
+impl<'a> Truncate for Window<'a, u8> {
+
+    fn truncate_to(&self, fg : Foreground, out : &mut WindowMut<u8>, fg_val : u8) {
+        #[cfg(feature="ipp")]
+        unsafe { return ippi_truncate(fg, self, out, fg_val) };
+        baseline_truncate(self, fg, out, fg_val);
+    }
+
+}
+
+impl Threshold for Image<u8> {
+
+    fn threshold_to(&self, fg : Foreground, out : &mut WindowMut<u8>) {
+        self.full_window().threshold_to(fg, out);
+    }
+
+}
+
+impl Truncate for Image<u8> {
+
+    fn truncate_to<'a>(&self, fg : Foreground, out : &mut WindowMut<'a, u8>, fg_val : u8) {
+        self.full_window().truncate_to(fg, out, fg_val);
+    }
+
+}
+
+#[cfg(feature="ipp")]
+unsafe fn ippi_truncate(
+    fg : Foreground,
+    src : &Window<u8>,
+    out : &mut WindowMut<u8>,
+    fg_val : u8
+) {
+    let (src_byte_stride, roi) = crate::image::ipputils::step_and_size_for_window(src);
+    let dst_byte_stride = crate::image::ipputils::byte_stride_for_window_mut(&out);
+    match fg {
+        Foreground::Exactly(v) => {
+            baseline_truncate(src, fg, out, fg_val);
+        },
+        Foreground::Below(v) => {
+            let ans = crate::foreign::ipp::ippi::ippiThreshold_LTVal_8u_C1R(
+                src.as_ptr(),
+                src_byte_stride,
+                out.as_mut_ptr(),
+                dst_byte_stride,
+                roi,
+                v.saturating_add(1),
+                fg_val,
+            );
+            assert!(ans == 0);
+        },
+        Foreground::Above(v) => {
+            let ans = crate::foreign::ipp::ippi::ippiThreshold_GTVal_8u_C1R(
+                src.as_ptr(),
+                src_byte_stride,
+                out.as_mut_ptr(),
+                dst_byte_stride,
+                roi,
+                v.saturating_sub(1),
+                fg_val
+            );
+            assert!(ans == 0);
+        },
+        Foreground::Inside(a, b) => {
+            baseline_truncate(src, fg, out, fg_val);
+        },
+        Foreground::Outside(a, b) => {
+            let ans = crate::foreign::ipp::ippi::ippiThreshold_LTValGTVal_8u_C1R(
+                src.as_ptr(),
+                src_byte_stride,
+                out.as_mut_ptr(),
+                dst_byte_stride,
+                roi,
+                a,
+                fg_val,
+                b,
+                fg_val,
+            );
+            assert!(ans == 0);
+        }
+    }
+}
+
+#[cfg(feature="ipp")]
+unsafe fn ippi_full_threshold(
+    fg : Foreground,
+    src : &Window<u8>,
+    out : &mut WindowMut<u8>
+) {
+    let (src_byte_stride, roi) = crate::image::ipputils::step_and_size_for_window(src);
+    let dst_byte_stride = crate::image::ipputils::byte_stride_for_window_mut(&out);
+    match fg {
+        Foreground::Exactly(v) => {
+            baseline_threshold(src, fg, out)
+        },
+        Foreground::Below(v) => {
+            let ans = crate::foreign::ipp::ippi::ippiCompareC_8u_C1R(
+                src.as_ptr(),
+                src_byte_stride,
+                v,
+                out.as_mut_ptr(),
+                dst_byte_stride,
+                roi,
+                crate::foreign::ipp::ippi::IppCmpOp_ippCmpLessEq
+            );
+            assert!(ans == 0);
+        },
+        Foreground::Above(v) => {
+            let ans = crate::foreign::ipp::ippi::ippiCompareC_8u_C1R(
+                src.as_ptr(),
+                src_byte_stride,
+                v.saturating_sub(1),
+                out.as_mut_ptr(),
+                dst_byte_stride,
+                roi,
+                crate::foreign::ipp::ippi::IppCmpOp_ippCmpGreaterEq
+            );
+            assert!(ans == 0);
+        },
+        Foreground::Inside(a, b) => {
+            ippi_full_threshold(Foreground::Outside(a, b), src, out);
+            crate::binary::inplace_not(out);
+        },
+        Foreground::Outside(a, b) => {
+            ippi_full_threshold(Foreground::Below(a.saturating_sub(1)), src, out);
+            ippi_full_threshold(Foreground::Above(b.saturating_add(1)), src, out);
+        }
+    }
+}
+
+/*impl Threshold for FixedThreshold {
 
     fn threshold_to<'a>(&self, src : &Window<'a, u8>, out : &mut WindowMut<'a, u8>) {
 
         assert!(src.shape() == out.shape());
 
-        // IPP functions work by filling matched values and leaving unmatched values
-        // alone - To build a binary image, we must make sure it is pre-filled with 0.
+        // IPP functions work by filling matched values and copying unmatched values.
+        // This is simply a partial_threshold op. To do a full threshold, we must
+        // make a second pass and take the output image and fill the non-matched pixels to
+        // the given value. But even this does not work, because the original pixel
+        // value might be the desired label output (255) in which case there is no way to
+        // disambiguate a label 255 from an original image value 255 when the output is copied.
         out.fill(0);
 
-        #[cfg(feature="ipp")]
-        unsafe {
-
-            let (src_byte_stride, roi) = crate::image::ipputils::step_and_size_for_window(src);
-            let dst_byte_stride = crate::image::ipputils::byte_stride_for_window_mut(&out);
-
-            match self.0 {
-                Foreground::Below(v) => {
-                    let ans = crate::foreign::ipp::ippi::ippiThreshold_LTVal_8u_C1R(
-                        src.as_ptr(),
-                        src_byte_stride,
-                        out.as_mut_ptr(),
-                        dst_byte_stride,
-                        roi,
-                        v.saturating_add(1),
-                        255,
-                    );
-                    assert!(ans == 0);
-                },
-                Foreground::Above(v) => {
-                    let ans = crate::foreign::ipp::ippi::ippiThreshold_GTVal_8u_C1R(
-                        src.as_ptr(),
-                        src_byte_stride,
-                        out.as_mut_ptr(),
-                        dst_byte_stride,
-                        roi,
-                        v.saturating_sub(1),
-                        255
-                    );
-                    assert!(ans == 0);
-                },
-                Foreground::Inside(a, b) => {
-                    // IPP does not offer less-than-or-equal-to here.  We add and remove one from
-                    // the user-supplied values to have the same effect (which will give wrong
-                    // results for v == 0 and v == 255, since the sum/subtraction is saturating).
-                    let less_than = b.saturating_add(1);
-                    let greater_than = a.saturating_sub(1);
-
-                    let out_c = out as *mut WindowMut<'a, u8>;
-                    FixedThreshold::new(Foreground::Outside(less_than, greater_than)).threshold_to(src, mem::transmute(out_c));
-                    crate::binary::inplace_not(out);
-                },
-                Foreground::Outside(a, b) => {
-                    let ans = crate::foreign::ipp::ippi::ippiThreshold_LTValGTVal_8u_C1R(
-                        src.as_ptr(),
-                        src_byte_stride,
-                        out.as_mut_ptr(),
-                        dst_byte_stride,
-                        roi,
-                        a,
-                        255,
-                        b,
-                        255,
-                    );
-                    assert!(ans == 0);
-                }
-            }
-
-        }
+        /* An alternative would be to fill a flat image with the desired threshold value,
+        and use ippicompare, which compares two images and output 255 when the pixel value is true
+        and 0 when the pixel value is false. */
 
         /*#[cfg(feature="opencv")]
         {
@@ -326,9 +482,10 @@ impl Threshold for FixedThreshold {
                     .for_each(|(px_out, px_in)| if *px_in >= a && *px_in <= b { *px_out = 255 } else { *px_out = 0 });
             }
         }*/
+        unimplemented!()
     }
 
-}
+}*/
 
 // pub struct GrayHistogram { // }
 
@@ -386,7 +543,7 @@ pub fn opencv_adaptive_threshold(img : &Window<'_, u8>, out : WindowMut<'_, u8>,
 
 }
 
-/// Ouptuts a 0-bit (0 OR 255) binary umage
+/// Ouptuts a 0-bit (0 OR 255) binary image
 #[cfg(feature="opencv")]
 pub fn opencv_threshold_slice(src : &[u8], ncol : usize, dst : &mut [u8], thresh : f64, max_val : f64) {
 
@@ -506,6 +663,21 @@ pub fn partial_mean(min : usize, max : usize, probs : &[f32]) -> f32 {
     (min..max).map(|ix| ix as f32 * probs[ix] ).sum::<f32>()
 }
 
+pub fn partial_quantile(min : usize, max : usize, probs : &[f32], q : f32) -> f32 {
+    assert!(q >= 0. && q <= 1.);
+    let mut s = 0.0;
+    let mut s_probs = 0.0;
+    for ix in min..max {
+        if s_probs >= q {
+            return s;
+        }
+        s += ix as f32 * probs[ix];
+        s_probs += probs[ix];
+    }
+    s
+}
+
+// Parker, 2011, p. 141
 impl Otsu {
 
     pub fn new() -> Self {
@@ -565,11 +737,6 @@ pub struct BalancedHist {
 
 }
 
-fn relative_to_max(bins : &[u32]) -> Vec<f32> {
-    let max = bins.iter().copied().max().unwrap() as f32;
-    bins.iter().map(move |count| *count as f32 / max ).collect()
-}
-
 impl BalancedHist {
 
     pub fn new(min_count : u32) -> Self {
@@ -578,7 +745,7 @@ impl BalancedHist {
 
     pub fn estimate(&self, bins : &[u32], step : u32) -> u32 {
         // let bins = profile.bins();
-        let probabilities = relative_to_max(bins);
+        let probabilities = bayes::calc::counts_to_probs(bins);
 
         // Those delimit the left region if the histogram follows a bimodal distribution.
         let mut left_limit : u32 = 0;
@@ -592,7 +759,6 @@ impl BalancedHist {
             right_limit -= step;
         }
 
-        // Take histogram expected value as first center guess.
         let mut center = partial_mean(0, 256, &probabilities[..]) as usize;
 
         // TODO propagate step to increment/decrement
@@ -601,6 +767,8 @@ impl BalancedHist {
         let mut weight_a = bins[..center].iter().copied().sum::<u32>() as f32;
         let mut weight_b = bins[center..].iter().copied().sum::<u32>() as f32;
 
+        // If left_limit >= right limit, stop. We want to find the point [left, right]
+        // when they join each other.
         while left_limit < right_limit {
 
             if weight_a > weight_b {
@@ -613,7 +781,6 @@ impl BalancedHist {
                 right_limit -= step;
             }
 
-            // Calculate new center as an average of left and right limits
             let new_center = ((left_limit as f32 + right_limit as f32) / 2.) as usize;
 
             if new_center < center {
@@ -635,6 +802,227 @@ impl BalancedHist {
             center = new_center;
         }
         center as u32
+    }
+
+}
+
+/// Pick the threshold that guarantees a certain proportion of pixels are below the threshold.
+/// AKA p-tile methohd. This is a good method when you have an idea of the relative area
+/// the foreground object should occupy, since the relative are in the image equals the
+/// quantile over the histogram. This is a very fast method, since it does not even require
+/// a full pass over the histogram.
+pub struct QuantileHist {
+    q : f32
+}
+
+impl QuantileHist {
+
+    pub fn new(q : f32) -> Self {
+        Self { q }
+    }
+
+    // TODO also, estimate_above, that sums bins from 255..0 until quantile is at 1-q.
+    // This is faster if the limit is expected to be at the right end of the histogram.
+    pub fn estimate(&self, bins : &[u32]) -> u8 {
+        let probabilities = bayes::calc::counts_to_probs(bins);
+        partial_quantile(0, 255, &probabilities, self.q) as u8
+    }
+
+}
+
+/* Algorithms for finding optimal threshold values (partitions) over gray images with bimodal intensity distribution.
+The partition can be calculated over the image or over the histogram directly. */
+pub trait Partition {
+
+    // Repeatedly calls partition (potentially using multiple threads) for each sub-window of the given size.
+    // The returned binary tree maps window central pixels to the local partitions at each position.
+    fn local_partitions<'a>(&'a mut self, img : &Window<u8>, sub_sz : (usize, usize)) -> &'a BTreeMap<(usize, usize), u8> {
+        unimplemented!()
+    }
+
+    // Calls local_partitions, then for all pixels in the output image, produce an
+    // optimal partition by interpolating the partition differences linearly, assuming
+    // the partition at each sub-window applies to the center pixel, and the remaining pixel
+    // partitoins are calculated by linear interpolation. The output image will give the
+    // ideal partition for each pixel; and can be used as the input for Threshold::adaptive_threshold(.)
+    // The returned image should be allocated by the partition at the first call of interpolated_partitions.
+    fn interpolated_partitions<'a>(&'a mut self, img : &Window<u8>, sub_sz : (usize, usize)) -> &'a Window<'a, u8> {
+        unimplemented!()
+    }
+
+    fn global_partition(&mut self, img : &Window<u8>) -> u8;
+
+    fn global_partition_for_hist(&mut self, hist : &[u32]) -> u8;
+
+}
+
+// (1) Finds first mode of histogram m1
+// (2) Finds second mode of histogram by minimizing (x-m1)^2*m1
+// (3) Reports midpoint between m1 and m2 (Parker, 2011, p.139 ).
+pub struct SquareDist {
+    pub p1 : u8,
+    pub p2 : u8,
+    pub p1_val : u32,
+    pub p2_val : u32,
+    pub min : usize,
+    pub max : usize
+}
+
+fn sqdist(i : usize, count : u32, mode : usize) -> f32 {
+    (i.abs_diff(mode) as f32).powf(2.)*(count as f32)
+}
+
+impl SquareDist {
+
+    pub fn new(min : usize, max : usize) -> Self {
+        Self { p1 : 0, p2 : 0, p1_val : 0, p2_val : 0, min, max }
+    }
+
+    pub fn calculate(&mut self, hist : &[u32]) -> u8 {
+        let mode_max = hist[self.min..self.max].iter().enumerate()
+            .max_by(|a, b| a.1.cmp(&b.1) )
+            .unwrap().0 + self.min;
+        let snd_mode_max = hist[self.min..self.max].iter().enumerate()
+            .max_by(|a, b| sqdist(a.0, *a.1, mode_max).total_cmp(&sqdist(b.0, *b.1, mode_max)) )
+            .unwrap().0 + self.min;
+        self.p1 = mode_max as u8;
+        self.p2 = snd_mode_max as u8;
+        self.p1_val = hist[mode_max];
+        self.p2_val = hist[snd_mode_max];
+        ((mode_max as f32 + snd_mode_max as f32) / 2.) as u8
+    }
+
+}
+
+// Ideal partition point between two gausians. Vary the parameter t in a root-finding algorithm
+// until the solution is zero. If there are two solutions, return the unique one between m1 and m2.
+// m1, m2 are the means; s1, s2 the variances; p1, p2 the relative probabilities. (perhaps there is
+// an error in the equation; first term is 1/s2+1/s2 in the book, eq. 4.43 at Parker, 2011).
+fn gaussian_partition(t : f32, m1 : f32, s1 : f32, m2 : f32, s2 : f32, p1 : f32, p2 : f32) -> f32 {
+    (1. / s1 + 1. / s2)*t.powf(2.) + 2.*(m2/s2 - m1/s1)*t + 2.*(((p2*s1)/(p1*s2)).ln())
+}
+
+/* Calls f iteratively over the histogram until either the value does not change or 256 iterations
+where completed without a stability point found */
+fn histogram_steps<T, F : Fn(&[T], usize)->usize>(f : F, hist : &[T], init : usize) -> Option<u8> {
+    let mut u1 = init;
+    let mut u2 = init;
+    let mut niter = 0;
+    while niter < 256 {
+        u2 = f(hist, u1);
+        assert!(u2 <= 255);
+        if u1 == u2 {
+            return Some(u1 as u8);
+        }
+        niter += 1;
+        u1 = u2;
+    }
+    None
+}
+
+// (Naive method)
+// (1) Set initial threshold estimate as average gray-level intensity
+// (2) Calculate average gray-level of pixels classified as fg and bg
+// (3) Set new estimate as (fg+bg)/2
+// (4) Repeat 2-3 until threshold stop changing. (Parker, 2011, p. 140).
+//
+// (Histogram-based method: (faster))
+// (1) Find full image histogram average
+// (2) Set kth threshold by tk_{i+1} = (sum_0^{tk-1} (i*h[i]) / (2*(sum_0^{tk-1} h[i] ) )) + ((sum_{tk+1}^N j*h[j]) / (2*(sum_{tk+1}^N h[j])))
+pub struct IterativeSelection {
+
+}
+
+impl IterativeSelection {
+
+    pub fn eval(h : &[u32]) -> Option<u8> {
+        let cumul = bayes::calc::running::cumulative_sum(h.iter().copied()).collect::<Vec<_>>();
+        let cumul_prod = bayes::calc::running::cumulative_sum(h.iter().enumerate().map(|(ix, u)| ix as u32 * (*u) )).collect::<Vec<_>>();
+        let step = |h : &[u32], t : usize| -> usize {
+            let sum_prod_below = cumul_prod[t] as f32;
+            let sum_below = cumul[t] as f32;
+            let sum_prod_above = (cumul_prod[255] - cumul_prod[t]) as f32;
+            let sum_above = (cumul[255] - cumul[t]) as f32;
+            (sum_prod_below / (2.*sum_below) + sum_prod_above / (2.*sum_above)) as usize
+        };
+        let avg = bayes::calc::running::mean(h.iter().map(|h| *h as f64 ), h.len());
+        histogram_steps(step, h, avg as usize)
+    }
+}
+
+// maximizes uniformity over the foreground class (Hw) and background class (Hb)
+// The entropy over a class is Hw = -sum pi log(pi) where pi is the normalized histogram.
+// Maximizing the sum Hw and Hb is the same as maximizing
+// f(t) [Ht/HT] * (log(Pt) / log(max{p0..pt})) + [1 - Ht/HT]*(log(1-Pt)/log(max{pt+1..255}))
+// where Ht is the iteration-dependent entropy over background pixels (up to t);
+// HT is the total entropy (calculated once)
+// and Pt is the cumulative probability up to gray level t
+// The maximum is found by exhaustively evaluating over all candidate t's.
+pub struct MaxEntropy {
+
+}
+
+impl MaxEntropy {
+
+    pub fn eval(h : &[u32]) -> Option<u8> {
+        let probs = bayes::calc::counts_to_probs(h);
+        let cumul_probs = bayes::calc::running::cumulative_sum(probs.iter().copied()).collect::<Vec<_>>();
+        let cumul_entropies = bayes::calc::cumulative_entropies(probs.iter().copied()).collect::<Vec<_>>();
+        let total_entropy = cumul_entropies[255];
+        let step = |h : &[u32], t : usize| -> usize {
+            let entropy_ratio = cumul_entropies[t] / total_entropy;
+            let max_prob_below = probs[..t].iter().copied().max_by(f32::total_cmp).unwrap().ln();
+            let max_prob_above = probs[t..].iter().copied().max_by(f32::total_cmp).unwrap().ln();
+            let prob_below = cumul_probs[t].ln();
+            (entropy_ratio*(prob_below / max_prob_below) + (1. - entropy_ratio)*((1. - prob_below) / max_prob_above)) as usize
+        };
+        let avg = bayes::calc::running::mean(h.iter().map(|h| *h as f64 ), h.len());
+        histogram_steps(step, h, avg as usize)
+    }
+}
+
+// Parker (2011 p.149)
+// Evaluate J(t) exhaustively over candidate t's, where J(t) is:
+// J(t) = 1 + 2*( P1(t)*log(s1(t)) + P2(t)*log(s2(t)) ) - 2*(P1(t)*log(P1(t) + P2(t)*log(P2(t))
+// where P1(t) is the cumulative probability up to t
+// P2(t) the cumulative probability from P to 255
+// m1(t) = sum_0^t i*h[i]/P1(t)
+// m2(t) = sum_{t+1}^{255} i*h[i]/P2(t)
+// s1(t) = sum_0^t (h[i]*(i - m1(t))^2)/P1(t)
+// s2(t) = sum_{t+1}^{255} (h[i]*(i - m2(t))^2)/P2(t)
+pub struct MinError {
+    step : usize,
+    start : usize,
+    end : usize
+}
+
+impl MinError {
+
+    pub fn new(start : usize, end : usize, step : usize) -> Self {
+        Self { start, end, step }
+    }
+
+    fn eval(&mut self, h : &[u32]) -> Option<u8> {
+        let probs = bayes::calc::counts_to_probs(h);
+        let cumul_probs = bayes::calc::running::cumulative_sum(probs.iter().copied()).collect::<Vec<_>>();
+        let mut unnorm_means = bayes::calc::running::cumulative_sum(
+            probs.iter().enumerate().map(|(i, p)| i as f32 * (*p) as f32)
+        ).collect::<Vec<_>>();
+        let mut unnorm_vars = bayes::calc::running::cumulative_sum(
+            probs.iter().enumerate().map(|(i, p)| (i as f32 - (unnorm_means[i] / cumul_probs[i])).powf(2.) * (*p) as f32)
+        ).collect::<Vec<_>>();
+        let mut js = Vec::new();
+        for t in (self.start..self.end).step_by(self.step) {
+            let p1 = cumul_probs[t];
+            let p2 = cumul_probs[255]-cumul_probs[t];
+            let m1 = unnorm_means[t] / p1;
+            let m2 = (unnorm_means[255] - unnorm_means[t]) / p2;
+            let s1 = unnorm_vars[t] / p1;
+            let s2 = (unnorm_vars[255] - unnorm_vars[t]) / p2;
+            let j = 1. + 2.*(p1*s1.ln() + p2*s2.ln()) - 2.*(p1*p1.ln() + p2*p2.ln());
+            js.push((t, j));
+        }
+        Some(js.iter().min_by(|a, b| a.1.total_cmp(&b.1) ).unwrap().0 as u8)
     }
 
 }

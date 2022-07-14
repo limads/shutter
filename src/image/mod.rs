@@ -258,7 +258,6 @@ where
         width,
         size : (height, width)
     };
-    println!("{:?}", shape);
     for ix in 0..s.len() {
         let mut win_mut = if horizontal {
             img.window_mut((0, ix*shape.1), shape)
@@ -719,6 +718,7 @@ where
     /// as unsafe. Make sure your program copies content from another image, or set
     /// all its values with fill() before you attempt to read from it.
     pub unsafe fn new_empty(nrows : usize, ncols : usize) -> Self {
+        assert_nonzero((nrows, ncols));
         let mut buf = Vec::<N>::with_capacity(nrows * ncols);
         buf.set_len(nrows * ncols);
         Self { buf : buf.into_boxed_slice(), width : ncols, offset : (0, 0), size : (nrows, ncols) }
@@ -741,6 +741,7 @@ where
     }
     
     pub fn window<'a>(&'a self, offset : (usize, usize), sz : (usize, usize)) -> Option<Window<'a, N>> {
+        assert_nonzero(sz);
         let orig_sz = self.shape();
         if offset.0 + sz.0 <= orig_sz.0 && offset.1 + sz.1 <= orig_sz.1 {
             Some(Window {
@@ -755,6 +756,7 @@ where
     }
     
     pub fn window_mut<'a>(&'a mut self, offset : (usize, usize), sz : (usize, usize)) -> Option<WindowMut<'a, N>> {
+        assert_nonzero(sz);
         let orig_sz = self.shape();
         if offset.0 + sz.0 <= orig_sz.0 && offset.1 + sz.1 <= orig_sz.1 {
             Some(WindowMut {
@@ -814,13 +816,21 @@ where
     where
         N : Mul<Output=N> + MulAssign
     {
+        assert_nonzero(sz);
         self.full_window_mut().windows_mut(sz)
     }
+
+    // pub fn center_sub_window(&self) -> Window<'_, N> {
+    // }
+
+    // Returns an iterator over the clockwise sub-window characterizing a pattern.
+    // pub fn clockwise_sub_windows(&self) -> impl Iterator<Item=Window
 
     pub fn windows(&self, sz : (usize, usize)) -> impl Iterator<Item=Window<'_, N>>
     where
         N : Mul<Output=N> + MulAssign
     {
+        assert_nonzero(sz);
         self.full_window().windows(sz)
     }
     
@@ -857,6 +867,64 @@ impl<N> Image<N>
     
 }
 
+
+impl<T> Raster for Image<T>
+where
+    T : Scalar + Copy
+{
+
+    type Slice = Box<[T]>;
+
+    fn create(offset : (usize, usize), win_sz : (usize, usize), orig_sz : (usize, usize), win : Self::Slice) -> Self {
+        assert!(offset == (0, 0));
+        assert!(win_sz.0 * win_sz.1 == win.len());
+        assert!(orig_sz == win_sz);
+        Self {
+            offset,
+            size : win_sz,
+            width : win_sz.1,
+            buf : win
+        }
+    }
+
+    fn offset(&self) -> &(usize, usize) {
+        &self.offset
+    }
+
+    fn size(&self) -> &(usize, usize) {
+        &self.size
+    }
+
+    fn width(&self) -> usize {
+        self.width
+    }
+
+    fn height(&self) -> usize {
+        self.size.0
+    }
+
+    fn original_width(&self) -> usize {
+        self.width
+    }
+
+    fn original_height(&self) -> usize {
+        self.buf.len() / self.width
+    }
+
+    fn original_size(&self) -> (usize, usize) {
+        (self.original_height(), self.width)
+    }
+
+    unsafe fn original_slice(&mut self) -> Self::Slice {
+        self.buf.clone()
+    }
+
+    unsafe fn essential_slice(&mut self) -> Self::Slice {
+        self.buf.clone()
+    }
+
+}
+
 impl Image<u8> {
 
     pub fn show(&self) {
@@ -874,6 +942,26 @@ impl Image<u8> {
             .args(&[&new_path])
             .output()
             .unwrap();
+    }
+
+    // Creates an image from a binary pattern. Bits start from the top-left
+    // and progress clockwise wrt the center pixel.
+    pub fn new_from_pattern(side : usize, center : bool, pattern : u8) -> Image<u8> {
+        let mut pattern = crate::texture::pattern::to_binary(pattern);
+        pattern.iter_mut().for_each(|p| *p *= 255 );
+        let mut img = unsafe { Image::new_empty(side, side) };
+        let mut wins = img.windows_mut((side / 3, side / 3));
+        wins.next().unwrap().fill(pattern[0]);
+        wins.next().unwrap().fill(pattern[1]);
+        wins.next().unwrap().fill(pattern[2]);
+        wins.next().unwrap().fill(pattern[7]);
+        wins.next().unwrap().fill(if center { 255 } else { 0 });
+        wins.next().unwrap().fill(pattern[3]);
+        wins.next().unwrap().fill(pattern[6]);
+        wins.next().unwrap().fill(pattern[5]);
+        wins.next().unwrap().fill(pattern[4]);
+        std::mem::drop(wins);
+        img
     }
 
     /* TODO create new_from_pattern where Pattern is an Enum with checkerboard
@@ -1184,6 +1272,7 @@ where
     }
 
     pub fn sub_window(&'a self, offset : (usize, usize), dims : (usize, usize)) -> Option<Window<'a, N>> {
+        assert_nonzero(dims);
         let new_offset = (self.offset.0 + offset.0, self.offset.1 + offset.1);
         if new_offset.0 + dims.0 <= self.original_size().0 && new_offset.1 + dims.1 <= self.original_size().1 {
             Some(Self {
@@ -1227,6 +1316,7 @@ where
     /// so that we can implement windows(.) for Image by using move semantics, without
     /// requiring the user to call full_windows(.).
     pub fn windows(&self, sz : (usize, usize)) -> impl Iterator<Item=Window<'a, N>> {
+        assert_nonzero(sz);
         let (step_v, step_h) = sz;
         if sz.0 >= self.win_sz.0 || sz.1 >= self.win_sz.1 {
             panic!("Child window size bigger than parent window size");
@@ -1267,6 +1357,12 @@ where
         let bottom = self.sub_window((bottom, width), vert_sz)?;
         let left = self.sub_window((height, 0), horiz_sz)?;
         Some([top, right, bottom, left])
+    }
+
+    pub fn shrink_to_subsample2(&'a self, row_by : usize, col_by : usize) -> Option<Window<'a, N>> {
+        let height = shrink_to_divisor(self.height(), row_by)?;
+        let width = shrink_to_divisor(self.width(), col_by)?;
+        self.sub_window((0, 0), (height, width))
     }
 
     pub fn shrink_to_subsample(&'a self, by : usize) -> Option<Window<'a, N>> {
@@ -1312,7 +1408,7 @@ where
         self.win_sz.0 * self.win_sz.1
     }
 
-    pub fn rows(&self) -> impl Iterator<Item=&[N]> + Clone {
+    pub fn rows<'b>(&'b self) -> impl Iterator<Item=&'a [N]> + Clone + 'b {
         let stride = self.original_size().1;
         let tl = self.offset.0 * stride + self.offset.1;
         (0..self.win_sz.0).map(move |i| {
@@ -1342,9 +1438,14 @@ where
             })
     }
 
+    pub fn pixels_across_line<'b>(&'b self, src : (usize, usize), dst : (usize, usize)) -> impl Iterator<Item=&N> + 'b {
+        let (nrow, ncol) = self.shape();
+        coords_across_line(src, dst, self.shape()).map(move |pt| &self[pt] )
+    }
+
     /// Iterate over all image pixels if spacing=1; or over pixels spaced
     /// horizontally and verticallly by spacing. Iteration proceeds row-wise.
-    pub fn pixels(&self, spacing : usize) -> impl Iterator<Item=&N> + Clone {
+    pub fn pixels<'b>(&'b self, spacing : usize) -> impl Iterator<Item=&'a N> + Clone {
         assert!(spacing > 0, "Spacing should be at least one");
         assert!(self.width() % spacing == 0 && self.height() % spacing == 0, "Spacing should be integer divisor of width and height");
         iterate_row_wise(self.win, self.offset, self.win_sz, self.original_size(), spacing).step_by(spacing)
@@ -1898,8 +1999,6 @@ impl<'a> Window<'a, u8> {
         let src : core::Mat = self.into();
         let mut dst : core::Mat = other.into();
         let dst_sz = dst.size().unwrap();
-
-        println!("{:?} {:?} {:?} {:?}", this_shape, other_shape, src.size().unwrap(), dst_sz);
         imgproc::resize(&src, &mut dst, dst_sz, 0.0, 0.0, imgproc::INTER_NEAREST);
     }
 
@@ -2325,6 +2424,7 @@ where
     /// is no longer valid, thus allowing applying an operation to different positions of
     /// a mutable window without violating aliasing rules.
     pub fn apply_to_sub<R>(&mut self, offset : (usize, usize), sz : (usize, usize), f : impl Fn(WindowMut<'_, N>)->R) -> R {
+        assert_nonzero(sz);
         let ptr = self.win.as_mut_ptr();
         let len = self.win.len();
         let mut sub = unsafe { WindowMut::from_ptr(ptr, len, self.width, offset, sz).unwrap() };
@@ -2440,6 +2540,7 @@ where
     /// invalidated by the borrow checker when we have the child.
     // pub fn sub_window_mut(&'a mut self, offset : (usize, usize), dims : (usize, usize)) -> Option<WindowMut<'a, N>> {
     pub fn sub_window_mut(mut self, offset : (usize, usize), dims : (usize, usize)) -> Option<WindowMut<'a, N>> {
+        assert_nonzero(dims);
         let new_offset = (self.offset.0 + offset.0, self.offset.1 + offset.1);
         if new_offset.0 + dims.0 <= self.original_size().0 && new_offset.1 + dims.1 <= self.original_size().1 {
             Some(Self {
@@ -2464,6 +2565,7 @@ where
     where
         N : Mul<Output=N> + MulAssign
     {
+        assert_nonzero(sz);
         let (step_v, step_h) = sz;
         if sz.0 > self.win_sz.0 || sz.1 > self.win_sz.1 {
             panic!("Child window size bigger than parent window size");
@@ -2714,7 +2816,7 @@ where
         self.copy_from(&Window::from_slice(other, self.win_sz.1));
     }*/
 
-    pub fn rows_mut(&'a mut self) -> impl Iterator<Item=&'a mut [N]> {
+    pub fn rows_mut<'b>(&'b mut self) -> impl Iterator<Item=&'a mut [N]> + 'b {
         let stride = self.original_size().1;
         let tl = self.offset.0 * stride + self.offset.1;
         (0..self.win_sz.0).map(move |i| {
@@ -2727,13 +2829,13 @@ where
     /*pub unsafe fn pixels_mut_ptr(&'a mut self, spacing : usize) -> impl Iterator<Item=*mut N> {
         self.pixels_mut(spacing).map(|px| px as *mut _ )
     }*/
-    pub fn foreach_pixel(&'a mut self, spacing : usize, f : impl Fn(&mut N)) {
+    pub fn foreach_pixel<'b>(&'b mut self, spacing : usize, f : impl Fn(&mut N)) {
         for px in self.pixels_mut(spacing) {
             f(px);
         }
     }
 
-    pub fn pixels_mut(&'a mut self, spacing : usize) -> impl Iterator<Item=&'a mut N> {
+    pub fn pixels_mut<'b>(&'b mut self, spacing : usize) -> impl Iterator<Item=&'a mut N> + 'b {
         self.rows_mut().step_by(spacing).map(move |r| r.iter_mut().step_by(spacing) ).flatten()
     }
 
@@ -2747,14 +2849,21 @@ where
             })
     }
 
+    pub fn conditional_fill(&mut self, mask : &Window<u8>, color : N) {
+        assert!(self.shape() == mask.shape());
+        self.pixels_mut(1).zip(mask.pixels(1)).for_each(|(d, m)| if *m != 0 { *d = color } );
+    }
+
     pub fn fill(&mut self, color : N) {
+
+        // TODO use std::intrinsic::write_bytes?
 
         #[cfg(feature="ipp")]
         unsafe {
             let (step, sz) = crate::image::ipputils::step_and_size_for_window_mut(&self);
             if self.pixel_is::<f32>() {
                 let ans = crate::foreign::ipp::ippi::ippiSet_32f_C1R(
-                    *mem::transmute::<_, &f32>(&color) ,
+                    *mem::transmute::<_, &f32>(&color),
                     mem::transmute(self.as_mut_ptr()),
                     step,
                     sz
@@ -2770,6 +2879,7 @@ where
                     step,
                     sz
                 );
+                // println!("{}", ans);
                 assert!(ans == 0);
                 return;
             }
@@ -3512,4 +3622,28 @@ where
 
 }*/
 
+pub fn assert_nonzero(shape : (usize, usize)) {
+    assert!(shape.0 >= 1 && shape.1 >= 1)
+}
 
+pub fn coords_across_line(
+    src : (usize, usize),
+    dst : (usize, usize),
+    (nrow, ncol) : (usize, usize)
+) -> Box<dyn Iterator<Item=(usize, usize)>> {
+    if src.0 == dst.0 {
+        Box::new((src.1.min(dst.1)..(src.1.max(dst.1))).map(move |c| (src.0, c) ))
+    } else if src.1 == dst.1 {
+        Box::new((src.0.min(dst.0)..(src.0.max(dst.0))).map(move |r| (r, src.1 ) ))
+    } else {
+        let (dist, theta) = index::index_distance(src, dst, nrow);
+        let d_max = dist as usize;
+        Box::new((0..d_max).map(move |i| {
+            let x_incr = theta.cos() * i as f64;
+            let y_incr = theta.sin() * i as f64;
+            let x_pos = (src.1 as i32 + x_incr as i32) as usize;
+            let y_pos = (src.0 as i32 - y_incr as i32) as usize;
+            (y_pos, x_pos)
+        }))
+    }
+}

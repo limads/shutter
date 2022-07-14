@@ -7,26 +7,6 @@ use std::cmp::Ordering;
 
 pub mod dbscan;
 
-pub fn bounding_rect(pts : &[(usize, usize)]) -> (usize, usize, usize, usize) {
-    let (mut min_y, mut max_y) = (usize::MAX, 0);
-    let (mut min_x, mut max_x) = (usize::MAX, 0);
-    for pt in pts.iter() {
-        if pt.0 < min_y {
-            min_y = pt.0;
-        }
-        if pt.0 > max_y {
-            max_y = pt.0
-        }
-        if pt.1 < min_x {
-            min_x = pt.1
-        }
-        if pt.1 > max_x {
-            max_x = pt.1;
-        }
-    }
-    (min_y, min_x, max_y - min_y, max_x - min_x)
-}
-
 pub struct RasterSearch {
 
 }

@@ -44,7 +44,7 @@ pub extern "C" fn peaks(
         return -1;
     }
 
-    let mut ans = crate::hist::peaks_and_valleys(hist, width as usize, height);
+    let mut ans = crate::hist::peaks_and_valleys(hist, width as usize, height, i64::MAX, 0);
     *num_found = ans.len() as i64;
     for (ix, (left, valley, right)) in ans.drain(..).enumerate() {
         if let (Some(l), Some(v), Some(r)) = (left_peaks.get_mut(ix), valleys.get_mut(ix), right_peaks.get_mut(ix)) {

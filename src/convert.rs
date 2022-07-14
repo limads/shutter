@@ -15,6 +15,9 @@ use num_traits::One;
 use std::any::Any;
 use std::mem;
 
+// TODO absolute value convert -> call convert(abs(M)); then only the
+// bit depth must be taken into account.
+
 impl From<Image<u8>> for Image<f32> {
 
     fn from(img : Image<u8>) -> Image<f32> {
@@ -341,6 +344,10 @@ where
 
 }
 
+// IppiScale: p′ = dst_Min + k*(p - src_Min); where k = (dst_Max - dst_Min)/(src_Max - src_Min)
+// For floating point to integer conversions, a range must be specified. For integer data, the
+// limits of the datatype itself is used.
+
 #[cfg(feature="ipp")]
 pub unsafe fn ippi_convert<S,T>(src : &Window<'_, S>, dst : &mut WindowMut<'_, T>, conv : Conversion)
 where
@@ -355,6 +362,10 @@ where
     use crate::foreign::ipp::ippi::ippiScale_32f8u_C1R;
     use crate::foreign::ipp::ippi::ippiScale_8u32f_C1R;
     use crate::foreign::ipp::ippi::ippiConvert_8u32f_C1R;
+    use crate::foreign::ipp::ippi::ippiConvert_16s8u_C1R;
+    use crate::foreign::ipp::ippi::ippiConvert_8u16s_C1R;
+    use crate::foreign::ipp::ippi::ippiScale_16s8u_C1R;
+    use crate::foreign::ipp::ippi::ippiScale_8u16s_C1R;
 
     // Foi ROI/Step info, check page 27 of IPPI manual.
     // 8-bit to 16-bit
@@ -393,6 +404,57 @@ where
                     src_ptr as *const u8,
                     src_step,
                     dst_ptr as *mut f32,
+                    dst_step,
+                    size
+                ));
+            },
+            _ => panic!("Invalid conversion")
+        }
+    }
+
+    // u8->i16
+    if src.pixel_is::<u8>() && dst.pixel_is::<i16>() {
+        match conv {
+            Conversion::Stretch => {
+                status = Some(ippiScale_8u16s_C1R(
+                    src_ptr as *const u8,
+                    src_step,
+                    dst_ptr as *mut i16,
+                    dst_step,
+                    size
+                ));
+            },
+            Conversion::Preserve => {
+                 status = Some(ippiConvert_8u16s_C1R(
+                    src_ptr as *const u8,
+                    src_step,
+                    dst_ptr as *mut i16,
+                    dst_step,
+                    size
+                ));
+            },
+            _ => panic!("Invalid conversion")
+        }
+    }
+
+    // i16->u8
+    if src.pixel_is::<i16>() && dst.pixel_is::<u8>() {
+        match conv {
+            Conversion::Shrink => {
+                status = Some(ippiScale_16s8u_C1R(
+                    src_ptr as *const i16,
+                    src_step,
+                    dst_ptr as *mut u8,
+                    dst_step,
+                    size,
+                    crate::foreign::ipp::ippi::IppHintAlgorithm_ippAlgHintNone
+                ));
+            },
+            Conversion::Preserve => {
+                 status = Some(ippiConvert_16s8u_C1R(
+                    src_ptr as *const i16,
+                    src_step,
+                    dst_ptr as *mut u8,
                     dst_step,
                     size
                 ));

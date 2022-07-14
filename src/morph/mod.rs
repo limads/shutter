@@ -312,6 +312,12 @@ impl IppiMorph {
 
 }
 
+/*
+morph_gradient(): dilate(img) - erode(img)
+valley_detect(): closing(img) - img
+boundary_detect(): img - erosion(img)
+*/
+
 /*pub trait Morphology {
 
 }

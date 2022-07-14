@@ -660,6 +660,10 @@ impl PointExtractor {
     pub fn extract(&mut self, win : &Window<'_, u8>, fg : Foreground) -> &[(usize, usize)] {
         self.pts.clear();
         match fg {
+            Foreground::Exactly(v) => {
+                win.labeled_pixels::<usize, _>(1)
+                    .for_each(|(r, c, px)| if px == v { self.pts.push((r, c)) } );
+            },
             Foreground::Below(v) => {
                 win.labeled_pixels::<usize, _>(1)
                     .for_each(|(r, c, px)| if px <= v { self.pts.push((r, c)) } );

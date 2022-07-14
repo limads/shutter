@@ -2,6 +2,7 @@ use crate::image::*;
 use std::iter::FromIterator;
 use std::mem;
 use std::cmp::{Ord, Ordering};
+use num_traits::AsPrimitive;
 
 #[derive(Debug, Clone)]
 pub struct GrayHistogram([u32; 256]);
@@ -48,7 +49,7 @@ where
     true
 }
 
-pub fn peaks<T>(s : &[T], min_width : usize, min_height : T) -> Vec<usize>
+pub fn peaks<T>(s : &[T], min_width : usize, min_peak_height : T) -> Vec<usize>
 where
     T : Ord + Copy
 {
@@ -63,7 +64,7 @@ where
     let mut peaks : Vec<_> = labeled
         .chunks(min_width)
         .map(|s| s.iter().max_by(|a, b| a.1.cmp(&b.1) ).copied().unwrap() )
-        .filter(|p| p.1 > min_height )
+        .filter(|p| p.1 > min_peak_height )
         .collect();
     if peaks.len() == 0 {
         return Vec::new();
@@ -117,11 +118,18 @@ pub fn delimited_peaks(peaks_valleys : &[(usize, usize, usize)]) -> Vec<(usize, 
 }
 
 // Return triplets (peak, valley, peak). Returns empty vector for N<2 peaks.
-pub fn peaks_and_valleys<T>(s : &[T], min_width : usize, min_height : T) -> Vec<(usize, usize, usize)>
+pub fn peaks_and_valleys<T>(
+    s : &[T],
+    min_width : usize,
+    min_peak_height : T,
+    max_valley_height : T,
+    min_peak_valley_diff : i64
+) -> Vec<(usize, usize, usize)>
 where
-    T : Ord + Copy
+    T : Ord + Copy,
+    i64 : From<T>
 {
-    let peaks = peaks(s, min_width, min_height);
+    let peaks = peaks(s, min_width, min_peak_height);
     if peaks.len() < 2 {
         return Vec::new();
     }
@@ -135,7 +143,10 @@ where
         curr_mins.clear();
         curr_mins.push((0, s[*p1]));
         for (local_ix, val) in s[(*p1+1)..*p2].iter().enumerate() {
-            if *val < curr_mins[0].1 {
+            if *val < curr_mins[0].1 && *val <= max_valley_height &&
+                (i64::from(*val) - i64::from(s[*p1])).abs() < min_peak_valley_diff &&
+                (i64::from(*val) - i64::from(s[*p2])).abs() < min_peak_valley_diff
+            {
                 curr_mins.clear();
                 curr_mins.push((local_ix + 1, *val));
             } else if *val == curr_mins[0].1 {
@@ -147,12 +158,34 @@ where
             .min_by(|a, b| (a.0 as f32 - half_len).abs().partial_cmp(&(b.0 as f32 - half_len).abs()).unwrap_or(Ordering::Equal) )
             .copied()
             .unwrap();
-        triplets.push((*p1, *p1 + min.0, *p2));
+        let valley = *p1 + min.0;
+        triplets.push((*p1, valley, *p2));
     }
     triplets
 }
 
 impl GrayHistogram {
+
+    pub fn new() -> Self {
+        Self([0; 256])
+    }
+
+    /*pub fn local_maxima(&self, interval_len : usize) -> Vec<(usize, u32)> {
+        self.0.chunks(interval_len)
+            .enumerate()
+            .map(|(chunk_ix, chunk)| chunk.iter().enumerate().max_by(|a, b| a.1.cmp(&b.1).unwrap() )
+            .map(|(chunk_ix, (ix, val))| (chunk_ix*interval_len+ix, val) )
+            .collect()
+    }*/
+
+    // pub fn valleys(&self, interval_len : usize, same_thr : i32) -> Vec<usize> {
+    // }
+
+    pub fn show(&self, shape : (usize, usize)) {
+        let mut img = Image::new_constant(shape.0, shape.1, 0);
+        self.draw(&mut img.full_window_mut(), 255);
+        img.show();
+    }
 
     pub fn draw(&self, win : &mut WindowMut<'_, u8>, color : u8) {
         assert!(win.width() % 256 == 0);
@@ -162,7 +195,9 @@ impl GrayHistogram {
         for ix in 0..256 {
             let h = ((self.0[ix] as f32 / max) * win.height() as f32) as usize;
             let h_compl = win.height() - h;
-            win.apply_to_sub((h_compl, ix*col_w), (h, col_w), |mut w| { w.fill(color); } );
+            if h > 0 {
+                win.apply_to_sub((h_compl, ix*col_w), (h, col_w), |mut w| { w.fill(color); } );
+            }
         }
     }
 
@@ -170,7 +205,18 @@ impl GrayHistogram {
         &self.0[..]
     }
 
+    pub fn iter_as<'a, T>(&'a self) -> impl Iterator<Item=T> + 'a
+    where
+        u32 : AsPrimitive<T>,
+        T : Copy + 'static
+    {
+        self.0.iter().map(move |u| { let v : T = u.as_(); v })
+    }
+
     pub fn update(&mut self, win : &Window<'_, u8>) {
+
+        // Maybe IPP already does this step?
+        self.0.iter_mut().for_each(|bin| *bin = 0 );
 
         #[cfg(feature="ipp")]
         unsafe {

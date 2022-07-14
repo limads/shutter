@@ -23,6 +23,28 @@ pub mod object;
 
 pub mod graph;
 
+/*
+TODO traits:
+
+SignedImage : i16 i32 (abs)
+
+UnsignedImage : u8
+
+FloatImage : f32
+
+AnyImage : (abs_diff)
+
+DepthConvert
+
+increase_depth
+
+decrease_depth
+
+// depth_to_interval / interval_to_depth saturates all fp values outside the interval.
+float_depth -> linearize_depth / depth_to_interval / interval_to_depth
+
+*/
+
 /// Structures and algorithms for sparse binary image representation (in terms of graphs, ordered arrays, etc).
 /// Offers Run-length encoding of binary image representation, and other alternative representations.
 pub mod sparse;
@@ -36,7 +58,7 @@ pub mod region;
 pub mod binary;
 
 // Pattern and texture analysis operations (segmentation, classification)
-pub mod pattern;
+pub mod texture;
 
 /// Image-to-image grayscale operations (thresholding, segmentation)
 pub mod gray;
@@ -122,13 +144,6 @@ pub mod geom;
 
 pub mod foreign;
 
-#[cfg(feature="glib")]
-#[cfg(feature="once_cell")]
-#[cfg(feature="gstreamer")]
-#[cfg(feature="gstreamer-base")]
-#[cfg(feature="gstreamer-video")]
-pub mod processor;
-
 pub mod prelude {
 
     pub use super::image::*;
@@ -178,5 +193,4 @@ fn libshutter(lua : &mlua::Lua) -> mlua::Result<mlua::Table> {
 
     Ok(exports)
 }*/
-
 

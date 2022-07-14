@@ -9,8 +9,29 @@ Axis-aligned parametrization of ellipse
 (as function of angle: (x, y) = (a*cos(theta), b*sin(theta))
 
 Increasing a stretches it along the horizontal axis; increasing b stretches it along the vertical axis.
-If a = b we have the circle of radius r=a=b as a special case.
-*/
+If a = b we have the circle of radius r=a=b as a special case. */
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlignedEllipse {
+    pub center : Vector2<f32>,
+    pub major_scale : f32,
+    pub minor_scale : f32
+}
+
+/// Represents an ellipse in terms of the lengths of its major and minor axis
+/// and an orientation angle of the major axis.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrientedEllipse {
+
+    pub aligned : AlignedEllipse,
+
+    // Orientation of the major axis around the center, in [-pi, pi]
+    // (Positive angles are counter-clockwise rotations; negative angles are clockwise
+    // rotations). The rotation is defined to always be atan2(major_y, major_x)
+    pub theta : f32
+}
+
+/// Represents an ellipse in terms of its centered axis vectors and its center.
+/// Major and minor are defined in the coordinate system centered at the center vector.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ellipse {
     pub center : Vector2<f32>,
@@ -18,15 +39,105 @@ pub struct Ellipse {
     pub minor : Vector2<f32>
 }
 
+impl From<AlignedEllipse> for OrientedEllipse {
+
+    fn from(aligned : AlignedEllipse) -> Self {
+        OrientedEllipse {
+            aligned,
+            theta : 0.0
+        }
+    }
+
+}
+
+impl From<Ellipse> for OrientedEllipse {
+
+    fn from(el : Ellipse) -> Self {
+        OrientedEllipse {
+            aligned : AlignedEllipse {
+                major_scale : el.major_scale(),
+                minor_scale : el.minor_scale(),
+                center : el.center
+            },
+            theta : el.orientation(),
+        }
+    }
+
+}
+
+fn full_angle(a : &Vector2<f32>, b : &Vector2<f32>) -> f32 {
+    // let unit_x = Vector2::new(1., 0.);
+
+    // This gives the smallest angle between two vectors using the cosine rule:
+    // acos((a.b)/(|a||b|)) in [0,pi] for argument in [-1,1];
+    // to transform to [0-2pi]
+    // let smallest_angle = centered.angle(&unit_x);
+
+    // asin returns values in the range [-pi/2, pi/2] for values in the range = [-1,1]
+    // if smallest_angle >
+
+    let mut angle = a[1].atan2(a[0]) - b[1].atan2(b[0]);
+    if angle < 0. {
+        angle += 2. * PI;
+    }
+    angle
+}
+
+impl From<OrientedEllipse> for Ellipse {
+
+    fn from(el : OrientedEllipse) -> Self {
+        Ellipse::new(el.aligned.center, el.aligned.major_scale, el.aligned.minor_scale, el.theta)
+    }
+
+}
+
 impl Ellipse {
+
+    pub fn estimate_from_coords(coords : &[(usize, usize)], shape : (usize, usize)) -> Result<Self, &'static str> {
+        let pts : Result<Vec<_>, _> = coords.iter()
+            .map(|pt| super::coord::coord_to_point(*pt, shape).ok_or("Unable to convert coord") )
+            .collect();
+        Self::estimate(&pts?[..])
+    }
 
     // This was based on the Opencv "direct" ellipse fitting implementation
     // available at modules/imgproc/src/shapedescr.cpp
     pub fn estimate(pts : &[Vector2<f32>]) -> Result<Self, &'static str> {
-        fit_ellipse_direct(pts)
+        // fit_ellipse_direct(pts)
+        fit_ellipse_no_direct(pts)
     }
 
-    // Returns the angle of the major axis.
+    /*// Returns the angle of the major axis on the right quadrant
+    // (-pi/2, pi/2) (atan-like coordinates).
+    /// Returns ellipse orientation using atan-like convention (-pi/2, pi/2)
+    /// over the bottom and right quadrant).
+    pub fn atan_orientation(&self) -> f32 {
+        let angle = self.angle();
+        if angle > 0.0 && angle <= PI / 2. {
+            // In this case, we are ok (top-right quadrant is always the same).
+            angle
+        } else if angle > PI / 2. && angle < PI {
+            // In this case, we are at the top-left quadrant. Reflect it
+            // horizontally and vertically towards the negative-right quadrant
+            angle + PI
+        } else if angle > -PI && angle < 0.0 {
+            // In this case, we are at the bottom-left quadrant. Reflect it
+            // horizontally
+            angle + PI/2
+        } else {
+            // We are now at the bottom-right quadrant. Reflect it
+            // vertically.
+            angle + PI / 2
+        }
+    }*/
+
+    // Returns angle in the range [0,pi] for normalized scalar producut in [0,1]
+    // fn cosine_orientation()
+
+    // Retruns angle in the range [-pi, pi] for normalized scalar product in [0,1]
+    // fn sin_orientation()
+
+    /// Returns the orientation of the major axis of the ellipse around its center in [-pi, pi].
     pub fn orientation(&self) -> f32 {
         // actually pi - this_result
 
@@ -38,7 +149,14 @@ impl Ellipse {
             box.angle += 360;
         if( box.angle > 360 )
             box.angle -= 360;*/
-        (self.major.clone() - &self.center).angle(&Vector2::new(1., 0.))
+
+        let norm_major = self.major.normalize();
+        let mut angle = norm_major[1].atan2(norm_major[0]);
+        //if angle < 0. {
+        //    angle += 2.*PI;
+        //}
+        angle
+        // self.major.clone().angle(&Vector2::new(1., 0.))
     }
 
     // Lenght of the major axis. This equals the 'a' parameter for an axis-aligned ellipse.
@@ -53,9 +171,19 @@ impl Ellipse {
 
     // Builds an ellipse from scales applied over the major and minor axes and
     // angle of the major axis.
-    pub fn new(center : Vector2<f32>, a : f32, b : f32, theta : f32) -> Ellipse {
-        let major = a * (Rotation2::new(theta) * Vector2::new(1., 0.));
-        let minor = b * (Rotation2::new(theta + PI / 2.) * Vector2::new(1., 0.));
+    pub fn new(center : Vector2<f32>, a : f32, b : f32, mut theta : f32) -> Ellipse {
+        // Transform [0,2*pi] to atan2-like coordinates (-pi, pi); clockwise rotations are negative.
+        if theta > PI {
+            theta = 2.*PI - theta;
+        }
+        let rot_major = Rotation2::new(theta);
+        let rot_minor = if theta >= 0.0 {
+            Rotation2::new(theta + PI / 2.)
+        } else {
+            Rotation2::new(theta - PI / 2.)
+        };
+        let major = a * (rot_major * Vector2::new(1., 0.));
+        let minor = b * (rot_minor * Vector2::new(1., 0.));
         Ellipse { center, major, minor }
     }
 
@@ -93,6 +221,7 @@ fn sum_abs_diff(pts : &[Vector2<f32>], c : &Vector2<f32>) -> f32 {
 	s
 }
 
+// Credit goes to the OpenCV implementation (imgproc::shapedescr) licensed under BSD.
 fn fit_ellipse_direct(points : &[Vector2<f32>]) -> Result<Ellipse, &'static str> {
 
     let n = points.len();
@@ -111,7 +240,6 @@ fn fit_ellipse_direct(points : &[Vector2<f32>]) -> Result<Ellipse, &'static str>
 
     let s = sum_abs_diff(points, &c);
 	let scale = 100. / s.max(std::f32::EPSILON);
-	println!("scale = {}", scale);
 
 	// A holds a tall matrix with 6 of the moments of the points (up to order 2).
 	let mut A = DMatrix::zeros(n, 6);
@@ -200,9 +328,6 @@ fn fit_ellipse_direct(points : &[Vector2<f32>]) -> Result<Ellipse, &'static str>
         iter += 1;
     }
 
-    println!("TM = {}", TM);
-    println!("M = {}", M);
-
     if iter >= 2 {
         return fit_ellipse_no_direct(points);
     }
@@ -212,7 +337,6 @@ fn fit_ellipse_direct(points : &[Vector2<f32>]) -> Result<Ellipse, &'static str>
     // TODO verify if the ordering/transpose state of this decomposition is the same as opencv eigenNonSymmetric
     let eigen = nalgebra_lapack::Eigen::new(M, true, true).unwrap();
     let evecs = eigen.eigenvectors.as_ref().unwrap();
-    println!("evecs = {}", evecs);
 
     // Select the eigen vector {a,b,c} which satisfies 4ac-b^2 > 0
     let mut cond = [0., 0., 0.];
@@ -278,7 +402,7 @@ fn fit_ellipse_direct(points : &[Vector2<f32>]) -> Result<Ellipse, &'static str>
             PI / 2.
         }
     } else {
-    	PI / 2. + 0.5*pVec[1].atan2(pVec[0]  - pVec[2])
+    	/*PI / 2. +*/ 0.5*pVec[1].atan2(pVec[0]  - pVec[2])
     };
 
     let center = Vector2::new(x0, y0);
@@ -301,6 +425,10 @@ fn populate_points(A : &mut DMatrix<f32>, b : &mut DVector<f32>, points_copy : &
     }
 }
 
+use crate::prelude::Image;
+use crate::draw::*;
+
+// Credit goes to the OpenCV implementation (imgproc::shapedescr) licensed under BSD.
 fn fit_ellipse_no_direct(points : &[Vector2<f32>]) -> Result<Ellipse, &'static str> {
 	let n = points.len();
 
@@ -325,7 +453,6 @@ fn fit_ellipse_no_direct(points : &[Vector2<f32>]) -> Result<Ellipse, &'static s
     }*/
     let s = sum_abs_diff(points, &c);
 	let scale = 100. / s.max(std::f32::EPSILON);
-	println!("scale = {}", scale);
 
 	// W holds the singular values; u the left singular vectors; vt the right singular vectors.
     // SVDecomp(A, w, u, vt);
@@ -414,21 +541,95 @@ fn fit_ellipse_no_direct(points : &[Vector2<f32>]) -> Result<Ellipse, &'static s
     Ok(Ellipse::new(center, length_major, length_minor, angle))
 }
 
+
+/*// This is calculated via the cosine rule: (a.b)/(|a||b|)
+// let angle_pt = (pt.clone() - &el.center ).angle(&el.major);
+// let angle_pt = full_angle(&(pt.clone() - &el.center).normalize(), &el.major.clone().normalize());
+let mut pt_norm = (Rotation2::new(theta).transpose() * (pt.clone() - &el.center)).normalize();
+pt_norm[0] = pt[0] / a;
+pt_norm[1] = pt[1] / b;
+let arc_pt = pt_norm[1].atan2(pt_norm[0]);
+
+// How does the angle of the point relative to the ellipse center maps
+// to the canonical angle (if the ellipse were not rotated).
+
+/*let arc_pt = if theta < 0.0 {
+    theta + 2.*PI
+} else {
+    angle_pt - theta
+};*/
+// let arc_pt =
+
+// println!("angle = {}", angle_pt);
+
+// Closest circumference point at the same arc as the desired point.
+// let closest = ellipse_circumference_point(&OrientedEllipse::from(el.clone()), angle_pt);
+let closest = ellipse_circumference_point(&OrientedEllipse::from(el.clone()), arc_pt);
+
+println!("point = {}; candidate = {}; arc point = {}", pt, closest, arc_pt);
+
+img.draw(Mark::Dot((img.height() - (closest[1] as usize), closest[0] as usize), 2, 255));
+
+// |x1 - x2| + |y1 - y2|
+(closest - pt).abs().sum()*/
+
+pub fn circumference_coord_error(el : &Ellipse, coord : (usize, usize), img_shape : (usize, usize)) -> Option<f32> {
+    Some(circumference_point_error(el, &crate::shape::coord::coord_to_point(coord, img_shape)?))
+}
+
+/// For a fitted point pt, returns its absolute deviation from the ellipse circumference.
+pub fn circumference_point_error(el : &Ellipse, pt : &Vector2<f32>) -> f32 {
+
+    let theta = el.orientation();
+    let a = el.major_scale();
+    let b = el.minor_scale();
+
+    // Align point to ellipse axis
+    let aligned_pt = (Rotation2::new(-theta) * (pt.clone() - &el.center));
+
+    // Radius from ellipse center to the current point.
+    let pt_rad = ((aligned_pt[0] / a).powf(2.) + (aligned_pt[1] / b).powf(2.)).sqrt();
+
+    (1. - pt_rad).abs()
+
+}
+
+pub fn coord_total_error(el : &Ellipse, coords : &[(usize, usize)], shape : (usize, usize)) -> f32 {
+    coords.iter().fold(0.0, |e, c| e + circumference_coord_error(el, *c, shape).unwrap() )
+}
+
+pub fn total_error(el : &Ellipse, pts : &[Vector2<f32>]) -> f32 {
+
+    pts.iter().fold(0.0, |e, pt| e + circumference_point_error(el, pt) )
+}
+
+/// Theta is the ellipse orientation; arc is the actual position of the
+/// point in the circumference (as if it were the corresponding point in
+/// the circle).
+pub fn ellipse_circumference_point(
+    el : &OrientedEllipse,
+    arc : f32
+) -> Vector2<f32> {
+
+    // Generate a vector in the corresponding centered axis-aligned ellipse
+    let x = el.aligned.major_scale * arc.cos();
+    let y = el.aligned.minor_scale * arc.sin();
+    let aligned_pt = Vector2::new(x, y);
+
+    el.aligned.center.clone() + Rotation2::new(el.theta) * aligned_pt
+}
+
 // Generate the circumference points of an ellipse. To actually draw it,
 // just draw Mark::Line between the generated points translated to coords.
 pub fn generate_ellipse_points(
-    center : &Vector2<f32>,
-    length_major : f32,
-    length_minor : f32,
-    theta : f32,
+    el : &OrientedEllipse,
     n : usize
 ) -> Vec<Vector2<f32>> {
     let mut pts = Vec::new();
     for i in 0..n {
-        let theta = (2.0f32*PI / n as f32) * (i as f32);
-        let x = length_major*theta.cos();
-        let y = lenght_minor*theta.sin();
-        let pt = center.clone() + Rotation2::new(theta)*Vector2::new(x, y);
+        // let arc = (2.0f32*PI / n as f32) * (i as f32);
+        let arc = (2.0f32*PI / n as f32) * (i as f32);
+        let pt = ellipse_circumference_point(el, arc);
         pts.push(pt);
     }
     pts
@@ -440,28 +641,31 @@ fn fit_ellipse_test() {
 
     use crate::prelude::*;
 
+    // For any non-zero orientation, the algorithms can return two equally valid orientations.
+
     let center = Vector2::new(256., 256.);
     let a = 200.0;
     let b = 100.0;
-    let orientation = 0.;
-
-    // Both methods work for those
+    // let orientation = 0.;
+    // let orientation = 0.1;
     // let orientation = (-1.)*(PI / 4.);
-    // let orientation = (PI / 4.);
+    let orientation = (PI / 4.);
+    let true_el = OrientedEllipse { aligned : AlignedEllipse { center, major_scale : a, minor_scale : b }, theta : orientation };
 
-    let pts = generate_ellipse_points(&center, a, b, orientation, 100);
+    let pts = generate_ellipse_points(&true_el, 100);
 
     let mut img = Image::new_constant(512, 512, 0);
 
-    let el = fit_ellipse_direct(&pts[..]).unwrap();
+    let el = fit_ellipse_no_direct(&pts[..]).unwrap();
     println!("{:?}", el);
     println!("ori = {}", el.orientation());
     println!("major = {}", el.major_scale());
     println!("minor = {}", el.minor_scale());
+    println!("avg error = {}", total_error(&el, &pts) / pts.len() as f32);
 
     for pt in pts.iter() {
         if let Some(coord) = crate::shape::coord::point_to_coord(pt, img.shape()) {
-            img.draw(Mark::Dot(coord, 2, 127));
+            img.draw(Mark::Dot(coord, 4, 127));
             img.draw(Mark::EllipseArrows(el.coords(img.height()).unwrap()));
         }
     }

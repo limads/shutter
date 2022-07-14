@@ -68,14 +68,14 @@ pub struct EdgeGraphTracer {
 impl EdgeGraphTracer {
 
     pub fn grouped_weights(&self) -> crate::graph::SplitGraph {
-        crate::graph::group_weights(&self.graph, &self.edge_sets)
+        crate::graph::SplitGraph::new(&self.graph, &self.edge_sets)
     }
 
     // Makes two passes over the UnionFind (one at into_labeling, other at
     // the implementation here) BUT makes a single allocation and does not require moving content
     // while the pixel positions are being written.
     pub fn split(&self) -> crate::graph::SplitGraph {
-        crate::graph::group_weights(&self.graph, &self.edge_sets)
+        crate::graph::SplitGraph::new(&self.graph, &self.edge_sets)
     }
 
     // Make a single pass over the UnionFind, BUT must call one .insert(.) for each pixel.
