@@ -426,10 +426,15 @@ impl ChainEncoding {
 
 }
 
+/// Wraps any iterator over (usize, usize)
+pub struct PointIter(Box<dyn Iterator<Item=(usize, usize)>>);
+
 pub trait Encoding
 where
     Self : Default
 {
+
+    fn points(&self) -> PointIter;
 
     // If the argument is a labeled image, where distinct matched labels are values greater than or
     // equal to 1, and unmatched pixels are represented by zero, then encode_distinct
@@ -445,10 +450,19 @@ where
         encoding
     }
 
-    fn decode_to(&self, img : &dyn AsMut<WindowMut<u8>>);
+    fn decode_to(&self, img : &mut dyn AsMut<WindowMut<u8>>) {
+        let mut img = img.as_mut();
+        img.fill(0);
+        for pt in self.points().0 {
+            img[pt] = 255;
+        }
+    }
 
     fn decode(&self, shape : (usize, usize)) -> Option<Image<u8>> {
-        let mut img = Image::new_constant(shape.0, shape.1, 0);
+
+        // Image must always be filled with zeros at the start of the call of decode_to
+        let mut img = unsafe { Image::new_empty(shape.0, shape.1) };
+
         self.decode_to(&mut img);
         Some(img)
     }

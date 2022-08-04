@@ -61,7 +61,7 @@ where
 
     fn downsample(&self, down : Downsample, by : usize) -> Self::OwnedOutput {
         assert!(self.height() % by == 0 && self.width() % by == 0);
-        let mut downsampled = Image::<N>::new_constant(self.height() / by, self.width() / by, N::zero());
+        let mut downsampled = unsafe { Image::<N>::new_empty(self.height() / by, self.width() / by) };
         self.downsample_to(&mut downsampled.full_window_mut(), down);
         downsampled
     }

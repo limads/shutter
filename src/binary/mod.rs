@@ -31,6 +31,27 @@ impl BinaryWindow {
 
 }*/
 
+/*
+For inplace operations, the trait cannot be implemented for Window, only WindowMut and Image (by &mut).
+Perhaps refactor into BinaryOpInplace
+pub trait BinaryOp {
+    and
+    or
+    xor
+    not
+    scalar_and
+    scalar_or
+    scalar_xor
+    and_mut
+    or_mut
+    xor_mut
+    not_mut
+    scalar_and_mut
+    scalar_or_mut
+    scalar_xor_mut
+}
+*/
+
 pub trait BinaryOp<'a> {
 
     fn and(&'a self, other : &Window<'a, u8>, dst : &'a mut WindowMut<'a, u8>);

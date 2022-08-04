@@ -316,7 +316,7 @@ where
     }
 
     fn convert_owned(&self, conv : Conversion) -> Image<N> {
-        let mut out = Image::<N>::new_constant(self.height(), self.width(), N::zero());
+        let mut out = unsafe { Image::<N>::new_empty(self.height(), self.width()) };
         unsafe { self.convert_into(conv, mem::transmute::<_, &'a mut WindowMut<'a, N>>(&mut out.full_window_mut())) };
         out
     }
@@ -337,7 +337,7 @@ where
     }
 
     fn convert_owned(&self, conv : Conversion) -> Image<N> {
-        let mut out = Image::<N>::new_constant(self.height(), self.width(), N::zero());
+        let mut out = unsafe { Image::<N>::new_empty(self.height(), self.width()) };
         unsafe { self.convert_into(conv, mem::transmute::<_, &'a mut WindowMut<'a, N>>(&mut out.full_window_mut())) };
         out
     }

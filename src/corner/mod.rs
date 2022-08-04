@@ -1,3 +1,19 @@
+pub struct MarrHildreth {
+
+}
+
+pub struct SIFT {
+
+}
+
+pub struct SURF {
+
+}
+
+pub struct Harris {
+
+}
+
 /*IppStatus ippiHarrisCorner_8u32f_C1R(const Ipp8u* pSrc, int srcStep, Ipp32f* pDst, int
 dstStep, IppiSize roiSize, IppiDifferentialKernel filterType, IppiMaskSize filterMask,
 Ipp32u avgWndSize, float k, float scale, IppiBorderType borderType, Ipp8u borderValue,

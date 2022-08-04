@@ -17,7 +17,8 @@ where
 
     pub fn calculate(win : &Window<'_, u8>) -> Self {
 
-        let mut dst = Image::<T>::new_constant(win.height(), win.width(), T::zero());
+        // TODO Make sure IppiIntegral overwrites all pixels.
+        let mut dst = unsafe { Image::<T>::new_empty(win.height(), win.width()) };
 
         #[cfg(feature="ipp")]
         unsafe {

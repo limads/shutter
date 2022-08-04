@@ -2,6 +2,81 @@
 
 #![doc(html_logo_url = "https://raw.githubusercontent.com/limads/shutter/master/assets/logo.png")]
 
+/**
+
+mod ops {
+
+    pub mod logical;
+
+    pub mod arithmetic;
+
+}
+
+mod gray {
+
+    pub mod threshold;
+
+    pub mod truncate;
+
+}
+
+mod conv {
+
+}
+
+scalar_add and scalar_mul are brighntness/contrast enhancement
+
+# Basic image processing
+
+Operations defined for raw image buffers that also result in raw image buffers
+
+| Operation                                             | u8 | i16 | i32 | f32 |
+|:-----------------------------------------------------:|:--:|:---:|:---:|:---:|
+| Arithmetic (add, sub, mul, div)                       | ✓  |  ✓  |  ✓  |  ✓  |
+| Convolution                                           | ✓  |  ✓  |  ✓  |  ✓  |
+| Non-linear filtering (median, rank-order)             | ✓  |  ✓  |  ✓  |  ✓  |
+| Resampling                                            | ✓  |  ✓  |  ✓  |  ✓  |
+| Warping                                               | ✓  |  ✓  |  ✓  |  ✓  |
+| Polling (min, max, median)                            | ✓  |  ✓  |  ✓  |  ✓  |
+| Logical (and, or, not, xor)                           | ✓  |     |     |     |
+| Grayscale (threshold, truncate, dither, quantization) | ✓  |     |     |     |
+| Morphology (erode, dilate, thin, thicken)             | ✓  |     |     |     |
+
+# Transforms
+
+IntegralTransform, DistanceTransform, DiffShiftTransform
+
+# Spatial encoding
+
+Operations define lossless binary image representations (operating on u8) in
+terms of spatial encodings (containers of foreground pixel positions and/or displacements).
+
+RunLengthEncoding
+PointEncoding
+ChainEncoding
+
+# Shape detection, operating exclusively on u8
+
+HoughLines
+
+# Segmentation (i.e. disconnected region labeling), operating exclusively on u8
+
+# Corner detection
+
+# Edge detection
+
+# Texture/pixel statistics
+
+# Motion analysis
+
+# Digital geometry utilities (geom module)
+
+# Raster drawing utilities (text, circle, rect, lines)
+
+Canny
+
+**/
+
 /// Common optical manipulations (calculation of focal depth, magnification, camera calibration, lens distortion correction),
 pub mod optics;
 

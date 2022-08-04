@@ -2397,6 +2397,22 @@ where
     N : Scalar + Copy
 {
 
+    /*// Since mutable references are not allowed in const fn, this isn't const as the window variant,
+    // and therefore cannot be used to initialize a static variable
+    pub fn from_static<const S : usize, const W : usize>(array : &'static mut [N; S]) -> WindowMut<'static, N> {
+
+        if S % W != 0 {
+            panic!("Invalid image dimensions");
+        }
+
+        WindowMut {
+            win : array,
+            width : W,
+            offset : (0, 0),
+            win_sz : (S / W, W)
+        }
+    }*/
+
     pub fn linear_index_mut(&mut self, ix : usize) -> &mut N {
         assert!(ix < self.width() * self.height());
         let (row, col) = (ix / self.width(), ix % self.width());

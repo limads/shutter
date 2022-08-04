@@ -6,6 +6,47 @@ use bayes::calc::*;
 use std::collections::BTreeMap;
 
 /*
+If pixel >= upper, set bin_dst to 1. If pixel <= lower, set bin_dst to 0. If pixel
+is >= lower and pixel <= upper, set it to 1 if it is connected to a 8-neighbor >= upper.
+Set it to zero otherwise. Useful for edge detection.
+pub fn histeresis_thresholding(img : &Image<u8>, bin_dst : Image<u8>, lower : u8, upper : u8) {
+
+}*/
+
+// JarvisJudiceNinke
+pub struct JJNDithering {
+
+}
+
+// FloydSteinberg Dithering
+pub struct FSDithering {
+
+}
+
+// TwoRowSierra Dithering
+pub struct TRSDithering {
+
+}
+
+pub struct OrderedDithering {
+
+}
+
+pub struct RiemersmaDithering {
+
+}
+
+// Half-toning technique
+// https://en.wikipedia.org/wiki/Error_diffusion
+pub struct ErrorDiffusion {
+
+}
+
+pub struct ElserDifferenceMap {
+
+}
+
+/*
 The binarization process can be throuht of as two steps:
 (1) Partition - Identify one or more optimal gray value(s) in [0,255] that generates a thresholded image with the content of interest;
 (2) Threshold - Use the partition(s) value at (1) to threshold the image according to a foreground rule.
@@ -217,7 +258,7 @@ where
 
     // Allocating version of threshold_to
     fn threshold(&self, fg : Foreground) -> Image<u8> {
-        let mut img = Image::<u8>::new_constant(self.height(), self.width(), 0);
+        let mut img = unsafe { Image::<u8>::new_empty(self.height(), self.width()) };
         self.threshold_to(fg, &mut img.full_window_mut());
         img
     }
@@ -237,7 +278,12 @@ where
 
     // Allocating version of truncate_to
     fn truncate(&self, fg : Foreground, fg_val : u8) -> Image<u8> {
+
+        // Image cannot be created as empty here because the truncate operation leaves
+        // unmatched pixels untouched, so we must guarantee there is valid data at
+        // all pixels.
         let mut img = Image::<u8>::new_constant(self.height(), self.width(), 0);
+
         self.truncate_to(fg, &mut img.full_window_mut(), fg_val);
         img
     }
@@ -894,7 +940,7 @@ impl SquareDist {
 
 }
 
-// Ideal partition point between two gausians. Vary the parameter t in a root-finding algorithm
+// Ideal partition point between two gausians. Vary the parameter t in a root-finding algorithm (eqsolver)
 // until the solution is zero. If there are two solutions, return the unique one between m1 and m2.
 // m1, m2 are the means; s1, s2 the variances; p1, p2 the relative probabilities. (perhaps there is
 // an error in the equation; first term is 1/s2+1/s2 in the book, eq. 4.43 at Parker, 2011).
@@ -1086,6 +1132,3 @@ pub fn supress_binary_speckles(win : &Window<'_, u8>, mut out : WindowMut<'_, u8
         }
     }
 }
-
-// IppStatus ippiThreshold_<mod> ( const Ipp<datatype>* pSrc , int srcStep , Ipp<datatype>*
-// pDst , int dstStep , IppiSize roiSize , Ipp<datatype> threshold , IppCmpOp ippCmpOp );
