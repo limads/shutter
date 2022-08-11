@@ -646,7 +646,7 @@ impl Direction {
 /// A lightweight (copy) struct representing a horizontal sequence of homogeneous
 /// pixels by the coordinate of the first pixel and the length of the sequence.
 /// The RunLength is the basis for a sparse representation of a binary image.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RunLength {
     pub start : (usize, usize),
     pub length : usize
@@ -701,6 +701,147 @@ impl RunLength {
 
 }
 
+pub fn strict_nonzero_bound_window<'a>(w : &'a Window<'a, u8>) -> Window<'a, u8> {
+    let vert_win = vertical_nonzero_bound_window(w);
+    let (min_r, mut min_c) = vert_win.offset();
+    let shape = vert_win.shape();
+    let (max_r, mut max_c) = (min_r + shape.0, min_c + shape.1);
+    let sub_height = max_r - min_r;
+    let left_win = w.sub_window((min_r, 0), (sub_height, min_c)).unwrap();
+    let right_win = w.sub_window((min_r, max_c), (sub_height, w.width() - max_c)).unwrap();
+    let mut r = min_r;
+    while r < max_r {
+        for c in 0..min_c {
+            if w[(r, c)] == 255 && c < min_c {
+                min_c = c;
+                break;
+            }
+        }
+        for c in (max_c..w.width()).rev() {
+            if w[(r, c)] == 255 && c > max_c {
+                max_c = c;
+                break;
+            }
+        }
+        r += 1;
+    }
+    let shape = (max_r - min_r, max_c - min_c);
+    w.sub_window((min_r, min_c), shape).unwrap()
+}
+
+pub fn vertical_nonzero_bound_at_integral<'a>(w : &'a Window<'a, i32>) -> Window<'a, i32> {
+    let mut tl = (0, 0);
+    let mut br = (w.height()-1, w.width()-1);
+    for r in 0..w.height() {
+        for c in 0..w.width() {
+            if w[(r, c)] != 0 {
+                tl = (r, c);
+                break;
+            }
+        }
+    }
+    let last = w[(w.height()-1, w.width()-1)];
+    for r in (0..w.height()).rev() {
+        for c in (0..w.width()).rev() {
+            if w[(r, c)] != last {
+                br = (r, c);
+                break;
+            }
+        }
+    }
+    let shape = (br.0 - tl.0, br.1 - tl.1);
+    w.sub_window(tl, shape).unwrap()
+}
+
+// Returns the subwindow of w that contains the smallest region containing
+// the totality of the nonzero pixels of w (assumed binary). This can speed up
+// encoding for sparse binary images, since the algorithm does not iterate over
+// all pixels. Rather, it uses the row of the minimum column and the column of
+// the minimum row to ignore full image regions at further iterations. If window
+// contains no nozero pixels, return the full window. This verifies only the vertical dimension,
+// if the strict minimal bound is desired, use the strict variant.
+pub fn vertical_nonzero_bound_window<'a>(w : &'a Window<'a, u8>) -> Window<'a, u8> {
+
+    assert!(w.height() > 1);
+
+    let mut min_r = 0;
+    let mut max_r = w.height() - 1;
+    let mut min_c = 0;
+    let mut max_c = w.width() - 1;
+
+    // Iterate from bottom to top
+    let mut r = 1;
+    let mut c = 0;
+    while r < w.height() - 1 {
+
+        // Iterate from left-to-right
+        while c < w.width() {
+            if w[(r, c)] == 255 {
+                min_c = c;
+                max_c = c;
+                min_r = r;
+                break;
+            }
+            c += 1;
+        }
+
+        // If first nonzero pixel found here, iterate from right-to-left
+        if min_r == r {
+            c = w.width();
+            while c > min_c {
+                if w[(r, c)] == 255 {
+                    max_c = c;
+                    break;
+                }
+                c -= 1;
+            }
+            break;
+        }
+
+        r += 1;
+    }
+
+    // Iterate from top to bottom
+    r = w.height() - 2;
+    c = 0;
+    while r > min_r {
+        // Iterate from left-to-right
+        while c < w.width() {
+            if w[(r, c)] == 255 {
+                if c < min_c {
+                    min_c = c;
+                }
+                if c > max_c {
+                    max_c = c;
+                }
+                max_r = r;
+                break;
+            }
+            c += 1;
+        }
+
+        // If first nonzero pixel found here, iterate from right-to-left
+        if max_r == r {
+            c = w.width();
+            while c > max_c {
+                if w[(r, c)] == 255 {
+                    if c > max_c {
+                        max_c = c;
+                    }
+                    break;
+                }
+                c -= 1;
+            }
+            break;
+        }
+
+        r -= 1;
+    }
+
+    let shape = (max_r - min_r, max_c - min_c);
+    w.sub_window((min_r, min_c), shape).unwrap()
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct RunLengthEncoding {
     pub rles : Vec<RunLength>,
@@ -723,6 +864,217 @@ fn rows_vector(rles : &[RunLength]) -> Vec<Range<usize>> {
     }
     rows
 }
+
+// Recursively search for regions in a row of an accumulated binary image
+// that might contain RunLengths, by just comparing the differences of the
+// boundary pixels over a row segment.
+fn calculate_valid_col_ranges(ranges : &mut Vec<Range<usize>>, w : &Window<i32>, r : usize, a : usize, b : usize, min_sz : usize) {
+
+    // min_sz cannot be close to 2, because two pixels can be equal and be a white->dark transition.
+    assert!(min_sz >= 4);
+
+    assert!(b > a);
+
+    // assert!((b - a) % 2 == 0, "a = {}; b = {}", a, b);
+
+    // If left and right pixels are equal in the accumulated image,
+    // this is a dark region at the binary image.
+    if w[(r, b)] > w[(r, a)] {
+        if b - a > min_sz {
+
+            // Since a transition between foreground pixel to background pixel
+            // always happen for i == j, it is critical that the valid range
+            // contains the first pixel repetition.
+
+            let half = ((a as f32 + b as f32) / 2.0).ceil() as usize;
+            assert!((half - a) + (b - half) == b - a);
+
+            calculate_valid_col_ranges(ranges, w, r, a, half, min_sz);
+            calculate_valid_col_ranges(ranges, w, r, half+1, b, min_sz);
+        } else {
+            ranges.push(Range { start : a, end : b });
+        }
+    }
+    // If w[a] and w[b] are equal, ignore the region for further processing
+}
+
+fn calculate_valid_row_ranges(ranges : &mut Vec<Range<usize>>, w : &Window<i32>, a : usize, b : usize, min_sz : usize) {
+    assert!(b > a);
+    // If top left and bottom right pixels in the row rergion are equal in the accumulated image,
+    // this is a dark region at the binary image.
+    if w[(a, 0)] < w[(b, w.width()-1)] {
+        if b - a > min_sz {
+            let half = ((a as f32 + b as f32) / 2.0).ceil() as usize;
+            assert!((half - a) + (b - half) == b - a);
+            calculate_valid_row_ranges(ranges, w, a, half, min_sz);
+            calculate_valid_row_ranges(ranges, w, half+1, b, min_sz);
+        } else {
+            ranges.push(Range { start : a, end : b });
+        }
+    }
+    // If w[a] and w[b] are equal, ignore the region for further processing
+}
+
+fn merge_col_ranges(ranges : &mut Vec<Range<usize>>) {
+    if ranges.len() < 2 {
+        return;
+    }
+
+    // Holds a "lead" range index (one that might be extended with zero, one or more "part" ranges
+    let mut lead = 0;
+
+    // Holds a "part" range index, that might either merge to the lead range before it if they are
+    // contiguous, or become its own lead range if it is not contiguous to the past lead range.
+    let mut part = 1;
+
+    while part < ranges.len() {
+        if ranges[lead].end + 1 == ranges[part].start {
+
+            // Extend lead range
+            ranges[lead].end = ranges[part].end;
+
+            // Invalidate this part end
+            ranges[part].end = ranges[part].start;
+
+        } else {
+            lead = part;
+        }
+        part += 1;
+    }
+
+    // Not strictly necessary (since start==end range iterators yield None, so
+    // there is no harm in keeping them in the valid range iterator), but added
+    // here for clarity.
+    ranges.retain(|r| r.end > r.start );
+}
+
+// Perform a search for one or two RunLenghts recursively starting from the extremities. From the
+// structure of the IntegralImage, we can know if we have one or more RunLengths in a pair of pixel
+// boundaries by verifying their difference in pixel value against their horizontal distance (if they
+// are equal, we have a single RunLenght and can stop iteration. If not, we iterate until we find the
+// end of the first left runlength and the start of the last right runlenght, then call this recursively
+// starting after the end of the left runlenght and before the start of the right runlength). This represents
+// huge computational savings for sparse binary images, since whole rows or large segments of rows can be
+// ignored during the search.
+fn find_at_row_segment(rles : &mut Vec<RunLength>, w : &Window<i32>, r : usize, mut a : usize, mut b : usize) {
+    assert!(b >= a, "a = {}; b = {}", a, b);
+    let mut left_px = w[(r, a)];
+    let mut right_px = w[(r, b)];
+    let d = right_px - left_px;
+    // println!("d = {d}");
+    if d == 0 {
+        return;
+    } else {
+
+        // TODO differentiate an "even" start from an "odd" start, since
+        // we do not know if we will start at the beginning or end of the RLE.
+
+        // Skip flat region to right (dark binary segment after any RLEs)
+        /*while w[(r, b-1)] == right_px {
+            b -= 1;
+        }
+        b -= 1;*/
+
+        // Note the first white->dark transition repeats the last
+        // white pixel value, which is why we evaluate one-past b.
+        while w[(r, b)] - w[(r, b-1)] == 0 {
+            b -= 1;
+        }
+
+        // Skip flat region to left (dark binary segment before any RLEs)
+        /*while w[(r, a+1)] == left_px {
+            a += 1;
+        }*/
+        while w[(r, a+1)] - w[(r, a)] == 0 {
+            a += 1;
+        }
+        assert!(b >= a + 1);
+
+        right_px = w[(r, b)];
+        left_px = w[(r, a)];
+        assert!(b >= a, "{}, {}", a, b);
+        println!("Diff a = {}, b = {}", a, b);
+        if (right_px - left_px) / 255 == (b - a) as i32 {
+            if r == 0 {
+                println!("Unique RLE found: {:?} between {:?}", RunLength { start : (r, a), length : b - a + 1 }, (a, b));
+            }
+            rles.push(RunLength { start : (r, a), length : b - a });
+        } else {
+            let mut left_length = 1;
+            let mut right_length = 1;
+            while w[(r, a+left_length+1)] - w[(r, a+left_length)] == 255 {
+                left_length += 1;
+            }
+
+            // This iterator goes one-past the right length because the first dark
+            // pixel repeats the last while pixel accumulated value.
+            while w[(r, b-right_length-1)] - w[(r, b-right_length-2)] == 255 {
+                right_length += 1;
+            }
+
+            // We add an offset of 1 to all RunLenghts because the accumulated image
+            // is shifted by one relative to the original image (since the first source
+            // pixel is equal to the first accumulated pixel).
+            let left = RunLength { start : (r, a + 1), length : left_length };
+            let right = RunLength { start : (r, b - right_length + 1), length : right_length };
+            if r == 0 {
+                println!("RLE pair found between {}-{} : {:?} {:?}",
+                    a,
+                    b,
+                    left,
+                    right
+                );
+            }
+            rles.push(left);
+            rles.push(right);
+
+            // There should be at least one dark pixel between the two recently-inserted RLEs
+            // (since it would have been considered a sigle RLE in the if clause otherwise).
+            let new_a = a+left_length+1;
+            let new_b = b-right_length-1;
+            assert!(new_a < new_b, "a : {}, b : {}", new_a, new_b);
+            find_at_row_segment(rles, w, r, new_a, new_b);
+        }
+    }
+}
+
+fn find_row_rles(rles : &mut Vec<RunLength>, rows : &mut Vec<Range<usize>>, w : &Window<i32>, r : usize, range : Range<usize>) {
+    let n_before = rles.len();
+    find_at_row_segment(rles, w, r, range.start, range.end);
+    let n_after = rles.len();
+    rles[n_before..n_after].sort_by(|a, b| a.start.1.cmp(&b.start.1) );
+    rows.push(Range { start : n_before, end : n_after });
+}
+
+// cargo test --all-features -- accumulated_rle --nocapture
+#[test]
+fn accumulated_rle() {
+    let mut img = Image::new_checkerboard(100, 10);
+    img[(0, 2)] = 255;
+    img[(0, 3)] = 255;
+    img[(0, 4)] = 255;
+
+    img[(0, 7)] = 255;
+    img[(0, 8)] = 255;
+
+    img.show();
+    println!("{:?}", img.row(0));
+
+    let acc = crate::integral::Accumulated::calculate(img.as_ref());
+    let iw : &Window<i32> = acc.as_ref();
+    println!("{:?}", iw.row(0));
+    // for i in 0..5 {
+    //    println!("row {}: {:?}", i, iw.row(i).unwrap());
+    // }
+    // println!("Integral = {:?}", iw);
+    // println!("{:?}", iw.row(1));
+    let rle = RunLengthEncoding::calculate_from_accumulated(&acc, None, None);
+    // println!("{:?}", rle);
+}
+
+pub const MIN_VALID_INTEGRAL_COL_RANGE : usize = 8;
+
+pub const MIN_VALID_INTEGRAL_ROW_RANGE : usize = 8;
 
 impl RunLengthEncoding {
 
@@ -811,6 +1163,77 @@ impl RunLengthEncoding {
 
         verify_rle_state(&rle);
 
+        rle
+    }
+
+    pub fn calculate_from_accumulated(w : &dyn AsRef<Window<i32>>, min_valid_row_range : Option<usize>, min_valid_col_range : Option<usize>) -> Self {
+        let mut r = Self::default();
+        r.update_from_accumulated(w, min_valid_row_range, min_valid_col_range);
+        r
+    }
+
+    /* A RunLength encoding can usually be calculated much faster by bisection
+    over the rows of an accumulator image. At each iteration, check if boundary
+    pixels are equal. If they are, ignore the row region. This can be repeated
+    recursively over non-examined regions. When a region does not have equal
+    boundary pixels, it must be examined to determine the n RunLengths.
+    If the difference between pixels happen to be equal to the number of columns
+    times the non-zero constant value, we know there is a single RunLength there.
+    This might mean a performance gain because while calculating the IntegralImage
+    is a vectorized operation, pointwise evaluating the RunLenghts for flat images is not.
+    min_valid_range is the row length at which bisection stops, and can be chosen based on
+    the expected object width (smaller values mean more bisection iterations, which might
+    increase performance if objects are smaller than the desired range, since it reduces
+    the number of linear pixel iterations). A defaut value of 8 is used if no value is informed.
+    The image can also be bisected over whole row ranges, by passing the min_row_range argument. */
+    pub fn update_from_accumulated(
+        &mut self,
+        w : &dyn AsRef<Window<i32>>,
+        min_row_range : Option<usize>,
+        min_col_range : Option<usize>
+    ) {
+        let w = w.as_ref();
+
+        // assert!(w.width() % 2 == 0, "Pair number of columns required for bisection search");
+
+        self.rles.clear();
+        self.rows.clear();
+        let mut valid_rows = Vec::new();
+        calculate_valid_row_ranges(&mut valid_rows, w, 0, w.height() - 1, min_row_range.unwrap_or(MIN_VALID_INTEGRAL_ROW_RANGE));
+        valid_rows.sort_by(|a, b| a.start.cmp(&b.start) );
+
+        let mut valid_col_ranges = Vec::new();
+        for r in valid_rows.drain(..).flatten() {
+            calculate_valid_col_ranges(&mut valid_col_ranges, w, r, 0, w.width() - 1, min_col_range.unwrap_or(MIN_VALID_INTEGRAL_COL_RANGE));
+            valid_col_ranges.sort_by(|a, b| a.start.cmp(&b.start) );
+           //  println!("Before merge = {valid_ranges:?}");
+            merge_col_ranges(&mut valid_col_ranges);
+
+            /*for i in 0..(valid_ranges.len()-1) {
+                let s1 = &valid_ranges[i];
+                let s2 = &valid_ranges[i+1];
+
+                // Never partition in the middle of a RLE.
+                // assert!(w[(r, s2.start w[(r, s1.end)]
+            }*/
+
+            // println!("After merge = {valid_ranges:?}");
+            // println!("Ranges for row {r}:");
+            /*for r in &valid_ranges {
+                let mut r2 = r.clone();
+                r2.end += 1;
+                println!("{:?}", r2.collect::<Vec<_>>() );
+            }*/
+            for range in valid_col_ranges.drain(..) {
+                find_row_rles(&mut self.rles, &mut self.rows, w, r, range);
+            }
+        }
+        verify_rle_state(&self);
+    }
+
+    pub fn calculate(w : &Window<u8>) -> Self {
+        let mut rle = Self::default();
+        rle.update(w);
         rle
     }
 

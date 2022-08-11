@@ -136,6 +136,10 @@ where
         (self.buf.len() / self.width, self.width)
     }
 
+    pub fn area(&self) -> usize {
+        self.buf.len()
+    }
+
     pub fn width(&self) -> usize {
         self.width
     }
@@ -731,6 +735,14 @@ where
         self.window((0, 0), self.shape()).unwrap()
     }
     
+    pub fn row(&self, ix : usize) -> Option<&[N]> {
+        if ix >= self.height() {
+            return None;
+        }
+        let start = ix*self.width;
+        Some(&self.buf[start..(start+self.width)])
+    }
+
     /// Returns a mutably borrowed view over the whole window. Note the current mutable reference
     /// to the window is invalidated when this view enters into scope. Same as self.as_mut(). But is
     /// convenient to have, since type inference for the AsMut impl might not be triggered, or you
@@ -1306,6 +1318,16 @@ where
     N : Scalar + Copy
 {
 
+    pub fn row(&self, ix : usize) -> Option<&[N]> {
+        if ix >= self.win_sz.0 {
+            return None;
+        }
+        let stride = self.original_size().1;
+        let tl = self.offset.0 * stride + self.offset.1;
+        let start = tl + ix*stride;
+        Some(&self.win[start..(start+self.win_sz.1)])
+    }
+
     pub fn linear_index(&self, ix : usize) -> &N {
         assert!(ix < self.width() * self.height());
         let (row, col) = (ix / self.width(), ix % self.width());
@@ -1688,16 +1710,6 @@ where
     pub fn equivalent_windows(self, num_rows : usize, num_cols : usize) -> impl Iterator<Item=Window<'a, N>> {
         assert!(self.height() % num_rows == 0 && self.width() % num_cols == 0);
         self.clone().windows((self.height() / num_rows, self.width() / num_cols))
-    }
-
-    pub fn row(&self, ix : usize) -> Option<&[N]> {
-        if ix >= self.win_sz.0 {
-            return None;
-        }
-        let stride = self.original_size().1;
-        let tl = self.offset.0 * stride + self.offset.1;
-        let start = tl + ix*stride;
-        Some(&self.win[start..(start+self.win_sz.1)])
     }
 
     pub fn column(&'a self, ix : usize) -> Option<impl Iterator<Item=N> + 'a > {

@@ -634,16 +634,16 @@ fn homogeneous_regions() {
     let mut out_c = Image::<u8>::new_constant(out.height(), out.width(), 0);
     out_c.full_window_mut().convert_from(out.full_window(), Conversion::Stretch);
     // out_c.show();
-    let out_thr = FixedThreshold::new(Foreground::Above(10)).threshold(&out_c.full_window());
-    let mut out = out_thr.clone();
-    crate::gray::supress_binary_speckles(out_thr.as_ref(), out.full_window_mut(), 3);
+    //let out_thr = FixedThreshold::new(Foreground::Above(10)).threshold(&out_c.full_window());
+    //let mut out = out_thr.clone();
+    //crate::gray::supress_binary_speckles(out_thr.as_ref(), out.full_window_mut(), 3);
 
     // let mut seg = RasterSegmenter::new(out_thr.shape(), 1);
     // for patch in seg.segment_single_color(&out_thr.full_window(), |px| px == 0, ExpansionMode::Contour).iter() {
     //    out_thr.full_window_mut().draw_patch_contour(&patch, 255);
     // }
 
-    out.show();
+    // out.show();
 }
 
 pub struct PointExtractor {

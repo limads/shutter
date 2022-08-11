@@ -2,6 +2,8 @@
 
 #![doc(html_logo_url = "https://raw.githubusercontent.com/limads/shutter/master/assets/logo.png")]
 
+// #![feature(int_log)]
+
 /**
 
 mod ops {
@@ -33,6 +35,7 @@ Operations defined for raw image buffers that also result in raw image buffers
 | Operation                                             | u8 | i16 | i32 | f32 |
 |:-----------------------------------------------------:|:--:|:---:|:---:|:---:|
 | Arithmetic (add, sub, mul, div)                       | ✓  |  ✓  |  ✓  |  ✓  |
+| Scalar (add, sub, mul, div, invert)                   | ✓  |  ✓  |  ✓  |  ✓  |
 | Convolution                                           | ✓  |  ✓  |  ✓  |  ✓  |
 | Non-linear filtering (median, rank-order)             | ✓  |  ✓  |  ✓  |  ✓  |
 | Resampling                                            | ✓  |  ✓  |  ✓  |  ✓  |
@@ -41,6 +44,7 @@ Operations defined for raw image buffers that also result in raw image buffers
 | Logical (and, or, not, xor)                           | ✓  |     |     |     |
 | Grayscale (threshold, truncate, dither, quantization) | ✓  |     |     |     |
 | Morphology (erode, dilate, thin, thicken)             | ✓  |     |     |     |
+| Signed (abs, truncate)                                |    |  ✓  |  ✓  |  ✓  |
 
 # Transforms
 

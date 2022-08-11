@@ -5,6 +5,43 @@ use std::mem;
 use bayes::calc::*;
 use std::collections::BTreeMap;
 
+pub trait AdadptiveThreshold {
+
+}
+
+/*
+IppStatus ippiThresholdAdaptiveBoxGetBufferSize(IppiSize roiSize, IppiSize maskSize,
+IppDataType dataType, int numChannels, int* pBufferSize);
+
+IppStatus ippiThresholdAdaptiveBox_8u_C1R(const Ipp8u* pSrc, int srcStep, Ipp8u* pDst,
+int dstStep, IppiSize roiSize, IppiSize maskSize, Ipp32f delta, Ipp8u valGT, Ipp8u
+valLE, IppiBorderType borderType, Ipp8u borderValue, Ipp8u* pBuffer);
+
+IppStatus ippiThresholdAdaptiveGaussInit(IppiSize roiSize, IppiSize maskSize,
+IppDataType dataType, int numChannels, Ipp32f sigma, IppiThresholdAdaptiveSpec* pSpec);
+
+IppStatus ippiThresholdAdaptiveGauss_8u_C1R(const Ipp8u* pSrc, int srcStep, Ipp8u*
+pDst, int dstStep, IppiSize roiSize, Ipp32f delta, Ipp8u valGT, Ipp8u valLE,
+IppiBorderType borderType, Ipp8u borderValue, IppiThresholdAdaptiveSpec* pSpec, Ipp8u*
+pBuffer);
+*/
+
+/*
+
+IppStatus ippiReduceBitsGetBufferSize(IppChannels ippChan, IppiSize roiSize, int noise,
+IppiDitherType dtype, int* pBufferSize);
+
+IppStatus ippiReduceBits_8u_C1R(const Ipp<datatype>* pSrc, int srcStep, Ipp<datatype>*
+pDst, int dstStep, IppiSize roiSize, int noise, IppiDitherType dtype, int levels,
+Ipp8u* pBuffer);
+
+IppStatus ippiLUT_8u_C1R(const Ipp<datatype>* pSrc, int srcStep, Ipp<datatype>* pDst,
+int dstStep, IppiSize roiSize, IppiLUT_Spec* pSpec);
+
+IppStatus ippiToneMapLinear_32f8u_C1R(const Ipp32f* pSrc, int srcStep, Ipp8u* pDst, int
+dstStep, IppiSize roiSize);
+*/
+
 /*
 If pixel >= upper, set bin_dst to 1. If pixel <= lower, set bin_dst to 0. If pixel
 is >= lower and pixel <= upper, set it to 1 if it is connected to a 8-neighbor >= upper.
