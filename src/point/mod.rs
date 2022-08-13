@@ -34,6 +34,10 @@ ops {
 
     }
 
+    scalar {
+
+    }
+
 }*/
 
 /*
@@ -266,17 +270,18 @@ pub trait PointOp<N> {
 
     fn abs_diff_mut(&mut self, by : N);
 
-    // Increase/decrease brightness (add positive or negative scalar). Perhaps call brighten_mut/brighten
-    fn brightnen_mut(&mut self, by : N);
+    // Increase/decrease brightness (add positive or negative scalar). Perhaps call scalar_add_mut/brighten
+    fn scalar_add(&mut self, by : N);
 
     // Apply contrast enhancement (multiply by scalar > 1.0). Perhaps call stretch/stretch_mut
-    fn contrast_mut(&mut self, by : N);
+    fn scalar_mul(&mut self, by : N);
 
-    // Perhaps add stretch_brighten/stretch_brighten_mut that apply both brighten and stretch in a single pass.
+    // Perhaps add stretch_brighten/stretch_scalar_add_mut that apply both brighten and stretch in a single pass.
 
     // Perhaps add threshold ops to this trait, since threshold is a unary image op.
 
-    fn truncate_mut(&mut self, above : bool, val : N);
+    // Not available for Complex
+    // fn truncate_mut(&mut self, above : bool, val : N);
 
 }
 
@@ -532,7 +537,7 @@ pub fn expand(src : &Window<u8>, mut dst : WindowMut<u8>, win_side : usize) {
 
 impl <N> PointOp<N> for WindowMut<'_, N>
 where
-    N : MulAssign + AddAssign + Debug + Scalar + Copy + Default + Any + Sized + PartialOrd + num_traits::Zero
+    N : MulAssign + AddAssign + Debug + Scalar + Copy + Default + Any + Sized + num_traits::Zero
 {
 
     fn abs_mut(&mut self) {
@@ -596,7 +601,7 @@ where
         unimplemented!()
     }
 
-    fn brightnen_mut(&mut self, by : N) {
+    fn scalar_add(&mut self, by : N) {
 
         #[cfg(feature="ipp")]
         unsafe {
@@ -632,7 +637,7 @@ where
         unimplemented!()
     }
 
-    fn contrast_mut(&mut self, by : N) {
+    fn scalar_mul(&mut self, by : N) {
 
         #[cfg(feature="ipp")]
         unsafe {
@@ -680,7 +685,7 @@ where
         unimplemented!()
     }
 
-    fn truncate_mut(&mut self, above : bool, val : N) {
+    /*fn truncate_mut(&mut self, above : bool, val : N) {
         unsafe {
             match above {
                 true => {
@@ -691,8 +696,91 @@ where
                 },
             }
         }
-    }
+    }*/
 
+}
+
+/*
+pub trait AddTo { }
+pub trait MulTo { }
+*/
+
+#[cfg(feature="ipp")]
+pub fn div_to<N>(lhs : &Window<N>, rhs : &Window<N>, dst : &mut WindowMut<N>)
+where
+    N : Scalar + Copy + Clone + Debug + AddAssign + Default + Any + 'static
+{
+    let (lhs_stride, lhs_roi) = crate::image::ipputils::step_and_size_for_window(lhs);
+    let (rhs_stride, rhs_roi) = crate::image::ipputils::step_and_size_for_window(rhs);
+    let (dst_stride, dst_roi) = crate::image::ipputils::step_and_size_for_window_mut(dst);
+    unsafe {
+        if lhs.pixel_is::<f32>() {
+            let ans = crate::foreign::ipp::ippi::ippiDiv_32f_C1R(
+                mem::transmute(lhs.as_ptr()),
+                lhs_stride,
+                mem::transmute(rhs.as_ptr()),
+                rhs_stride,
+                mem::transmute(dst.as_mut_ptr()),
+                dst_stride,
+                lhs_roi        
+            );
+            assert!(ans == 0);
+            return;
+        }
+    }
+    unimplemented!();
+}
+
+#[cfg(feature="ipp")]
+pub fn mul_to<N>(lhs : &Window<N>, rhs : &Window<N>, dst : &mut WindowMut<N>)
+where
+    N : Scalar + Copy + Clone + Debug + AddAssign + Default + Any + 'static
+{
+    let (lhs_stride, lhs_roi) = crate::image::ipputils::step_and_size_for_window(lhs);
+    let (rhs_stride, rhs_roi) = crate::image::ipputils::step_and_size_for_window(rhs);
+    let (dst_stride, dst_roi) = crate::image::ipputils::step_and_size_for_window_mut(dst);
+    unsafe {
+        if lhs.pixel_is::<f32>() {
+            let ans = crate::foreign::ipp::ippi::ippiMul_32f_C1R(
+                mem::transmute(lhs.as_ptr()),
+                lhs_stride,
+                mem::transmute(rhs.as_ptr()),
+                rhs_stride,
+                mem::transmute(dst.as_mut_ptr()),
+                dst_stride,
+                lhs_roi        
+            );
+            assert!(ans == 0);
+            return;
+        }
+    }
+    unimplemented!();
+}
+
+#[cfg(feature="ipp")]
+pub fn add_to<N>(lhs : &Window<N>, rhs : &Window<N>, dst : &mut WindowMut<N>)
+where
+    N : Scalar + Copy + Clone + Debug + AddAssign + Default + Any + 'static
+{
+    let (lhs_stride, lhs_roi) = crate::image::ipputils::step_and_size_for_window(lhs);
+    let (rhs_stride, rhs_roi) = crate::image::ipputils::step_and_size_for_window(rhs);
+    let (dst_stride, dst_roi) = crate::image::ipputils::step_and_size_for_window_mut(dst);
+    unsafe {
+        if lhs.pixel_is::<f32>() {
+            let ans = crate::foreign::ipp::ippi::ippiAdd_32f_C1R(
+                mem::transmute(lhs.as_ptr()),
+                lhs_stride,
+                mem::transmute(rhs.as_ptr()),
+                rhs_stride,
+                mem::transmute(dst.as_mut_ptr()),
+                dst_stride,
+                lhs_roi
+            );
+            assert!(ans == 0);
+            return;
+        }
+    }
+    unimplemented!();
 }
 
 impl<'a, N> AddAssign<Window<'a, N>> for WindowMut<'a, N>

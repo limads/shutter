@@ -38,7 +38,7 @@ wide = "0.7.4"
 once_cell = { version = "1.5.2", optional = true }
 # lazy_static = "1.0"
 # structopt = "0.3"
-ripple = { path = "../ripple" }
+ripple = { path = "../ripple", features=["mkl"] }
 # away = { path = "../away" }
 bayes = { path = "../bayes" }
 itertools = "0.10.1"
@@ -61,18 +61,11 @@ rand = "0.8.5"
 # euclid = "0.22.6"
 
 [features]
+default = ["mkl", "ipp"]
 mkl=[]
 gsl=[]
 ipp=[]
 # opencvlib=[]
 vlfeatlib=[]
 # processor=[]
-
-[package.metadata]
-numerics = "scripts/shutter.lua"
-
-[target.x86_64-unknown-linux-gnu]
-rustflags = [
-    "-C", "link-arg=-fuse-ld=lld",
-]
 

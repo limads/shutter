@@ -1,3 +1,5 @@
+pub mod mosse;
+
 /*IppStatus ippiFGMMForeground_8u_C3R(const Ipp8u* pSrc, int srcStep, Ipp8u* pDst, int
 dstStep, IppiSize roi, IppFGMMState_8u_C3R* pState, IppFGMModel* pModel, double
 learning_rate );

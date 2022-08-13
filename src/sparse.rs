@@ -842,6 +842,9 @@ pub fn vertical_nonzero_bound_window<'a>(w : &'a Window<'a, u8>) -> Window<'a, u
     w.sub_window((min_r, min_c), shape).unwrap()
 }
 
+// RunLength encodings are sorted by starting points within rows
+// and also by rows, so to determine if a pixel is positive can be
+// done by bisection.
 #[derive(Debug, Clone, Default)]
 pub struct RunLengthEncoding {
     pub rles : Vec<RunLength>,

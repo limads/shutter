@@ -36,7 +36,7 @@ fn try_link_ippi() {
     }
 }*/
 
-fn try_link_vlfeat() {
+fn _try_link_vlfeat() {
     // if let Ok(_) = env::var("CARGO_FEATURE_VLFEATLIB") {
     //    println!("cargo:rustc-link-lib=vl");
     // }

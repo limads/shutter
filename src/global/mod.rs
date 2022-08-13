@@ -8,6 +8,24 @@ use num_traits::Zero;
 use std::ops::Add;
 use nalgebra::Scalar;
 use num_traits::AsPrimitive;
+use std::mem;
+
+#[cfg(feature="ipp")]
+pub fn mean_stddev(w : &Window<f32>) -> (f32, f32) {
+    let (stride, roi) = crate::image::ipputils::step_and_size_for_window(w);
+    unsafe {
+        let (mut mean, mut stddev) : (f64, f64) = (0. ,0.);
+        let ans = crate::foreign::ipp::ippcv::ippiMean_StdDev_32f_C1R(
+            w.as_ptr(),
+            stride,
+            mem::transmute(roi),
+            &mut mean as *mut _,
+            &mut stddev as *mut _
+        );
+        assert!(ans == 0);
+        (mean as f32, stddev as f32)
+    }
+}
 
 // TODO rename this module to fold
 
@@ -33,6 +51,25 @@ pub fn is_pairwise_min(a : &Window<'_, u8>, b : &Window<'_, u8>, mut dst : Windo
         return;
     }
 
+    unimplemented!()
+}
+
+#[cfg(feature="ipp")]
+pub fn max_f32(win : &Window<f32>) -> f32 {
+    if win.pixel_is::<f32>() {
+        let (step, roi) = crate::image::ipputils::step_and_size_for_window(win);
+        let mut max : f32 = 0.;
+        unsafe {
+            let ans = crate::foreign::ipp::ippi::ippiMax_32f_C1R(
+                std::mem::transmute(win.as_ptr()), 
+                step, 
+                roi, 
+                &mut max as *mut _
+            );
+            assert!(ans == 0);
+            return max;
+        }
+    }
     unimplemented!()
 }
 
