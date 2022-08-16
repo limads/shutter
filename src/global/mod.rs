@@ -1,4 +1,5 @@
 use std::cmp::{PartialOrd, Ord, Ordering};
+use crate::foreign::ipp;
 use crate::image::*;
 use serde::{Serialize, de::DeserializeOwned};
 use std::any::Any;
@@ -128,22 +129,25 @@ where
     S : Zero + From<f32> + From<N> + Add<Output=S>
 {
 
-    // TODO ignoring n_pxs parameter
-
     #[cfg(feature="ipp")]
     unsafe {
 
-        let (byte_stride, roi) = crate::image::ipputils::step_and_size_for_window(win);
+        let (step, roi) = crate::image::ipputils::step_and_size_for_window(win);
         let mut sum : f64 = 0.;
 
         if win.pixel_is::<u8>() {
-            let ans = crate::foreign::ipp::ippi::ippiSum_8u_C1R(std::mem::transmute(win.as_ptr()), byte_stride, roi, &mut sum as *mut _);
+            let ans = crate::foreign::ipp::ippi::ippiSum_8u_C1R(
+                std::mem::transmute(win.as_ptr()),
+                step,
+                roi,
+                &mut sum as *mut _
+            );
             assert!(ans == 0);
             return S::from(sum as f32);
         }
     }
 
-    win.pixels(1).fold(S::zero(), |s, px| s + S::from(*px) )
+    win.pixels(n_pxs).fold(S::zero(), |s, px| s + S::from(*px) )
 }
 
 pub fn min<N>(win : &Window<'_, N>) -> N
@@ -153,6 +157,14 @@ where
     *(win.pixels(1).min().unwrap())
 }
 
-/*IppStatus ippiDotProd_<mod> ( const Ipp<srcDatatype>* pSrc1 , int src1Step , const
-Ipp<srcDatatype>* pSrc2 , int src2Step , IppiSize roiSize , Ipp64f* pDp );*/
+pub fn dot_prod_to<N>(a : &Window<N>, b : &Window<u8>, dst : &mut WindowMut<N>)
+where
+    N : Scalar + Debug + Copy
+{
+
+    // use std::string::String;
+    // unsafe { crate::foreign:ipp::ippi::ippiDotProd_32f64f_C1R(src1, src2) }
+    // let ans = crate::foreign::ipp::ippi::ippiDotProd_( , int src1Step , const
+    // Ipp<srcDatatype>* pSrc2 , int src2Step , IppiSize roiSize , Ipp64f* pDp );*/
+}
 

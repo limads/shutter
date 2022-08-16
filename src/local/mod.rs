@@ -210,26 +210,46 @@ fn histogram_median_filter(src : &Window<'_, u8>, mut dst : WindowMut<'_, u8>, w
 }
 
 // This implements min-pool or max-pool.
-pub fn block_min_or_max<N>(win : &Window<'_, N>, dst : &mut WindowMut<'_, N>, is_maximum : bool)
-where
+pub fn block_min_or_max<N>(
+    win : &Window<'_, N>,
+    min_dst : Option<&mut WindowMut<'_, N>>,
+    max_dst : Option<&mut WindowMut<'_, N>>
+) where
     N : Scalar + Copy + Default + Zero + Copy
 {
 
-    assert!(win.width() % dst.width() == 0);
-    assert!(win.height() % dst.height() == 0);
-
-    let block_sz = (win.height() / dst.height(), win.width() / dst.width());
-    // let block_sz = (win.height() / num_blocks.0, win.width() / num_blocks.1);
+    let mut block_sz = (0, 0);
+    if let Some(dst) = &min_dst {
+        assert!(win.width() % dst.width() == 0);
+        assert!(win.height() % dst.height() == 0);
+        block_sz = (win.height() / dst.height(), win.width() / dst.width());
+    }
+    if let Some(dst) = &max_dst {
+        assert!(win.width() % dst.width() == 0);
+        assert!(win.height() % dst.height() == 0);
+        if block_sz.0 == 0 {
+            block_sz = (win.height() / dst.height(), win.width() / dst.width());
+        } else {
+            assert!(win.height() / dst.height() == block_sz.0 && win.width / dst.width() == block_sz.1);
+        }
+    }
+    assert!(block_sz.0 > 0 && block_sz.1 > 0);
 
     #[cfg(feature="ipp")]
     unsafe {
         let (src_step, src_sz) = crate::image::ipputils::step_and_size_for_window(win);
-        let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_window_mut(&dst);
+        let (dst_step, dst_sz) = if let Some(dst) = &min_dst {
+            crate::image::ipputils::step_and_size_for_window_mut(dst)
+        } else {
+            crate::image::ipputils::step_and_size_for_window_mut(max_dst.as_ref().unwrap())
+        };
 
         // If pdstmin or pdstmax are null, the corresponding result is not calculated.
-        let (ptr_dst_min, ptr_dst_max) : (*mut N, *mut N) = match is_maximum {
-            true => (std::ptr::null_mut(), dst.as_mut_ptr()),
-            false => (dst.as_mut_ptr(), std::ptr::null_mut())
+        let (ptr_dst_min, ptr_dst_max) : (*mut N, *mut N) = match (min_dst, max_dst) {
+            (Some(min), Some(max)) => (min.as_mut_ptr(), max.as_mut_ptr()),
+            (Some(min), None) => (min.as_mut_ptr(), std::ptr::null_mut()),
+            (None, Some(max)) => (std::ptr::null_mut(), max.as_mut_ptr()),
+            (None, None) => panic!("Either minimum or maximum should be Some(win)")
         };
         /*let mut other = dst.clone_owned();
         let (ptr_dst_min, ptr_dst_max) : (*mut u8, *mut u8) = match is_maximum {
@@ -237,7 +257,7 @@ where
             false => (dst.as_mut_ptr(), other.full_window_mut().as_mut_ptr())
         };*/
 
-        println!("{:?}", block_sz);
+        // println!("{:?}", block_sz);
 
         let block_size = crate::foreign::ipp::ippi::IppiSize  { width : block_sz.1 as i32, height : block_sz.0 as i32 };
         let src_ptr = win.as_ptr();

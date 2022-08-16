@@ -330,6 +330,9 @@ where
 impl<'a> Threshold for Window<'a, u8> {
 
     fn threshold_to(&self, fg : Foreground, out : &mut WindowMut<u8>) {
+
+        assert!(self.shape() == out.shape());
+
         #[cfg(feature="ipp")]
         unsafe { return ippi_full_threshold(fg, self, out); }
         baseline_threshold(self, fg, out);

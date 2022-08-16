@@ -783,6 +783,47 @@ where
     unimplemented!();
 }
 
+#[cfg(feature="ipp")]
+pub fn sub_to<N>(lhs : &Window<N>, rhs : &Window<N>, dst : &mut WindowMut<N>)
+where
+    N : Scalar + Copy + Clone + Debug + AddAssign + Default + Any + 'static
+{
+    let (lhs_stride, lhs_roi) = crate::image::ipputils::step_and_size_for_window(lhs);
+    let (rhs_stride, rhs_roi) = crate::image::ipputils::step_and_size_for_window(rhs);
+    let (dst_stride, dst_roi) = crate::image::ipputils::step_and_size_for_window_mut(dst);
+    let scale = 0;
+    unsafe {
+        if lhs.pixel_is::<u8>() {
+            let ans = crate::foreign::ipp::ippi::ippiSub_8u_C1RSfs(
+                mem::transmute(lhs.as_ptr()),
+                lhs_stride,
+                mem::transmute(rhs.as_ptr()),
+                rhs_stride,
+                mem::transmute(dst.as_mut_ptr()),
+                dst_stride,
+                lhs_roi,
+                scale
+            );
+            assert!(ans == 0);
+            return;
+        }
+        if lhs.pixel_is::<f32>() {
+            let ans = crate::foreign::ipp::ippi::ippiSub_32f_C1R(
+                mem::transmute(lhs.as_ptr()),
+                lhs_stride,
+                mem::transmute(rhs.as_ptr()),
+                rhs_stride,
+                mem::transmute(dst.as_mut_ptr()),
+                dst_stride,
+                lhs_roi
+            );
+            assert!(ans == 0);
+            return;
+        }
+    }
+    unimplemented!();
+}
+
 impl<'a, N> AddAssign<Window<'a, N>> for WindowMut<'a, N>
 where
     N : Scalar + Copy + Clone + Debug + AddAssign + Default + Any + 'static

@@ -25,6 +25,21 @@ pub struct PointEncoding {
 
 impl PointEncoding {
 
+    // Builds a PointEncoding from a set of points (assume neither order or uniqueness
+    // of the underlying array).
+    pub fn from_points(mut pts : Vec<(usize, usize)>) -> Self {
+        pts.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)) );
+        pts.dedup();
+        let mut rows = Vec::new();
+        let mut n = 0;
+        for (_, mut pts) in &pts.iter().group_by(|pt| pt.0 ) {
+            let row_len = pts.count();
+            rows.push(Range { start : n, end : n+row_len } );
+            n += row_len;
+        }
+        Self { pts, rows }
+    }
+
     /// Returns coordinates of dense set of points that are nonzero.
     pub fn encode(win : &Window<'_, u8>) -> Self {
         let mut pts = Vec::new();
@@ -78,6 +93,8 @@ impl PointEncoding {
 
                     // (Leave early if not)
                     if this_pt_row - self.pts[top_row.clone()][0].0 == 1 {
+
+                        // TODO move this match to return a function pointer.
                         let res_pt = match neigh {
                             Neighborhood::Immediate => {
                                 self.pts[top_row.clone()].binary_search_by(|pt| {
@@ -224,6 +241,18 @@ pub struct PointGraph {
 }
 
 impl PointGraph {
+
+    pub fn enclosing_rects(&self) -> BTreeMap<NodeIndex<u32>, (usize, usize, usize, usize)> {
+        let mut rects = BTreeMap::new();
+        for (ix, pts) in self.groups() {
+            let min_y = pts.iter().min_by(|a, b| a.0.cmp(&b.0) ).copied().unwrap().0;
+            let min_x = pts.iter().min_by(|a, b| a.1.cmp(&b.1) ).copied().unwrap().1;
+            let max_y = pts.iter().max_by(|a, b| a.0.cmp(&b.0) ).copied().unwrap().0;
+            let max_x = pts.iter().max_by(|a, b| a.1.cmp(&b.1) ).copied().unwrap().1;
+            rects.insert(ix, (min_y, min_x, max_y - min_y, max_x - min_x));
+        }
+        rects
+    }
 
     pub fn groups(&self) -> BTreeMap<NodeIndex<u32>, Vec<(usize, usize)>> {
         let mut grs = BTreeMap::new();
@@ -653,6 +682,10 @@ pub struct RunLength {
 }
 
 impl RunLength {
+
+    pub fn points<'a>(&'a self) -> impl Iterator<Item=(usize, usize)> + 'a {
+        ((self.start.1)..(self.start.1 + self.length)).map(move |c| (self.start.0, c) )
+    }
 
     pub fn middle_points<'a>(&'a self) -> impl Iterator<Item=(usize, usize)> + 'a {
         ((self.start.1+1)..(self.end().1.saturating_sub(1))).map(move |c| (self.start.0, c) )
@@ -1169,10 +1202,47 @@ impl RunLengthEncoding {
         rle
     }
 
-    pub fn calculate_from_accumulated(w : &dyn AsRef<Window<i32>>, min_valid_row_range : Option<usize>, min_valid_col_range : Option<usize>) -> Self {
+    pub fn calculate_from_accumulated(
+        w : &dyn AsRef<Window<i32>>,
+        min_valid_row_range : Option<usize>,
+        min_valid_col_range : Option<usize>
+    ) -> Self {
         let mut r = Self::default();
         r.update_from_accumulated(w, min_valid_row_range, min_valid_col_range);
         r
+    }
+
+    // Similar to prune, but leaves the extremities untouched and examine
+    // only the middle of the RunLenghth, possibly splitting them into
+    // two or more RunLengths depending on whether there are new unmatched
+    // pixels separating them.
+    pub fn split(&mut self, w : &dyn AsRef<Window<u8>>) {
+
+    }
+
+    // Similar to expand, but shortens unmatched RunLength regions (or remove
+    // them entirely), by just examining their extremities.
+    pub fn prune(&mut self, w : &dyn AsRef<Window<u8>>) {
+
+    }
+
+    // Prunes, then expands the current RunLenghs.
+    pub fn prune_and_expand(&mut self, w : &dyn AsRef<Window<u8>>) {
+        self.prune(w);
+        self.expand(w);
+    }
+
+    /* Updates the current RLE by iterating only over pixels *outside* the RLE, but
+    connected to it.
+    This is useful for an iterative thresholding strategy: If the desired foreground
+    is more extreme than the current one, we know the RLE should contain at least the
+    current pixels, therefore it is not necessary to iterate over them anymore. For
+    this strategy to work, always start from a more conservative estimate, and increment
+    towards a more extreme value. This only examines pixels that are either at the start,
+    end, top or bottom of existing RLEs, or pixels neihboring the new matched regions recursively.
+    Pixel rows outside these neighborhoods are ignored. */
+    pub fn expand(&mut self, w : &dyn AsRef<Window<u8>>) {
+        let mut r = 0;
     }
 
     /* A RunLength encoding can usually be calculated much faster by bisection
@@ -1256,30 +1326,17 @@ impl RunLengthEncoding {
         for r in 0..w.height() {
 
             let mut curr_range = Range { start : self.rles.len(), end : self.rles.len() };
-            for c in 0..w.width() {
-                if w[(r, c)] == 0 {
 
-                    // End current run-length (if any) when match is zero.
-                    if let Some(rle) = last_rle.take() {
-                        self.rles.push(rle);
-                        curr_range.end += 1;
-                    }
+            update_range(w, r, 0..w.width(), &mut last_rle, &mut curr_range, &mut self.rles);
 
-                } else {
-                    if let Some(mut rle) = last_rle.as_mut() {
-                        // Extend current run-length (if any) for a nonzero match.
-                        rle.length += 1;
-                    } else {
-                        // Innaugurate a new run-length if there isn't one already.
-                        last_rle = Some(RunLength { start : (r, c), length : 1 });
-                    }
-                }
-            }
+            // Push any remaining RunLenghts that haven't ended before the last column.
             if let Some(rle) = last_rle.take() {
                 self.rles.push(rle);
                 curr_range.end += 1;
             }
 
+            // If at least one RunLength has been pushed, add this range to the
+            // row count. If no RunLenghts have been pushed, ignore this range.
             if curr_range.end > curr_range.start {
                 self.rows.push(curr_range);
             }
@@ -1287,6 +1344,8 @@ impl RunLengthEncoding {
 
         verify_rle_state(&self);
     }
+
+
 
     pub fn new() -> Self {
         Default::default()
@@ -1364,6 +1423,34 @@ impl RunLengthEncoding {
         }
 
         RunLengthGraph { graph, uf }
+    }
+}
+
+fn update_range(
+    w : &Window<u8>,
+    r : usize,
+    cols : Range<usize>,
+    last_rle : &mut Option<RunLength>,
+    curr_range : &mut Range<usize>,
+    rles : &mut Vec<RunLength>
+) {
+    for c in cols {
+        if w[(r, c)] == 0 {
+            // End current run-length (if any) when match is zero.
+            if let Some(rle) = last_rle.take() {
+                rles.push(rle);
+                curr_range.end += 1;
+            }
+
+        } else {
+            if let Some(mut rle) = last_rle.as_mut() {
+                // Extend current run-length (if any) for a nonzero match.
+                rle.length += 1;
+            } else {
+                // Innaugurate a new run-length if there isn't one already.
+                *last_rle = Some(RunLength { start : (r, c), length : 1 });
+            }
+        }
     }
 }
 
@@ -1780,3 +1867,13 @@ fn inner_rects() {
     }
 }
 
+// Represents a binary image in terms of rects. The smallest rects are pixels;
+// the largest rect is the full image. Always use the largest possible rect to
+// represent an object.
+pub struct RectEncoding {
+
+}
+
+impl RectEncoding {
+
+}
