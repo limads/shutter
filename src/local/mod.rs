@@ -9,6 +9,14 @@ pub use ripple::conv::*;
 use std::fmt::Debug;
 use crate::raster::Raster;
 
+// Ipp only has separable convolution for f32 and i16 types; and
+// conventional convolution for f32, i16 and u8 types.
+
+// Before convolving an u8 image, be sure to divide the image the filter
+// denominator scale factor, then convolve with the unscaled filter to
+// get the result (they are prefixed with UNSCALED_). This guarantees
+// the output will be in the domain of the original image and won't be saturated.s
+
 #[derive(Debug, Clone)]
 pub struct SepFilter<T>
 where
@@ -144,6 +152,85 @@ fn local_median_filtering(win : Window<u8>, mut dst : WindowMut<u8>, hist : &mut
         *(dst.linear_index_mut(5)) = median.saturating_sub(1);
     }
 }
+
+/*
+Based on https://rosettacode.org/wiki/Median_filter
+void del_pixels(image im, int row, int col, int size, color_histo_t *h)
+{
+	int i;
+	rgb_t *pix;
+
+	if (col < 0 || col >= im->w) return;
+	for (i = row - size; i <= row + size && i < im->h; i++) {
+		if (i < 0) continue;
+		pix = im->pix[i] + col;
+		h->r[pix->r]--;
+		h->g[pix->g]--;
+		h->b[pix->b]--;
+		h->n--;
+	}
+}
+
+void add_pixels(image im, int row, int col, int size, color_histo_t *h)
+{
+	int i;
+	rgb_t *pix;
+
+	if (col < 0 || col >= im->w) return;
+	for (i = row - size; i <= row + size && i < im->h; i++) {
+		if (i < 0) continue;
+		pix = im->pix[i] + col;
+		h->r[pix->r]++;
+		h->g[pix->g]++;
+		h->b[pix->b]++;
+		h->n++;
+	}
+}
+
+void init_histo(image im, int row, int size, color_histo_t*h)
+{
+	int j;
+
+	memset(h, 0, sizeof(color_histo_t));
+
+	for (j = 0; j < size && j < im->w; j++)
+		add_pixels(im, row, j, size, h);
+}
+
+int median(const int *x, int n)
+{
+	int i;
+	for (n /= 2, i = 0; i < 256 && (n -= x[i]) > 0; i++);
+	return i;
+}
+
+void median_color(rgb_t *pix, const color_histo_t *h)
+{
+	pix->r = median(h->r, h->n);
+	pix->g = median(h->g, h->n);
+	pix->b = median(h->b, h->n);
+}
+
+image median_filter(image in, int size)
+{
+	int row, col;
+	image out = img_new(in->w, in->h);
+	color_histo_t h;
+
+	for (row = 0; row < in->h; row ++) {
+		for (col = 0; col < in->w; col++) {
+			if (!col) init_histo(in, row, size, &h);
+			else {
+				del_pixels(in, row, col - size, size, &h);
+				add_pixels(in, row, col + size, size, &h);
+			}
+			median_color(out->pix[row] + col, &h);
+		}
+	}
+
+	return out;
+}
+*/
 
 pub fn local_sum(src : &Window<'_, u8>, dst : &mut WindowMut<'_, i32>) {
 
@@ -506,8 +593,10 @@ pub trait ConvolveSep {
 
     type OwnedOutput;
 
+    // Separable convolution is with border only input.shape() == output.shape()
     fn convolve_sep_mut(&self, filter_vert : &Self, filter_horiz : &Self, conv : Convolution, out : &mut Self::Output);
 
+    // Separable convolution is with border only input.shape() == output.shape()
     fn convolve_sep(&self, filter_vert : &Self, filter_horiz : &Self, conv : Convolution) -> Self::OwnedOutput;
 
 }
@@ -526,7 +615,7 @@ where
         #[cfg(feature="ipp")]
         unsafe {
             if self.pixel_is::<f32>() {
-                ipp_sep_convolution_f32(
+                ipp_sep_convolution_float(
                     mem::transmute(self),
                     mem::transmute(filter_vert),
                     mem::transmute(filter_horiz),
@@ -534,13 +623,22 @@ where
                 );
                 return;
             } else if self.pixel_is::<i16>() {
-                ipp_sep_convolution_i16(
+                ipp_sep_convolution_integer(
                     mem::transmute(self),
                     mem::transmute(filter_vert),
                     mem::transmute(filter_horiz),
                     mem::transmute(out)
                 );
                 return;
+            } else if self.pixel_is::<i32>() {
+                /*ipp_sep_convolution_integer(
+                    self,
+                    filter_vert,
+                    filter_horiz,
+                    out
+                );
+                return;*/
+                unimplemented!()
             }
         }
 
@@ -732,6 +830,10 @@ pub mod edge {
 
     pub const SOBEL_HORIZ_ROW_INT : Window<'static, i16> = Window::from_static::<3, 3>(&[1, 0, -1]);
 
+    pub const SOBEL_HORIZ_COL_I32 : Window<'static, i32> = Window::from_static::<3, 1>(&[1, 2, 1]);
+
+    pub const SOBEL_HORIZ_ROW_I32 : Window<'static, i32> = Window::from_static::<3, 3>(&[1, 0, -1]);
+
     pub const SOBEL_VERT_COL_INT : Window<'static, i16> = Window::from_static::<3, 1>(&[1, 0, -1]);
 
     pub const SOBEL_VERT_ROW_INT : Window<'static, i16> = Window::from_static::<3, 3>(&[1, 2, 1]);
@@ -750,14 +852,27 @@ pub mod blur {
         FRAC_1_3, FRAC_1_3, FRAC_1_3
     ]);
 
+    pub const BOX5_SEP : Window<'static, f32> = Window::from_static::<5, 5>(&[
+        1., 1., 1., 1., 1.
+    ]);
+
     pub const BOX3 : Window<'static, f32> = Window::from_static::<9, 3>(&[
         FRAC_1_9, FRAC_1_9, FRAC_1_9,
         FRAC_1_9, FRAC_1_9, FRAC_1_9,
         FRAC_1_9, FRAC_1_9, FRAC_1_9,
     ]);
 
-    pub const BOX5_SEP : Window<'static, f32> = Window::from_static::<5, 5>(&[
-        1., 1., 1., 1., 1.
+    // Divide your input by 9 before applying convolution.
+    pub const UNSCALED_BOX3_U16 : Window<'static, i16> = Window::from_static::<9, 3>(&[
+        1, 1, 1,
+        1, 1, 1,
+        1, 1, 1,
+    ]);
+
+    pub const UNSCALED_BOX3_U8 : Window<'static, u8> = Window::from_static::<9, 3>(&[
+        1, 1, 1,
+        1, 1, 1,
+        1, 1, 1,
     ]);
 
     pub const BOX5 : Window<'static, f32> = Window::from_static::<25, 5>(&[
@@ -766,6 +881,42 @@ pub mod blur {
         FRAC_1_25,FRAC_1_25,FRAC_1_25,FRAC_1_25,FRAC_1_25,
         FRAC_1_25,FRAC_1_25,FRAC_1_25,FRAC_1_25,FRAC_1_25,
         FRAC_1_25,FRAC_1_25,FRAC_1_25,FRAC_1_25,FRAC_1_25
+    ]);
+
+    // Divide your output by 25 after applying convolution.
+    pub const UNSCALED_BOX5_I16 : Window<'static, i16> = Window::from_static::<25, 5>(&[
+        1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1,
+    ]);
+
+    // Divide your output by 25 after applying convolution.
+    pub const UNSCALED_BOX5_U8 : Window<'static, u8> = Window::from_static::<25, 5>(&[
+        1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1,
+    ]);
+
+    // Divide your output by 256 after applying convolution.
+    pub const UNSCALED_GAUSS_I16 : Window<'static, i16> = Window::from_static::<25, 5>(&[
+        1, 4,  6,  4,  1,
+        4, 16, 24, 16, 4,
+        6, 24, 36, 24, 6,
+        4, 16, 24, 16, 4,
+        1, 4,  6,  4,  1,
+    ]);
+
+    // Divide your output by 256 after applying convolution.
+    pub const UNSCALED_GAUSS_U8 : Window<'static, u8> = Window::from_static::<25, 5>(&[
+        1, 4,  6,  4,  1,
+        4, 16, 24, 16, 4,
+        6, 24, 36, 24, 6,
+        4, 16, 24, 16, 4,
+        1, 4,  6,  4,  1,
     ]);
 
     // Gaussian filter (Szelisky, p. 116).
@@ -903,6 +1054,8 @@ impl ConvSepParams {
             crate::foreign::ipp::ippcore::IppDataType_ipp32f
         } else if img.pixel_is::<i16>() {
             crate::foreign::ipp::ippcore::IppDataType_ipp16s
+        } else if img.pixel_is::<i32>() {
+            crate::foreign::ipp::ippcore::IppDataType_ipp32s
         } else {
             panic!("Invalid data type")
         };
@@ -951,7 +1104,7 @@ impl ConvSepParams {
 }
 
 #[cfg(feature="ipp")]
-unsafe fn ipp_sep_convolution_i16(
+unsafe fn ipp_sep_convolution_integer(
     img : &Window<i16>,
     col_kernel : &Window<i16>,
     row_kernel : &Window<i16>,
@@ -967,35 +1120,70 @@ unsafe fn ipp_sep_convolution_i16(
 
     let mut params = ConvSepParams::evaluate(img, row_kernel, col_kernel, out);
 
-    let scale_factor = 1;
-    let ans = crate::foreign::ipp::ippcv::ippiFilterSeparableInit_16s(
-        row_kernel.as_ptr(),
-        col_kernel.as_ptr(),
-        mem::transmute(params.kernel_sz),
-        divisor,
-        scale_factor,
-        params.src_ty,
-        params.num_channels,
-        mem::transmute(params.spec.as_mut_ptr())
-    );
+    let ans = if img.pixel_is::<i16>() {
+        let scale_factor = 1i32;
+        crate::foreign::ipp::ippcv::ippiFilterSeparableInit_16s(
+            row_kernel.as_ptr(),
+            col_kernel.as_ptr(),
+            mem::transmute(params.kernel_sz),
+            divisor,
+            scale_factor,
+            params.src_ty,
+            params.num_channels,
+            mem::transmute(params.spec.as_mut_ptr())
+        )
+    } else if img.pixel_is::<i32>() {
+        /*let scale_factor = 1i32;
+        crate::foreign::ipp::ippcv::ippiFilterSeparableInit_32s(
+            mem::transmute(row_kernel.as_ptr()),
+            mem::transmute(col_kernel.as_ptr()),
+            mem::transmute(params.kernel_sz),
+            divisor,
+            scale_factor,
+            params.src_ty,
+            params.num_channels,
+            mem::transmute(params.spec.as_mut_ptr())
+        )*/
+        unimplemented!()
+    } else {
+        panic!("Invalid pixel type");
+    };
     assert!(ans == 0);
-    let border_const_val = 0i16;
-    let ans = crate::foreign::ipp::ippcv::ippiFilterSeparable_16s_C1R(
-        img.as_ptr(),
-        params.img_stride,
-        out.as_mut_ptr(),
-        params.out_stride,
-        mem::transmute(params.img_sz),
-        params.border_ty,
-        border_const_val,
-        mem::transmute(params.spec.as_ptr()),
-        params.buffer.as_mut_ptr()
-    );
+    let ans = if img.pixel_is::<i16>() {
+        let border_const_val = 0i16;
+        crate::foreign::ipp::ippcv::ippiFilterSeparable_16s_C1R(
+            mem::transmute(img.as_ptr()),
+            params.img_stride,
+            mem::transmute(out.as_mut_ptr()),
+            params.out_stride,
+            mem::transmute(params.img_sz),
+            params.border_ty,
+            border_const_val,
+            mem::transmute(params.spec.as_ptr()),
+            params.buffer.as_mut_ptr()
+        )
+    } else if img.pixel_is::<i32>() {
+        /*let border_const_val = 0i32;
+        crate::foreign::ipp::ippcv::ippiFilterSeparable_32s_C1R(
+            mem::transmute(img.as_ptr()),
+            params.img_stride,
+            mem::transmute(out.as_mut_ptr()),
+            params.out_stride,
+            mem::transmute(params.img_sz),
+            params.border_ty,
+            border_const_val,
+            mem::transmute(params.spec.as_ptr()),
+            params.buffer.as_mut_ptr()
+        )*/
+        unimplemented!()
+    } else {
+        panic!("Invalid pixel type");
+    };
     assert!(ans == 0);
 }
 
 #[cfg(feature="ipp")]
-unsafe fn ipp_sep_convolution_f32(
+unsafe fn ipp_sep_convolution_float(
     img : &Window<f32>,
     col_kernel : &Window<f32>,
     row_kernel : &Window<f32>,
@@ -1029,7 +1217,6 @@ unsafe fn ipp_sep_convolution_f32(
     );
     assert!(ans == 0);
 }
-
 
 #[cfg(feature="ipp")]
 pub struct ConvParams {
@@ -1179,6 +1366,35 @@ unsafe fn ipp_convolution_f32(img : &Window<f32>, kernel : &Window<f32>, out : &
     assert!(status == 0);
 }
 
+/*#[cfg(feature="ipp")]
+unsafe fn ipp_convolution_i32(img : &Window<i32>, kernel : &Window<i32>, out : &mut WindowMut<i32>) {
+
+    use crate::foreign::ipp::ippi::*;
+    use std::os::raw::c_int;
+
+    let mut params = ConvParams::evaluate(img, kernel, out);
+
+    // In the worst case that the image content is u8::MAX and the kernel
+    // is u8::MAX, the result will be divided by u8::MAX*kernel_sz, thus
+    // making the output u8::MAX.
+    let divisor = (crate::global::sum::<_, f64>(kernel, 1) as i32).max(1);
+
+    let status = ippiConv_32s_C1R(
+        img.as_ptr(),
+        params.img_stride,
+        params.img_sz,
+        kernel.as_ptr(),
+        params.kernel_stride,
+        params.kernel_sz,
+        out.as_mut_ptr(),
+        params.out_stride,
+        divisor,
+        params.alg_ty,
+        params.conv_buffer.as_mut_ptr()
+    );
+    assert!(status == 0);
+}*/
+
 // Waiting GAT stabilization
 /*impl<N> Convolve for Image<N>
 where
@@ -1198,6 +1414,19 @@ N : Scalar + Copy + Default + Zero + Copy + Serialize + DeserializeOwned +
 
     type OwnedOutput = Image<N>;
 
+    // Convolution is whithout border (require out.width == self.width-kernel.width+1
+    // and out.height == self.height-kernel.height+1). To keep the original size, use
+    // convolve_padded_mut, which will write the result to the center of the buffer.
+    fn convolve_padded_mut(&self, filter : &Self, conv : Convolution, mut out : Self::Output) {
+        assert!(self.shape() == out.shape());
+        let shape = (self.height()-filter.height()+1, self.width()-filter.width()+ 1);
+        self.convolve_mut(
+            filter,
+            conv,
+            &mut out.sub_window_mut((filter.height() / 2, filter.width() / 2), shape).unwrap()
+        );
+    }
+
     fn convolve_mut(&self, filter : &Self, conv : Convolution, out : &mut Self::Output) {
 
         #[cfg(feature="ipp")]
@@ -1216,6 +1445,11 @@ N : Scalar + Copy + Default + Zero + Copy + Serialize + DeserializeOwned +
                 ipp_convolution_i16(mem::transmute(self), mem::transmute(filter), mem::transmute(out));
                 return;
             }
+
+            /*if self.pixel_is::<i32>() {
+                ipp_convolution_i32(mem::transmute(self), mem::transmute(filter), mem::transmute(out));
+                return;
+            }*/
         }
 
         #[cfg(feature="mkl")]
@@ -1260,8 +1494,15 @@ N : Scalar + Copy + Default + Zero + Copy + Serialize + DeserializeOwned +
 
     fn convolve(&self, filter : &Self, conv : Convolution) -> Image<N> {
         let (height, width) = linear_conv_sz(self.shape(), filter.shape());
-        let mut out = Image::new_constant(height, width, N::zero());
+        let mut out = unsafe { Image::new_empty(height, width) };
         self.convolve_mut(filter, conv, &mut out.full_window_mut());
+        out
+    }
+
+    fn convolve_padded(&self, filter : &Self, conv : Convolution) -> Image<N> {
+        let (height, width) = linear_conv_sz(self.shape(), filter.shape());
+        let mut out = unsafe { Image::new_empty(self.height(), self.width()) };
+        self.convolve_mut(filter, conv, &mut out.window_mut((filter.height() / 2, filter.width() / 2), (height, width)).unwrap());
         out
     }
 

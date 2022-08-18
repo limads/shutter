@@ -296,9 +296,9 @@ where
     N : Copy + Scalar + Clone + Debug
 {
 
-    fn convert_into(&self, conv : Conversion, other : &mut WindowMut<'a, N>);
+    fn convert_to(&self, conv : Conversion, other : &mut WindowMut<'a, N>);
 
-    fn convert_owned(&self, conv : Conversion) -> Image<N>;
+    fn convert(&self, conv : Conversion) -> Image<N>;
 
 }
 
@@ -311,13 +311,13 @@ where
     M : Scalar + Default + num_traits::cast::AsPrimitive<N> + Zero + Bounded + Mul<Output=M> + Div<Output=M> + One + Any + ToPrimitive + PartialOrd,
 {
 
-    fn convert_into(&self, conv : Conversion, other : &mut WindowMut<'a, N>) {
+    fn convert_to(&self, conv : Conversion, other : &mut WindowMut<'a, N>) {
         unsafe { mem::transmute::<_, &'a mut WindowMut<'a, N>>(other).convert_from(self.clone(), conv); }
     }
 
-    fn convert_owned(&self, conv : Conversion) -> Image<N> {
+    fn convert(&self, conv : Conversion) -> Image<N> {
         let mut out = unsafe { Image::<N>::new_empty(self.height(), self.width()) };
-        unsafe { self.convert_into(conv, mem::transmute::<_, &'a mut WindowMut<'a, N>>(&mut out.full_window_mut())) };
+        unsafe { self.convert_to(conv, mem::transmute::<_, &'a mut WindowMut<'a, N>>(&mut out.full_window_mut())) };
         out
     }
 
@@ -331,14 +331,14 @@ where
     M : Scalar + Default + num_traits::cast::AsPrimitive<N> + Zero + Bounded + Mul<Output=M> + Div<Output=M> + One + Any + ToPrimitive + PartialOrd,
 {
 
-    fn convert_into(&self, conv : Conversion, other : &mut WindowMut<'a, N>) {
+    fn convert_to(&self, conv : Conversion, other : &mut WindowMut<'a, N>) {
         let other = unsafe {  mem::transmute::<_, &'a mut WindowMut<'a, N>>(other) };
         unsafe { other.convert_from(mem::transmute::<_, Window<'a, M>>(self.full_window()), conv) };
     }
 
-    fn convert_owned(&self, conv : Conversion) -> Image<N> {
+    fn convert(&self, conv : Conversion) -> Image<N> {
         let mut out = unsafe { Image::<N>::new_empty(self.height(), self.width()) };
-        unsafe { self.convert_into(conv, mem::transmute::<_, &'a mut WindowMut<'a, N>>(&mut out.full_window_mut())) };
+        unsafe { self.convert_to(conv, mem::transmute::<_, &'a mut WindowMut<'a, N>>(&mut out.full_window_mut())) };
         out
     }
 
@@ -348,10 +348,17 @@ where
 // For floating point to integer conversions, a range must be specified. For integer data, the
 // limits of the datatype itself is used.
 
+// IppiConvert only supports:
+// Unsigned to Unsigned of higher depth
+// Unsigned or signed to signed of higher depth
+// All to float.
+// Float to integer
+// For other conversions, must use IppiScale.
+
 #[cfg(feature="ipp")]
 pub unsafe fn ippi_convert<S,T>(src : &Window<'_, S>, dst : &mut WindowMut<'_, T>, conv : Conversion)
 where
-    S : Scalar + Any + Copy + ToPrimitive + PartialOrd,
+    S : Scalar + Any + Copy + ToPrimitive + PartialOrd ,
     T : Scalar + Copy + Default + Any + ToPrimitive + PartialOrd,
     u8 : AsPrimitive<S>
 {
@@ -493,16 +500,40 @@ where
 
     // u8 -> i32
     if src.pixel_is::<u8>() && dst.pixel_is::<i32>() {
-        unimplemented!()
+        match conv {
+            Conversion::Preserve => {
+                status = Some(crate::foreign::ipp::ippi::ippiConvert_8u32s_C1R(
+                    src_ptr as *const u8,
+                    src_step,
+                    dst_ptr as *mut i32,
+                    dst_step,
+                    size
+                ));
+            },
+            _ => unimplemented!()
+        }
     }
 
     // i32 -> u8
     if src.pixel_is::<i32>() && dst.pixel_is::<u8>() {
+        let offset = 0.0;
         match conv {
             Conversion::Normalize => {
                 let max = crate::global::max(src).to_f64().unwrap();
                 let scale = (1. / max) * u8::max_value() as f64;
-                let offset = 0.0;
+                status = Some(crate::foreign::ipp::ippi::ippiScaleC_32s8u_C1R(
+                    src_ptr as *const i32,
+                    src_step,
+                    scale,
+                    offset,
+                    dst_ptr as *mut u8,
+                    dst_step,
+                    size,
+                    crate::foreign::ipp::ippi::IppHintAlgorithm_ippAlgHintFast
+                ));
+            },
+            Conversion::Preserve => {
+                let scale = u8::max_value() as f64;
                 status = Some(crate::foreign::ipp::ippi::ippiScaleC_32s8u_C1R(
                     src_ptr as *const i32,
                     src_step,
@@ -518,6 +549,39 @@ where
         }
     }
 
+    if src.pixel_is::<i16>() && dst.pixel_is::<i32>() {
+        match conv {
+            Conversion::Preserve => {
+                status = Some(crate::foreign::ipp::ippi::ippiConvert_16s32s_C1R(
+                    src_ptr as *const i16,
+                    src_step,
+                    dst_ptr as *mut i32,
+                    dst_step,
+                    size
+                ));
+            },
+            _ => unimplemented!()
+        }
+    }
+
+    if src.pixel_is::<i32>() && dst.pixel_is::<i16>() {
+        match conv {
+            Conversion::Preserve => {
+                let scale = 0;
+                status = Some(crate::foreign::ipp::ippi::ippiConvert_32s16s_C1RSfs(
+                    src_ptr as *const i32,
+                    src_step,
+                    dst_ptr as *mut i16,
+                    dst_step,
+                    size,
+                    crate::foreign::ipp::ippcore::IppRoundMode_ippRndNear,
+                    scale
+                ));
+            },
+            _ => unimplemented!()
+        }
+    }
+
     match status {
         Some(status) => ipputils::check_status("Conversion", status),
         None => panic!("Invalid conversion type")
@@ -525,3 +589,16 @@ where
 
 }
 
+// Conversion between unsigned integer types
+// increase_depth
+// reduce_depth
+
+// Conversion between signed/unsigned integer types
+// increase_depth_abs
+// reduce_depth_abs
+
+// Converstion integer <-> float
+// ratio_to_scalar (uses random scalar)
+// ratio_to_bound (uses integer bounds)
+// ratio_to_max (uses maximum at current image)
+// ratio_to_min_max (uses minimum and maximum at current image)

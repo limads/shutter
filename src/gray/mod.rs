@@ -4,6 +4,7 @@ use crate::prelude::Raster;
 use std::mem;
 use bayes::calc::*;
 use std::collections::BTreeMap;
+use std::ops::Sub;
 
 pub trait AdadptiveThreshold {
 
@@ -657,40 +658,50 @@ pub fn truncate_abs<'a>(src : &'a Window<'a, i16>, dst : &'a mut WindowMut<'a, u
     dst.pixels_mut(1).zip(src.pixels(1)).for_each(move |(d, s)| *d = s.abs() as u8 );
 }
 
-pub fn invert_colors(win : &Window<'_, u8>, mut dst : WindowMut<'_, u8>) {
+pub fn invert_colors<N>(win : &Window<'_, N>, mut dst : WindowMut<'_, N>)
+where
+    N : UnsignedPixel + Sub<Output=N>
+{
 
     assert!(win.shape() == dst.shape());
 
     #[cfg(feature="ipp")]
     unsafe {
-        let src_step = crate::image::ipputils::byte_stride_for_window(win);
-        let dst_step = crate::image::ipputils::byte_stride_for_window_mut(&dst);
-        let src_sz = crate::image::ipputils::window_size(win);
-        let ans = crate::foreign::ipp::ippcv::ippiAbsDiffC_8u_C1R(
-            win.as_ptr(),
-            src_step,
-            dst.as_mut_ptr(),
-            dst_step,
-            std::mem::transmute(src_sz),
-            255
-        );
-        assert_eq!(ans, 0);
-        return;
+        if win.pixel_is::<u8>() {
+            let src_step = crate::image::ipputils::byte_stride_for_window(win);
+            let dst_step = crate::image::ipputils::byte_stride_for_window_mut(&dst);
+            let src_sz = crate::image::ipputils::window_size(win);
+            let ans = crate::foreign::ipp::ippcv::ippiAbsDiffC_8u_C1R(
+                mem::transmute(win.as_ptr()),
+                src_step,
+                mem::transmute(dst.as_mut_ptr()),
+                dst_step,
+                std::mem::transmute(src_sz),
+                255
+            );
+            assert_eq!(ans, 0);
+            return;
+        }
     }
 
+    let max = N::max_value();
     for i in 0..win.height() {
         for j in 0..win.width() {
-            dst[(i, j)] = 255 - win[(i, j)];
+            dst[(i, j)] = max - win[(i, j)];
         }
     }
 }
 
-pub fn invert_colors_inplace(win : &mut WindowMut<'_, u8>) {
+pub fn invert_colors_inplace<N>(win : &mut WindowMut<'_, N>)
+where
+    N : UnsignedPixel + Sub<Output=N>
+{
     // win.pixels_mut(1).for_each(|px| *px = 255 - *px );
 
+    let max = N::max_value();
     for i in 0..win.height() {
         for j in 0..win.width() {
-            win[(i, j)] = 255 - win[(i, j)];
+            win[(i, j)] = max - win[(i, j)];
         }
     }
 }

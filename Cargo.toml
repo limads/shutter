@@ -38,7 +38,7 @@ wide = "0.7.4"
 once_cell = { version = "1.5.2", optional = true }
 # lazy_static = "1.0"
 # structopt = "0.3"
-ripple = { path = "../ripple", features=["mkl"] }
+ripple = { path = "../ripple" }
 # away = { path = "../away" }
 bayes = { path = "../bayes" }
 itertools = "0.10.1"
@@ -63,9 +63,9 @@ rand = "0.8.5"
 [features]
 default = ["mkl", "ipp"]
 mkl=[]
-gsl=[]
+# gsl=[]
 ipp=[]
 # opencvlib=[]
-vlfeatlib=[]
+# vlfeatlib=[]
 # processor=[]
 

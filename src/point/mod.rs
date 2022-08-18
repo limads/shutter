@@ -10,6 +10,7 @@ use nalgebra::Scalar;
 use std::mem;
 use num_traits::Float;
 use crate::gray::Foreground;
+use std::convert::{TryFrom, TryInto};
 
 /*Organize as:
 
@@ -176,18 +177,25 @@ pub fn equalize(hist, src, dst) {
 
 */
 
-pub fn point_div_inplace<'a, N>(dst : &'a mut WindowMut<'a, N>, by : N)
-where
-    N : Scalar + Div<Output=N> + Copy + Any + Debug + Default
-{
-    dst.pixels_mut(1).for_each(|dst| *dst = *dst / by );
-}
 
-pub fn point_div_mut<'a, N>(win : &'a Window<'a, N>, by : N, dst : &'a mut WindowMut<'a, N>)
+// Maps the domain of an integer image to u8 domain, setting zero the image minimum
+// and 256 as the integer maximum, using only integer division.
+#[cfg(feature="ipp")]
+pub fn integer_normalize_max_min<N>(win : &dyn AsRef<Window<N>>, dst : &mut WindowMut<u8>) -> (N, N)
 where
-    N : Scalar + Div<Output=N> + Copy + Any + Debug + Default
+    N : crate::image::Pixel + Sub<Output=N> + Mul<Output=N> + Div<Output=N> + Debug + AsPrimitive<u8>,
+    u8 : AsPrimitive<N>,
+    i16 : AsPrimitive<N>,
+    u16 : AsPrimitive<N>,
+    f32 : AsPrimitive<N>
 {
-    dst.pixels_mut(1).zip(win.pixels(1)).for_each(|(dst, src)| *dst = *src / by );
+    let (min, max) = crate::global::min_max(win);
+    let max_u8 : N = (255u8).as_();
+    let win = win.as_ref();
+    for (mut d, px) in dst.pixels_mut(1).zip(win.pixels(1)) {
+        *d = (((*px - min) * max_u8) / max).as_();
+    }
+    (min, max)
 }
 
 /// Normalizes the image relative to the max(infinity) norm. This limits values to [0., 1.]
@@ -658,15 +666,16 @@ where
             }
 
             if self.pixel_is::<i32>() {
-                let ans = crate::foreign::ipp::ippi::ippiMulC_8u_C1IRSfs(
-                    *mem::transmute::<_, &u8>(&by),
+                // does not exist
+                /*let ans = crate::foreign::ipp::ippi::ippiMulC_32s_C1IRSfs(
+                    *mem::transmute::<_, &i32>(&by),
                     mem::transmute(self.as_mut_ptr()),
                     byte_stride,
                     roi,
                     scale_factor
                 );
                 assert!(ans == 0);
-                return;
+                return;*/
             }
 
             if self.pixel_is::<f32>() {
@@ -681,8 +690,7 @@ where
             }
         }
 
-        // self.pixels_mut(1).for_each(|p| *p *= by );
-        unimplemented!()
+        self.pixels_mut(1).for_each(|p| *p *= by );
     }
 
     /*fn truncate_mut(&mut self, above : bool, val : N) {
@@ -704,6 +712,20 @@ where
 pub trait AddTo { }
 pub trait MulTo { }
 */
+
+pub fn point_div_inplace<'a, N>(dst : &'a mut WindowMut<'a, N>, by : N)
+where
+    N : Scalar + Div<Output=N> + Copy + Any + Debug + Default
+{
+    dst.pixels_mut(1).for_each(|dst| *dst = *dst / by );
+}
+
+pub fn point_div_mut<'a, N>(win : &'a Window<'a, N>, by : N, dst : &'a mut WindowMut<'a, N>)
+where
+    N : Scalar + Div<Output=N> + Copy + Any + Debug + Default
+{
+    dst.pixels_mut(1).zip(win.pixels(1)).for_each(|(dst, src)| *dst = *src / by );
+}
 
 #[cfg(feature="ipp")]
 pub fn div_to<N>(lhs : &Window<N>, rhs : &Window<N>, dst : &mut WindowMut<N>)
@@ -868,10 +890,8 @@ where
         }
 
         // Unsafe required because we cannot specify that Self : 'a using the trait signature.
-        unsafe {
-            for (out, input) in mem::transmute::<_, &'a mut WindowMut<'a, N>>(self).pixels_mut(1).zip(rhs.pixels(1)) {
-                *out += *input;
-            }
+        for (out, input) in self.pixels_mut(1).zip(rhs.pixels(1)) {
+            *out += *input;
         }
 
     }
@@ -920,11 +940,8 @@ where
             }
         }
 
-        // Unsafe required because we cannot specify that Self : 'a using the trait signature.
-        unsafe {
-            for (out, input) in mem::transmute::<_, &mut WindowMut<'_, N>>(self).pixels_mut(1).zip(rhs.pixels(1)) {
-                *out -= *input;
-            }
+        for (out, input) in self.pixels_mut(1).zip(rhs.pixels(1)) {
+            *out -= *input;
         }
 
     }
@@ -969,13 +986,9 @@ where
             }
         }
 
-        // Unsafe required because we cannot specify that Self : 'a using the trait signature.
-        unsafe {
-            for (out, input) in mem::transmute::<_, &'_ mut WindowMut<'_, N>>(self).pixels_mut(1).zip(rhs.pixels(1)) {
-                *out *= *input;
-            }
+        for (out, input) in self.pixels_mut(1).zip(rhs.pixels(1)) {
+            *out *= *input;
         }
-
     }
 
 }
@@ -1018,13 +1031,9 @@ where
             }
         }
 
-        // Unsafe required because we cannot specify that Self : 'a using the trait signature.
-        unsafe {
-            for (out, input) in mem::transmute::<_, &mut WindowMut<'_, N>>(self).pixels_mut(1).zip(rhs.pixels(1)) {
-                *out /= *input;
-            }
+        for (out, input) in self.pixels_mut(1).zip(rhs.pixels(1)) {
+            *out /= *input;
         }
-
     }
 
 }
@@ -1043,46 +1052,6 @@ pub trait UnsignedToFloatConversion {
 pub trait FloatToUnsignedConversion {
 
 }*/
-
-pub trait Pixel where Self : Scalar + Clone + Copy + Debug + Default + num_traits::Zero { }
-
-impl Pixel for u8 { }
-
-impl Pixel for u16 { }
-
-impl Pixel for u32 { }
-
-impl Pixel for i16 { }
-
-impl Pixel for i32 { }
-
-impl Pixel for i64 { }
-
-impl Pixel for f32 { }
-
-impl Pixel for f64 { }
-
-pub trait UnsignedPixel where Self : Pixel { }
-
-impl UnsignedPixel for u8 { }
-
-impl UnsignedPixel for u16 { }
-
-impl UnsignedPixel for u32 { }
-
-pub trait SignedPixel where Self : Pixel { }
-
-impl SignedPixel for i16 { }
-
-impl SignedPixel for i32 { }
-
-impl SignedPixel for i64 { }
-
-pub trait FloatPixel where Self : Pixel { }
-
-impl FloatPixel for f32 { }
-
-impl FloatPixel for f64 { }
 
 pub trait BinaryFloatOp<O> {
 
@@ -1207,5 +1176,21 @@ where
         unimplemented!()
     }
 
+}
+
+pub fn normalize_ratio_inplace<N>(dst : &mut WindowMut<N>)
+where
+    N : Pixel + UnsignedPixel + PartialOrd,
+    f32 : AsPrimitive<N>,
+    N : AsPrimitive<f32>,
+    u8 : AsPrimitive<N>
+{
+    let mut max : f32 = crate::global::max(dst.as_ref()).as_();
+    max += std::f32::EPSILON;
+    let bound_val : f32 = N::max_value().as_();
+    for mut px in dst.pixels_mut(1) {
+        let pxf : f32 = px.as_();
+        *px = ((pxf / max) * bound_val).as_();
+    }
 }
 

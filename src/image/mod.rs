@@ -23,6 +23,86 @@ use std::mem;
 use crate::raster::*;
 use crate::draw::*;
 use crate::sparse::RunLength;
+use num_traits::bounds::Bounded;
+
+pub trait Pixel
+where
+    Self : Clone + Copy + Scalar + Debug + Zero + Bounded + Any + Default + 'static
+{
+
+    fn depth() -> Depth;
+
+}
+
+impl Pixel for u8 {
+
+    fn depth() -> Depth {
+        Depth::U8
+    }
+
+}
+
+impl Pixel for u16 {
+
+    fn depth() -> Depth {
+        Depth::U16
+    }
+
+}
+
+impl Pixel for i16 {
+
+    fn depth() -> Depth {
+        Depth::I16
+    }
+
+}
+
+impl Pixel for i32 {
+
+    fn depth() -> Depth {
+        Depth::I32
+    }
+
+}
+
+impl Pixel for f32 {
+
+    fn depth() -> Depth {
+        Depth::F32
+    }
+
+}
+
+pub enum Depth {
+    U8,
+    U16,
+    I16,
+    I32,
+    F32
+}
+
+pub trait UnsignedPixel where Self : Pixel { }
+
+impl UnsignedPixel for u8 { }
+
+impl UnsignedPixel for u16 { }
+
+// impl UnsignedPixel for u32 { }
+
+pub trait SignedPixel where Self : Pixel { }
+
+impl SignedPixel for i16 { }
+
+impl SignedPixel for i32 { }
+
+// impl SignedPixel for i64 { }
+
+pub trait FloatPixel where Self : Pixel { }
+
+impl FloatPixel for f32 { }
+
+// impl FloatPixel for f64 { }
 
 // TODO make indexing operations checked at debug builds. They are segfaulting if the
 // user passes an overflowing index, since the impl is using get_unchecked regardless for now.
@@ -275,7 +355,7 @@ where
 
 pub trait PixelCopy<N>
 where
-    N : Scalar + Copy + Default + Zero + Copy + Any
+    N : Scalar + Copy + Default + Zero + Copy + Any + Pixel
 {
 
     // Copies the content of this image into the center of a larger buffer with size new_sz,
@@ -303,7 +383,7 @@ where
 
 impl<N> PixelCopy<N> for Window<'_, N>
 where
-    N : Scalar + Copy + Default + Zero + Copy + Any
+    N : Scalar + Copy + Default + Zero + Copy + Any + Pixel
 {
 
     fn padded_copy(&self, new_sz : (usize, usize), pad : N) -> Image<N> {
@@ -342,7 +422,7 @@ where
 
 impl<N> PixelCopy<N> for Image<N>
 where
-    N : Scalar + Copy + Default + Zero + Copy + Any
+    N : Scalar + Copy + Default + Zero + Copy + Any + Pixel
 {
 
     // Copies the content of this image into the center of a larger buffer with size new_sz,
@@ -708,7 +788,8 @@ where
         Self::new_empty(other.height(), other.width())
     }
 
-    pub fn new_constant(height : usize, width : usize, value : N) -> Self {
+    pub fn new_constant(height : usize, width : usize, value : N) -> Self
+    {
         /*let mut buf = Vec::with_capacity(height * width);
         buf.extend((0..(height*width)).map(|_| value ));
         Self{ buf : buf.into_boxed_slice(), width, offset : (0, 0), size : (height, width) }*/
@@ -1110,8 +1191,18 @@ impl<'a, N> Window<'a, N> {
 
 impl<N> Image<N>
 where
+    N : Scalar + Copy + Any + 'static + Pixel
+{
+    pub fn depth(&self) -> Depth {
+        N::depth()
+    }
+}
+
+impl<N> Image<N>
+where
     N : Scalar + Copy + Any + 'static
 {
+
     pub fn pixel_is<T>(&self) -> bool
     where
         T : 'static
@@ -1122,14 +1213,37 @@ where
 
 impl<'a, N> Window<'a, N>
 where
+    N : Scalar + Copy + Any + Pixel + 'static
+{
+
+    pub fn depth(&self) -> Depth {
+        N::depth()
+    }
+
+}
+
+impl<'a, N> Window<'a, N>
+where
     N : Scalar + Copy + Any + 'static
 {
+
     pub fn pixel_is<T>(&self) -> bool
     where
         T : 'static
     {
         (&self[(0usize, 0usize)] as &dyn Any).is::<T>()
     }
+}
+
+impl<'a, N> WindowMut<'a, N>
+where
+    N : Scalar + Copy + Any + Pixel + 'static
+{
+
+    pub fn depth(&self) -> Depth {
+        N::depth()
+    }
+
 }
 
 impl<'a, N> WindowMut<'a, N>
@@ -2479,7 +2593,7 @@ where
 
     pub fn clear(&'a mut self)
     where
-        N : Zero
+        N : Zero + Pixel
     {
         self.pixels_mut(1).for_each(|px| *px = N::zero() );
     }
@@ -2920,7 +3034,7 @@ where
 
 impl<'a, N> WindowMut<'a, N>
 where
-    N : Scalar + Copy + Mul<Output=N> + MulAssign + PartialOrd + Default
+    N : Scalar + Copy + Mul<Output=N> + MulAssign + PartialOrd + Default + Pixel
 {
 
     pub fn paint(&'a mut self, min : N, max : N, color : N) {

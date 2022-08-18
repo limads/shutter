@@ -12,6 +12,7 @@ use petgraph::prelude::*;
 use petgraph::visit::*;
 use std::convert::{AsRef, AsMut};
 use std::cmp::Ordering;
+use num_traits::bounds::Bounded;
 
 /* Represents a binary image by a set of foreground pixel coordinates. Useful when
 objects are expected to be speckle-like. For dense objects, consider using RunLengthEncoding
@@ -1074,12 +1075,24 @@ fn find_at_row_segment(rles : &mut Vec<RunLength>, w : &Window<i32>, r : usize, 
     }
 }
 
-fn find_row_rles(rles : &mut Vec<RunLength>, rows : &mut Vec<Range<usize>>, w : &Window<i32>, r : usize, range : Range<usize>) {
-    let n_before = rles.len();
-    find_at_row_segment(rles, w, r, range.start, range.end);
-    let n_after = rles.len();
-    rles[n_before..n_after].sort_by(|a, b| a.start.1.cmp(&b.start.1) );
-    rows.push(Range { start : n_before, end : n_after });
+fn find_row_rles(
+    valid_col_ranges : &mut Vec<Range<usize>>,
+    rles : &mut Vec<RunLength>,
+    rows : &mut Vec<Range<usize>>,
+    w : &Window<i32>,
+    r : usize,
+    min_col_range : Option<usize>
+) {
+    calculate_valid_col_ranges(valid_col_ranges, w, r, 0, w.width() - 1, min_col_range.unwrap_or(MIN_VALID_INTEGRAL_COL_RANGE));
+    valid_col_ranges.sort_by(|a, b| a.start.cmp(&b.start) );
+    merge_col_ranges(valid_col_ranges);
+    for range in valid_col_ranges.drain(..) {
+        let n_before = rles.len();
+        find_at_row_segment(rles, w, r, range.start, range.end);
+        let n_after = rles.len();
+        rles[n_before..n_after].sort_by(|a, b| a.start.1.cmp(&b.start.1) );
+        rows.push(Range { start : n_before, end : n_after });
+    }
 }
 
 // cargo test --all-features -- accumulated_rle --nocapture
@@ -1245,14 +1258,44 @@ impl RunLengthEncoding {
         let mut r = 0;
     }
 
+    // Find RLEs by bisecting over running sum over rows only (each new row
+    // start at zero, and goess up to 256 at the final column if we are at a u8 image).
+    // Although slower than bisecting over a full accumulated image, since there is still
+    // a linear search over rows, this can operate over u8 images directly if the
+    // binary image uses 1 to represent foreground values. This fails if any rows
+    // saturate their sum (last pixel is 256), since it is not possible to determine
+    // if there are any RLEs after the saturated column. The performance gain here
+    // explores the fact that running sums of u8 images can execute vectorized
+    // instructions containing more pixels, and there isn't the cost of conversion
+    // if you start with a u8 image already.
+    pub fn update_from_accumulated_rows(
+        &mut self,
+        w : &dyn AsRef<Window<i32>>,
+        min_col_range : Option<usize>
+    ) -> bool {
+        let w = w.as_ref();
+        self.rles.clear();
+        self.rows.clear();
+        let mut valid_col_ranges = Vec::new();
+        for r in 0..w.height() {
+            if w[(r, w.width()-1)] == i32::max_value() {
+                return false;
+            }
+            find_row_rles(&mut valid_col_ranges, &mut self.rles, &mut self.rows, w, r, min_col_range);
+        }
+        verify_rle_state(&self);
+        true
+    }
+
     /* A RunLength encoding can usually be calculated much faster by bisection
-    over the rows of an accumulator image. At each iteration, check if boundary
-    pixels are equal. If they are, ignore the row region. This can be repeated
+    over the rows and columns of an accumulator image (containing the running sum of
+    pixels in raster order). At each iteration, check if the pixels of a region boundary
+    are equal. If they are, ignore the row region. This can be repeated
     recursively over non-examined regions. When a region does not have equal
     boundary pixels, it must be examined to determine the n RunLengths.
     If the difference between pixels happen to be equal to the number of columns
     times the non-zero constant value, we know there is a single RunLength there.
-    This might mean a performance gain because while calculating the IntegralImage
+    This might mean a performance gain because while calculating the accumulated image
     is a vectorized operation, pointwise evaluating the RunLenghts for flat images is not.
     min_valid_range is the row length at which bisection stops, and can be chosen based on
     the expected object width (smaller values mean more bisection iterations, which might
@@ -1266,40 +1309,14 @@ impl RunLengthEncoding {
         min_col_range : Option<usize>
     ) {
         let w = w.as_ref();
-
-        // assert!(w.width() % 2 == 0, "Pair number of columns required for bisection search");
-
         self.rles.clear();
         self.rows.clear();
         let mut valid_rows = Vec::new();
         calculate_valid_row_ranges(&mut valid_rows, w, 0, w.height() - 1, min_row_range.unwrap_or(MIN_VALID_INTEGRAL_ROW_RANGE));
         valid_rows.sort_by(|a, b| a.start.cmp(&b.start) );
-
         let mut valid_col_ranges = Vec::new();
         for r in valid_rows.drain(..).flatten() {
-            calculate_valid_col_ranges(&mut valid_col_ranges, w, r, 0, w.width() - 1, min_col_range.unwrap_or(MIN_VALID_INTEGRAL_COL_RANGE));
-            valid_col_ranges.sort_by(|a, b| a.start.cmp(&b.start) );
-           //  println!("Before merge = {valid_ranges:?}");
-            merge_col_ranges(&mut valid_col_ranges);
-
-            /*for i in 0..(valid_ranges.len()-1) {
-                let s1 = &valid_ranges[i];
-                let s2 = &valid_ranges[i+1];
-
-                // Never partition in the middle of a RLE.
-                // assert!(w[(r, s2.start w[(r, s1.end)]
-            }*/
-
-            // println!("After merge = {valid_ranges:?}");
-            // println!("Ranges for row {r}:");
-            /*for r in &valid_ranges {
-                let mut r2 = r.clone();
-                r2.end += 1;
-                println!("{:?}", r2.collect::<Vec<_>>() );
-            }*/
-            for range in valid_col_ranges.drain(..) {
-                find_row_rles(&mut self.rles, &mut self.rows, w, r, range);
-            }
+            find_row_rles(&mut valid_col_ranges, &mut self.rles, &mut self.rows, w, r, min_col_range);
         }
         verify_rle_state(&self);
     }

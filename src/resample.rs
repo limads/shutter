@@ -56,6 +56,13 @@ where
     }
 
     fn upsample_to(&self, out : &mut Self::Output, up : Upsample) {
+
+        #[cfg(feature="ipp")]
+        unsafe {
+            crate::image::ipputils::resize(self, out);
+            return;
+        }
+
         unimplemented!()
     }
 
@@ -67,7 +74,10 @@ where
     }
 
     fn upsample(&self, up : Upsample, by : usize) -> Self::OwnedOutput {
-        unimplemented!()
+        // assert!(self.height() % by == 0 && self.width() % by == 0);
+        let mut upsampled = unsafe { Image::<N>::new_empty(self.height() * by, self.width() * by) };
+        self.upsample_to(&mut upsampled.full_window_mut(), up);
+        upsampled
     }
 }
 

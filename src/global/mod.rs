@@ -12,6 +12,72 @@ use num_traits::AsPrimitive;
 use std::mem;
 
 #[cfg(feature="ipp")]
+pub fn min_max<N>(w : &dyn AsRef<Window<N>>) -> (N, N)
+where
+    N : Pixel,
+    u8 : AsPrimitive<N>,
+    i16 : AsPrimitive<N>,
+    u16 : AsPrimitive<N>,
+    f32 : AsPrimitive<N>
+{
+    let w = w.as_ref();
+    let (step, roi) = crate::image::ipputils::step_and_size_for_window(w);
+    unsafe {
+        match w.depth() {
+            Depth::U8 => {
+                let (mut min, mut max) = (0u8, 0u8);
+                let ans = crate::foreign::ipp::ippi::ippiMinMax_8u_C1R(
+                    mem::transmute(w.as_ptr()),
+                    step,
+                    roi,
+                    &mut min as *mut _,
+                    &mut max as *mut _
+                );
+                assert!(ans == 0);
+                return (min.as_(), max.as_());
+            },
+            Depth::U16 => {
+                let (mut min, mut max) = (0u16, 0u16);
+                let ans = crate::foreign::ipp::ippi::ippiMinMax_16u_C1R(
+                    mem::transmute(w.as_ptr()),
+                    step,
+                    roi,
+                    &mut min as *mut _,
+                    &mut max as *mut _
+                );
+                assert!(ans == 0);
+                return (min.as_(), max.as_());
+            },
+            Depth::I16 => {
+                let (mut min, mut max) = (0i16, 0i16);
+                let ans = crate::foreign::ipp::ippi::ippiMinMax_16s_C1R(
+                    mem::transmute(w.as_ptr()),
+                    step,
+                    roi,
+                    &mut min as *mut _,
+                    &mut max as *mut _
+                );
+                assert!(ans == 0);
+                return (min.as_(), max.as_());
+            },
+            Depth::F32 => {
+                let (mut min, mut max) = (0.0f32, 0.0f32);
+                let ans = crate::foreign::ipp::ippi::ippiMinMax_32f_C1R(
+                    mem::transmute(w.as_ptr()),
+                    step,
+                    roi,
+                    &mut min as *mut _,
+                    &mut max as *mut _
+                );
+                assert!(ans == 0);
+                return (min.as_(), max.as_());
+            },
+            _ => panic!("Invalid depth")
+        }
+    }
+}
+
+#[cfg(feature="ipp")]
 pub fn mean_stddev(w : &Window<f32>) -> (f32, f32) {
     let (stride, roi) = crate::image::ipputils::step_and_size_for_window(w);
     unsafe {

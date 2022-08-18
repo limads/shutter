@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::ops::Range;
 use crate::image::WindowMut;
 // use crate::segmentation;
-use bayes::fit::{cluster::center::KMeans, cluster::center::KMeansSettings, Estimator};
-use bayes::fit::cluster::space::SpatialClustering;
+use bayes::fit::{cluster::KMeans, cluster::KMeansSettings, Estimator};
+use bayes::fit::cluster::SpatialClustering;
 use std::cmp::Ordering;
 
 mod segmentation;

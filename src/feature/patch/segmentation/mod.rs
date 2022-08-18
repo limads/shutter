@@ -2039,7 +2039,7 @@ pub fn extract_extreme_colors(
     km : &KMeans,
     sample : impl Iterator<Item=impl Borrow<[f64]>> + Clone
 ) -> Vec<(u8, u8)> {
-    (0..km.means().count()).map(|ix| bayes::fit::cluster::center::extremes(&km, sample.clone(), ix).unwrap() )
+    (0..km.means().count()).map(|ix| bayes::fit::cluster::extremes(&km, sample.clone(), ix).unwrap() )
         .map(|(low, high)| (flatten_to_8bit(&low), flatten_to_8bit(&high)) )
         .collect::<Vec<_>>()
 }
