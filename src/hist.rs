@@ -55,7 +55,7 @@ where
 {
     assert!(s.len() % min_width == 0);
 
-    // The nice property about looking for local maxima at the peak minimum width is
+    // The nice property for the algorithm that looks for local maxima at the peak minimum width is
     // that we can guarantee peaks located two chunks apart will always be valid candidates,
     // so we can remove peaks one-chunk apart if they are two close by compairing
     // only the contiguous pairs.
@@ -82,12 +82,6 @@ where
             ix -= 1;
         }
     }
-
-    /*for ix in (0..peaks.len()).rev() {
-        if !is_strict_maximum(&s[..], peaks[ix].0, min_width) {
-            peaks.remove(ix);
-        }
-    }*/
 
     peaks.drain(..).map(|p| p.0 ).collect()
 }
@@ -203,6 +197,10 @@ impl GrayHistogram {
 
     pub fn as_slice(&self) -> &[u32] {
         &self.0[..]
+    }
+
+    pub fn as_mut_slice(&mut self) -> &mut [u32] {
+        &mut self.0[..]
     }
 
     pub fn iter_as<'a, T>(&'a self) -> impl Iterator<Item=T> + 'a

@@ -592,11 +592,55 @@ where
 
         assert!(self.shape() == other.shape(), "Windows differ in shape");
         assert!(self.shape() == mask.shape(), "Windows differ in shape");
+
         #[cfg(feature="ipp")]
         unsafe {
             let (src_step, src_sz) = crate::image::ipputils::step_and_size_for_window(other);
             let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_window_mut(&self);
             let (mask_step, mask_sz) = crate::image::ipputils::step_and_size_for_window(mask);
+
+            if self.pixel_is::<u8>() {
+                let ans = crate::foreign::ipp::ippi::ippiCopy_8u_C1MR(
+                    mem::transmute(other.as_ptr()),
+                    src_step,
+                    mem::transmute(self.as_mut_ptr()),
+                    dst_step,
+                    src_sz,
+                    mask.as_ptr(),
+                    mask_step
+                );
+                assert!(ans == 0);
+                return;
+            }
+
+            if self.pixel_is::<i16>() {
+                let ans = crate::foreign::ipp::ippi::ippiCopy_16s_C1MR(
+                    mem::transmute(other.as_ptr()),
+                    src_step,
+                    mem::transmute(self.as_mut_ptr()),
+                    dst_step,
+                    src_sz,
+                    mask.as_ptr(),
+                    mask_step
+                );
+                assert!(ans == 0);
+                return;
+            }
+
+            if self.pixel_is::<i32>() {
+                let ans = crate::foreign::ipp::ippi::ippiCopy_32s_C1MR(
+                    mem::transmute(other.as_ptr()),
+                    src_step,
+                    mem::transmute(self.as_mut_ptr()),
+                    dst_step,
+                    src_sz,
+                    mask.as_ptr(),
+                    mask_step
+                );
+                assert!(ans == 0);
+                return;
+            }
+
             if self.pixel_is::<f32>() {
                 let ans = crate::foreign::ipp::ippi::ippiCopy_32f_C1MR(
                     mem::transmute(other.as_ptr()),
@@ -612,7 +656,11 @@ where
             }
         }
 
-        unimplemented!()
+        for ((mut d, s), m) in self.pixels_mut(1).zip(other.pixels(1)).zip(mask.pixels(1)) {
+            if *m != 0 {
+                *d = *s
+            }
+        }
     }
 
     // Copies elements into self from other, assuming same dims.
@@ -634,14 +682,47 @@ where
                 assert!(ans == 0);
                 return;
             }
+
+            if self.pixel_is::<i16>() {
+                let ans = crate::foreign::ipp::ippi::ippiCopy_16s_C1R(
+                    mem::transmute(other.as_ptr()),
+                    src_step,
+                    mem::transmute(self.as_mut_ptr()),
+                    dst_step,
+                    src_sz
+                );
+                assert!(ans == 0);
+                return;
+            }
+
+            if self.pixel_is::<i32>() {
+                let ans = crate::foreign::ipp::ippi::ippiCopy_32s_C1R(
+                    mem::transmute(other.as_ptr()),
+                    src_step,
+                    mem::transmute(self.as_mut_ptr()),
+                    dst_step,
+                    src_sz
+                );
+                assert!(ans == 0);
+                return;
+            }
+
+            if self.pixel_is::<f32>() {
+                let ans = crate::foreign::ipp::ippi::ippiCopy_32f_C1R(
+                    mem::transmute(other.as_ptr()),
+                    src_step,
+                    mem::transmute(self.as_mut_ptr()),
+                    dst_step,
+                    src_sz
+                );
+                assert!(ans == 0);
+                return;
+            }
         }
 
-        unsafe {
-            (&mut *(self as *mut WindowMut<'_, N>) as &mut WindowMut<'_, N>).rows_mut().zip(other.rows())
-                .for_each(|(this, other)| this.copy_from_slice(other) );
-        }
+        self.rows_mut().zip(other.rows())
+            .for_each(|(this, other)| this.copy_from_slice(other) );
     }
-
 
 }
 
@@ -664,20 +745,44 @@ where
         unimplemented!()
     }
 
-    pub fn transpose_from<'a>(&'a mut self, src : &Image<N>) {
+    pub fn transpose(&self) -> Image<N> {
+        let mut dst = self.clone();
+        dst.size = (self.size.1, self.size.0);
+        dst.width = self.size.0;
+        dst.transpose_from(&self.full_window());
+        dst
+    }
 
-        // IppStatus ippiTranspose_<mod>(const Ipp<datatype>* pSrc, int srcStep, Ipp<datatype>*
-        // pDst, int dstStep, IppiSize roiSize);
+    pub fn transpose_from<'a>(&'a mut self, src : &Window<N>) {
 
-        use nalgebra::*;
         assert!(src.width() == self.height() && src.height() == self.width());
+
+        #[cfg(feature="ipp")]
+        unsafe {
+            let (dst_step, dst_roi) = crate::image::ipputils::step_and_size_for_window_mut(&self.full_window_mut());
+            let (src_step, src_roi) = crate::image::ipputils::step_and_size_for_window(src);
+            if self.pixel_is::<u8>() {
+                let ans = crate::foreign::ipp::ippi::ippiTranspose_8u_C1R(
+                    mem::transmute(src.as_ptr()),
+                    src_step,
+                    mem::transmute(self.full_window_mut().as_mut_ptr()),
+                    dst_step,
+                    src_roi
+                );
+                assert!(ans == 0);
+                return;
+            }
+        }
+
+        /*use nalgebra::*;
         DMatrixSlice::from_slice(&src.buf[..], src.height(), src.width())
-            .transpose_to(&mut DMatrixSliceMut::from_slice(&mut self.buf[..], src.width(), src.height()));
+            .transpose_to(&mut DMatrixSliceMut::from_slice(&mut self.buf[..], src.width(), src.height()));*/
+        unimplemented!()
     }
 
     pub fn transpose_mut(&mut self) {
         let original = self.clone();
-        self.transpose_from(&original);
+        self.transpose_from(&original.full_window());
     }
 
     // Splits this image over S owning, memory-contiguous blocks. This does not

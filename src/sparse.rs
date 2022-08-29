@@ -24,6 +24,17 @@ pub struct PointEncoding {
     pub rows : Vec<Range<usize>>
 }
 
+// Assume pts is sorted by rows and by cols within rows.
+fn rows_for_sorted_points(pts : &[(usize, usize)], rows : &mut Vec<(usize, usize)>) {
+    rows.clear();
+    let mut n = 0;
+    for (_, mut pts) in &pts.iter().group_by(|pt| pt.0 ) {
+        let row_len = pts.count();
+        rows.push(Range { start : n, end : n+row_len } );
+        n += row_len;
+    }
+}
+
 impl PointEncoding {
 
     // Builds a PointEncoding from a set of points (assume neither order or uniqueness
@@ -32,12 +43,7 @@ impl PointEncoding {
         pts.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)) );
         pts.dedup();
         let mut rows = Vec::new();
-        let mut n = 0;
-        for (_, mut pts) in &pts.iter().group_by(|pt| pt.0 ) {
-            let row_len = pts.count();
-            rows.push(Range { start : n, end : n+row_len } );
-            n += row_len;
-        }
+        rows_for_sorted_points(&pts[..], &mut rows);
         Self { pts, rows }
     }
 
@@ -457,14 +463,14 @@ impl ChainEncoding {
 }
 
 /// Wraps any iterator over (usize, usize)
-pub struct PointIter(Box<dyn Iterator<Item=(usize, usize)>>);
+pub struct PointIter<'a>(Box<dyn Iterator<Item=(usize, usize)> + 'a>);
 
 pub trait Encoding
 where
     Self : Default
 {
 
-    fn points(&self) -> PointIter;
+    fn points<'a>(&'a self) -> PointIter<'a>;
 
     // If the argument is a labeled image, where distinct matched labels are values greater than or
     // equal to 1, and unmatched pixels are represented by zero, then encode_distinct
@@ -480,21 +486,29 @@ where
         encoding
     }
 
-    fn decode_to(&self, img : &mut dyn AsMut<WindowMut<u8>>) {
+    // Tries to decode points into the image. If size is insufficient, return false
+    // and stops.
+    fn decode_to(&self, img : &mut dyn AsMut<WindowMut<u8>>) -> bool {
         let mut img = img.as_mut();
         img.fill(0);
         for pt in self.points().0 {
-            img[pt] = 255;
+            if pt.0 < img.height() && pt.1 < img.width() {
+                img[pt] = 255;
+            } else {
+                return false;
+            }
         }
+        true
     }
 
     fn decode(&self, shape : (usize, usize)) -> Option<Image<u8>> {
-
-        // Image must always be filled with zeros at the start of the call of decode_to
+        // Assumes image must always be filled with zeros at the start of the call of decode_to
         let mut img = unsafe { Image::new_empty(shape.0, shape.1) };
-
-        self.decode_to(&mut img);
-        Some(img)
+        if self.decode_to(&mut img) {
+            Some(img)
+        } else {
+            None
+        }
     }
 
     // Write the labels back to the image.
@@ -890,6 +904,27 @@ pub struct RunLengthIter<'a> {
     curr : usize
 }
 
+impl Encoding for RunLengthEncoding {
+
+    fn points<'a>(&'a self) -> PointIter<'a> {
+        PointIter(Box::new(self.rles.iter().map(move |rle| rle.points() ).flatten()))
+    }
+
+    fn encode_distinct(img : &dyn AsRef<Window<u8>>) -> BTreeMap<u8, Self> {
+        unimplemented!()
+    }
+
+    fn encode_from(&mut self, img : &dyn AsRef<Window<u8>>) {
+        unimplemented!()
+    }
+
+    // Write the labels back to the image.
+    fn decode_distinct_to(labels : &BTreeMap<u8, Self>, img : &dyn AsMut<WindowMut<u8>>) {
+        unimplemented!()
+    }
+
+}
+
 /* Given a (sorted) RLE vector, extract its row vector. */
 fn rows_vector(rles : &[RunLength]) -> Vec<Range<usize>> {
     let mut rows = Vec::new();
@@ -1125,7 +1160,39 @@ pub const MIN_VALID_INTEGRAL_COL_RANGE : usize = 8;
 
 pub const MIN_VALID_INTEGRAL_ROW_RANGE : usize = 8;
 
+// Assume pts is sorted by rows and by cols within rows.
+fn rows_for_sorted_rles(rles : &[RunLength], rows : &mut Vec<(usize, usize)>) {
+    rows.clear();
+    let mut n = 0;
+    for (_, mut rles) in &rles.iter().group_by(|r| r.0 ) {
+        let row_len = pts.count();
+        rows.push(Range { start : n, end : n+row_len } );
+        n += row_len;
+    }
+}
+
 impl RunLengthEncoding {
+
+    /* Transpose this RunLenght, so that its decoding is equivalent to the decoding of the transposed image */
+    pub fn transpose(mut self) -> Self {
+        if self.rows.len() == 0 {
+            return Default::default();
+        }
+        self.rles.iter_mut().for_each(|r| r.start = (r.start.1, r.start.0) );
+        self.rles.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)) );
+        rows_for_sorted_rles(&self.rles[..], &mut self.rows);
+        self
+    }
+
+    pub fn preserve_larger(&self, min_len : usize) -> RunLengthEncoding {
+        let mut new_rles = self.rles.clone();
+        new_rles.retain(|rle| rle.length >= min_len );
+        let mut new_rows = Vec::new();
+        rows_for_sorted_rles(&new_rles[..], &mut new_rows);
+        let new_rle = Self { rles : new_rles, rows : new_rows };
+        verify_rle_state(&self);
+        new_rle
+    }
 
     pub fn iter(&self) -> RunLengthIter {
         RunLengthIter {
@@ -1361,8 +1428,6 @@ impl RunLengthEncoding {
 
         verify_rle_state(&self);
     }
-
-
 
     pub fn new() -> Self {
         Default::default()

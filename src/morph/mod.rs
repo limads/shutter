@@ -312,6 +312,24 @@ impl IppiMorph {
 
 }
 
+/*pub struct Opening {
+
+}
+
+impl Opening {
+
+    fn from(dil : Dilation, er : Erosion) -> Self { }
+
+}
+
+pub struct Closing { }
+
+impl Closing {
+
+    fn from(er : Erosion, dil : Dilation) -> Self { }
+
+}*/
+
 /*
 morph_gradient(): dilate(img) - erode(img)
 valley_detect(): closing(img) - img
