@@ -1,5 +1,7 @@
 mod ellipse;
 
+pub mod hough;
+
 pub use ellipse::*;
 
 pub fn bounding_rect(pts : &[(usize, usize)]) -> (usize, usize, usize, usize) {
