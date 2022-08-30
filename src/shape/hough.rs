@@ -3,6 +3,7 @@ use std::f32::consts::PI;
 use crate::image::*;
 use crate::local::*;
 use std::collections::BTreeMap;
+use std::cmp::Ordering;
 
 pub struct RectComplement {
     pub tl : (usize, usize, usize, usize),
@@ -17,9 +18,17 @@ pub struct RectComplement {
 
 impl RectComplement {
 
-    pub fn iter(&self) -> impl Iterator<Item=(usize, usize)> + 'static {
-        [self.tl, self.top, left.tr, self.left, self.right, self.bl, self.bottom, self.br]
-            .into_iter()
+    pub fn as_array(&self) -> [(usize, usize, usize, usize); 8] {
+        [
+            self.tl, 
+            self.top, 
+            self.tr, 
+            self.left, 
+            self.right, 
+            self.bl, 
+            self.bottom, 
+            self.br
+        ]
     }
     
 }
@@ -69,7 +78,9 @@ pub struct HoughCircle {
     
     // Holds one matrix for each possible radius. Each matrix has the same dimension as the image.
     // Use float because eventually we will want to blur it, but it is actually an counter.
-    accum : Vec<Image<f32>>
+    accum : Vec<Image<f32>>,
+    
+    found : BTreeMap<usize, Vec<((usize, usize), f32)>>
     
 }
 
@@ -82,6 +93,7 @@ impl HoughCircle {
         n_radii : usize, 
         shape : (usize, usize)
     ) -> Self {
+        assert!(n_radii >= 1);
         let delta_sector = 2.0 * PI / n_sectors as f32;
         let angles : Vec<_> = (0..n_sectors)
             .map(|i| i as f32 * delta_sector ).collect();
@@ -101,7 +113,39 @@ impl HoughCircle {
         
         let accum : Vec<_> = (0..n_radii)
             .map(|_| Image::new_constant(shape.0, shape.1, 0.) ).collect();
-        Self { angles, radii, accum, shape, deltas }
+        Self { angles, radii, accum, shape, deltas, found : BTreeMap::new() }
+    }
+    
+    pub fn best_matched_accumulator(&self) -> Option<&Image<f32>> {
+        let mut max = 0.0;
+        let mut acc = None;
+        for rad_ix in self.found.keys() {
+            let best_at_this = self.found[&rad_ix].iter()
+                .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal) )
+                .unwrap()
+                .1;
+            if best_at_this > max {
+                max = best_at_this;
+                acc = Some(&self.accum[*rad_ix]);
+            }
+        }
+        acc
+    }
+    
+    pub fn all_matched_accumulators(&self) -> Vec<&Image<f32>> {
+        let mut acc = Vec::new();
+        for rad_ix in self.found.keys() {
+            acc.push(&self.accum[*rad_ix]);
+        }
+        acc
+    }
+    
+    pub fn accumulators(&self) -> &[Image<f32>] {
+        &self.accum[..]
+    }
+    
+    pub fn found(&self) -> &BTreeMap<usize, Vec<((usize, usize), f32)>> {
+        &self.found
     }
     
     /// Returns the n-highest circle peaks at least dist apart from each other.
@@ -114,14 +158,15 @@ impl HoughCircle {
     ) -> Vec<((usize, usize), f32)> {
         for i in 0..self.radii.len() {
             let mut acc = &mut self.accum[i];
-            acc.fill(0.);
+            acc.full_window_mut().fill(0.);
             accumulate_for_radius(pts, &self.deltas[i], acc);
-            *acc = accum.clone_owned().convolve(&crate::blur::GAUSS_5, Convolution::Linear);
+            *acc = acc.clone().full_window()
+                .convolve(&blur::GAUSS, Convolution::Linear);
         }
         let mut circles = Vec::new();
-        let mut maxima = find_hough_maxima(&self.accum, n_expected, min_dist);
-        for (rad_ix, mut centers) in maxima {
-            circles.extend(centers.drain(..).map(|c| (c, self.radii[rad_ix])));
+        find_hough_maxima(&self.accum, n_expected, min_dist, &mut self.found);
+        for (rad_ix, centers) in &self.found {
+            circles.extend(centers.clone().drain(..).map(|c| (c.0, self.radii[*rad_ix])));
         }
         circles        
     }
@@ -133,7 +178,7 @@ fn accumulate_for_radius(
     deltas : &[Vector2<f32>], 
     accum : &mut Image<f32>
 ) {
-    let shape = Vector2::new(accum.ncols() as f32, accum.nrows() as f32);
+    let shape = Vector2::new(accum.width() as f32, accum.height() as f32);
     for pt in pts {
         for d in deltas {
             let center = pt.clone() + d;
@@ -163,15 +208,17 @@ fn accumulate_for_radius(
 fn find_hough_maxima(
     accums : &[Image<f32>], 
     n_expected : usize, 
-    min_dist : usize
-) -> BTreeMap<usize, Vec<(usize, usize)> {
-    let mut found = BTreeMap::new();
-    for i in 0..n_expected {
+    min_dist : usize,
+    found : &mut BTreeMap<usize, Vec<((usize, usize), f32)>>
+) {
+    found.clear();
+    for _ in 0..n_expected {
         let mut max : ((usize, usize), f32) = ((0, 0), 0.);
+        let mut max_rad_ix = 0;
         for rad_ix in 0..accums.len() {
             let outer_shape = accums[rad_ix].shape();
-            if let Some(prev_found) = found.get(rad_ix) {
-                let prev_pos = prev_found[0];
+            if let Some(prev_found) = found.get(&rad_ix) {
+                let prev_pos = prev_found[0].0;
                 let offy = prev_pos.0.saturating_sub(min_dist);
                 let offx = prev_pos.1.saturating_sub(min_dist);
                 let mut exclude = (
@@ -183,33 +230,80 @@ fn find_hough_maxima(
                 let compl = rect_complement(
                     exclude,
                     (0, 0, outer_shape.0, outer_shape.1)
-                );
-                for r in compl.iter() {
+                ).unwrap();
+                for r in compl.as_array() {
                     let opt_max = crate::local::min_max_idx(
-                        &accums[i].sub_window((r.0, r.1), (r.2, r.3)).unwrap(), 
+                        &accums[rad_ix].window((r.0, r.1), (r.2, r.3)).unwrap(), 
                         false,
                         true
                     );
                     if let (_, Some(new_max)) = opt_max {
-                        if new_max.1 > max.1 {
-                            max = ((new_max.0 + r.0, new_max.1 + r.1), new_max.1);
+                        if new_max.2 > max.1 {
+                            max = ((new_max.0 + r.0, new_max.1 + r.1), new_max.2);
+                            max_rad_ix = rad_ix;
                         }
                     }
                 }
             } else {
-                let opt_max = crate::local::min_max_idx(accums[rad_ix].as_ref(), false, true);
+                let opt_max = crate::local::min_max_idx(
+                    accums[rad_ix].as_ref(), 
+                    false, 
+                    true
+                );
                 if let (_, Some(new_max)) = opt_max {
-                    if new_max.1 > max.1 {
-                        max = new_max;
+                    if new_max.2 > max.1 {
+                        max = ((new_max.0, new_max.1), new_max.2);
+                        max_rad_ix = rad_ix;
                     }
                 }
             }
         }
-        found[j] = max;
+        found.entry(max_rad_ix).or_insert(Vec::new()).push(max);
     }
-    
 }
 
-fn main() {
+mod test {
+
+    use super::*;
+
+    fn test_hough_at_range(
+        true_radius : f32, 
+        min_radius : f32, 
+        max_radius : f32,
+        n_radii : usize
+    ) {
+        let mut pts = Vec::new();
+        let c = Point2::new(50.0, 50.0);
+        for i in 0..100 {
+            let theta = 2.0*PI / 100.0 * i as f32; 
+            let delta = Vector2::new(
+                theta.cos() * true_radius, 
+                theta.sin() * true_radius
+            );
+            pts.push(c.clone() + delta);
+        }
+        let mut hough = HoughCircle::new(12, min_radius, max_radius, n_radii, (100,100));
+        let ans = hough.calculate(&pts[..], 1, 1);
+        println!("{:?}", ans);
+        for i in 0..n_radii {
+            hough.accum[i].show();
+        }
+    }
     
+    fn test_hough_at_unique_radius(
+        true_radius : f32
+    ) {
+        test_hough_at_range(true_radius, true_radius, true_radius, 1);
+    }
+    
+    // cargo test -- test_hough --nocapture 
+    #[test]
+    fn test_hough() {
+        // test_hough_at_unique_radius(20.0);
+        test_hough_at_range(20.0, 10.0, 30.0, 5);
+    }
+
 }
+
+
+

@@ -11,6 +11,17 @@ use nalgebra::Scalar;
 use num_traits::AsPrimitive;
 use std::mem;
 
+/// Calculates the global maximum and minimum of the image.
+/// Then sets all pixels close to the minimum to zero.
+pub fn supress_close_to_min_mut(w : &mut WindowMut<u8>) {
+    let (min, max) = min_max(&w);
+    for px in w.pixels_mut(1) {
+        if *px - min < max - *px {
+            *px = 0;
+        }
+    }
+}
+
 #[cfg(feature="ipp")]
 pub fn min_max<N>(w : &dyn AsRef<Window<N>>) -> (N, N)
 where

@@ -738,15 +738,27 @@ pub mod edge {
         -2., 0., 2.,
         -1., 0., 1.
     ]);
-
-    pub const SOBEL_SEP : Window<'static, f32> = Window::from_static::<3, 3>(&[
-        -1., 0., 1.
-    ]);
-
+    
     pub const SOBEL_VERT : Window<'static, f32> = Window::from_static::<9, 3>(&[
         1., 2., 1.,
         0., 0., 0.,
         -1., -2., -1.
+    ]);
+
+    pub const SOBEL_HORIZ_SEP_ROW : Window<'static, f32> = Window::from_static::<3, 3>(&[
+        -0.5, 0., 0.5
+    ]);
+    
+    pub const SOBEL_HORIZ_SEP_COL : Window<'static, f32> = Window::from_static::<3, 1>(&[
+        -0.5, 0., 0.5
+    ]);
+    
+    pub const SOBEL_VERT_SEP_ROW : Window<'static, f32> = Window::from_static::<3, 3>(&[
+        -0.5, 0., 0.5
+    ]);
+    
+    pub const SOBEL_VERT_SEP_COL : Window<'static, f32> = Window::from_static::<3, 1>(&[
+        -0.5, 0., 0.5
     ]);
 
     pub const PREWIT_HORIZ : Window<'static, f32> = Window::from_static::<9, 3>(&[

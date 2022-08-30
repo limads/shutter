@@ -25,6 +25,29 @@ use crate::draw::*;
 use crate::sparse::RunLength;
 use num_traits::bounds::Bounded;
 
+impl<'a> Window<'a, f32> {
+
+    pub fn show(&self) {
+        use crate::convert::*;
+        use crate::point::*;
+        let mut n = self.clone_owned();
+        n.full_window_mut().abs_mut();
+        normalize_max_inplace(n.as_mut());
+        n.full_window_mut().scalar_mul(255.0);
+        let dst : Image<u8> = n.convert(Conversion::Preserve);
+        dst.show();
+    }
+    
+}
+
+impl Image<f32> {
+
+    pub fn show(&self) {
+        self.full_window().show();
+    }
+    
+}
+
 pub trait Pixel
 where
     Self : Clone + Copy + Scalar + Debug + Zero + Bounded + Any + Default + 'static

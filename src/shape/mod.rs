@@ -26,13 +26,21 @@ pub fn bounding_rect(pts : &[(usize, usize)]) -> (usize, usize, usize, usize) {
 
 pub mod coord {
 
-    use nalgebra::{Vector2, Scalar};
+    use nalgebra::{Vector2, Scalar, Point2};
     use num_traits::{AsPrimitive, Zero};
     use std::cmp::PartialOrd;
 
+    pub fn coord_to_point<F>(coord : (usize, usize), shape : (usize, usize)) -> Option<Point2<F>>
+    where
+        usize : AsPrimitive<F>,
+        F : Scalar + Copy
+    {
+        coord_to_vec(coord, shape).map(|v| Point2::from(v) )
+    }
+
     // Maps coord to vector with strictly positive entries with origin at the bottom-left
     // pixel in the image.
-    pub fn coord_to_point<F>(coord : (usize, usize), shape : (usize, usize)) -> Option<Vector2<F>>
+    pub fn coord_to_vec<F>(coord : (usize, usize), shape : (usize, usize)) -> Option<Vector2<F>>
     where
         usize : AsPrimitive<F>,
         F : Scalar + Copy

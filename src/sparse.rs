@@ -19,13 +19,34 @@ objects are expected to be speckle-like. For dense objects, consider using RunLe
 instead, since PointEncoding is an encoding that is potentially memory-heavy. But if objects are
 speckle-like, then the RunLength encoding would mostly carry a start and length=1 that wouldn't
 be very informative, so PointEncoding would be a best option. */
+#[derive(Default)]
 pub struct PointEncoding {
     pub pts :  Vec<(usize, usize)>,
     pub rows : Vec<Range<usize>>
 }
 
+impl Encoding for PointEncoding {
+
+    fn points<'a>(&'a self) -> PointIter<'a> {
+        PointIter(Box::new(self.pts.clone().into_iter()))
+    }
+
+    fn encode_distinct(img : &dyn AsRef<Window<u8>>) -> BTreeMap<u8, Self> {
+        unimplemented!()
+    }
+
+    fn encode_from(&mut self, img : &dyn AsRef<Window<u8>>) {
+        unimplemented!()
+    }
+
+    // Write the labels back to the image.
+    fn decode_distinct_to(labels : &BTreeMap<u8, Self>, img : &dyn AsMut<WindowMut<u8>>) {
+        unimplemented!()
+    }
+
+}
 // Assume pts is sorted by rows and by cols within rows.
-fn rows_for_sorted_points(pts : &[(usize, usize)], rows : &mut Vec<(usize, usize)>) {
+fn rows_for_sorted_points(pts : &[(usize, usize)], rows : &mut Vec<Range<usize>>) {
     rows.clear();
     let mut n = 0;
     for (_, mut pts) in &pts.iter().group_by(|pt| pt.0 ) {
@@ -464,6 +485,16 @@ impl ChainEncoding {
 
 /// Wraps any iterator over (usize, usize)
 pub struct PointIter<'a>(Box<dyn Iterator<Item=(usize, usize)> + 'a>);
+
+impl<'a> Iterator for PointIter<'a> {
+
+    type Item=(usize, usize);
+    
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next()
+    }
+    
+}
 
 pub trait Encoding
 where
@@ -1161,11 +1192,11 @@ pub const MIN_VALID_INTEGRAL_COL_RANGE : usize = 8;
 pub const MIN_VALID_INTEGRAL_ROW_RANGE : usize = 8;
 
 // Assume pts is sorted by rows and by cols within rows.
-fn rows_for_sorted_rles(rles : &[RunLength], rows : &mut Vec<(usize, usize)>) {
+fn rows_for_sorted_rles(rles : &[RunLength], rows : &mut Vec<Range<usize>>) {
     rows.clear();
     let mut n = 0;
-    for (_, mut rles) in &rles.iter().group_by(|r| r.0 ) {
-        let row_len = pts.count();
+    for (_, mut rles) in &rles.iter().group_by(|r| r.start.0 ) {
+        let row_len = rles.count();
         rows.push(Range { start : n, end : n+row_len } );
         n += row_len;
     }
@@ -1179,15 +1210,17 @@ impl RunLengthEncoding {
             return Default::default();
         }
         self.rles.iter_mut().for_each(|r| r.start = (r.start.1, r.start.0) );
-        self.rles.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)) );
+        self.rles.sort_by(|a, b| 
+            a.start.0.cmp(&b.start.0).then(a.start.1.cmp(&b.start.1)) 
+        );
         rows_for_sorted_rles(&self.rles[..], &mut self.rows);
         self
     }
-
+    
     pub fn preserve_larger(&self, min_len : usize) -> RunLengthEncoding {
         let mut new_rles = self.rles.clone();
         new_rles.retain(|rle| rle.length >= min_len );
-        let mut new_rows = Vec::new();
+        let mut new_rows : Vec<Range<usize>> = Vec::new();
         rows_for_sorted_rles(&new_rles[..], &mut new_rows);
         let new_rle = Self { rles : new_rles, rows : new_rows };
         verify_rle_state(&self);

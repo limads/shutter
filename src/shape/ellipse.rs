@@ -95,7 +95,7 @@ impl Ellipse {
 
     pub fn estimate_from_coords(coords : &[(usize, usize)], shape : (usize, usize)) -> Result<Self, &'static str> {
         let pts : Result<Vec<_>, _> = coords.iter()
-            .map(|pt| super::coord::coord_to_point(*pt, shape).ok_or("Unable to convert coord") )
+            .map(|pt| super::coord::coord_to_vec(*pt, shape).ok_or("Unable to convert coord") )
             .collect();
         Self::estimate(&pts?[..])
     }
@@ -574,7 +574,7 @@ img.draw(Mark::Dot((img.height() - (closest[1] as usize), closest[0] as usize), 
 (closest - pt).abs().sum()*/
 
 pub fn circumference_coord_error(el : &Ellipse, coord : (usize, usize), img_shape : (usize, usize)) -> Option<f32> {
-    Some(circumference_point_error(el, &crate::shape::coord::coord_to_point(coord, img_shape)?))
+    Some(circumference_point_error(el, &crate::shape::coord::coord_to_vec(coord, img_shape)?))
 }
 
 /// For a fitted point pt, returns its absolute deviation from the ellipse circumference.
