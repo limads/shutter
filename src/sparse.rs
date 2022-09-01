@@ -1982,13 +1982,448 @@ fn inner_rects() {
     }
 }
 
+pub enum Knot {
+
+    // Elements are certain to be connected.
+    Tight,
+
+    // Elements might be connected, pending an evaluation of
+    // the 8-neighborhood.
+    Loose
+
+}
+
 // Represents a binary image in terms of rects. The smallest rects are pixels;
 // the largest rect is the full image. Always use the largest possible rect to
 // represent an object.
-pub struct RectEncoding {
+pub struct RectEncoder {
+
+    sum_dst : Image<u8>,
+
+    // Indices of the local sum image.
+    graph : UnGraph<(usize, usize), Knot>
 
 }
 
-impl RectEncoding {
+pub enum Region {
+
+    // A dense region (rect).
+    Complete((usize, usize, usize, usize)),
+
+    // A 8-neighborhood anchored at the top-left with some missing pixels.
+    Incomplete((usize, usize), Pattern)
 
 }
+
+pub struct RegionEncoding {
+
+    graph : UnGraph<Region, ()>
+
+}
+
+fn update_graph(
+    graph : &mut UnGraph<(usize, usize), Knot>,
+    last_left : &mut NodeIndex,
+    last_tops : &mut [NodeIndex],
+    s : &Image<u8>,
+    i : usize,
+    j : usize,
+    can_be_tight : bool
+) {
+    let curr_ix = graph.add_node((i, j));
+    if i >= 1 {
+        if can_be_tight && s[(i-1, j)] >= 7 {
+            graph.add_edge(curr_ix, last_tops[j], Knot::Tight);
+        } else if s[(i-1, j)] > 0 {
+            graph.add_edge(curr_ix, last_tops[j], Knot::Loose);
+        }
+    }
+
+    if j >= 1 {
+        if can_be_tight && s[(i, j-1)] >= 7 {
+            graph.add_edge(curr_ix, *last_left, Knot::Tight);
+        } else if s[(i, j-1)] > 0 {
+            graph.add_edge(curr_ix, *last_left, Knot::Loose);
+        }
+    }
+    *last_left = curr_ix;
+    last_tops[j] = curr_ix;
+}
+
+impl RectEncoder {
+
+    pub fn new(sz : (usize, usize)) -> Self {
+        assert!(sz.0 % 3 == 0 && sz.1 % 3 == 0);
+        Self {
+            sum_dst : Image::new_constant(sz.0 / 3, sz.1 / 3, 0),
+            graph : UnGraph::new_undirected()
+        }
+    }
+
+    pub fn encode(&mut self, img : &Image<u8>) {
+        crate::local::baseline_local_sum(
+            &img.full_window(),
+            &mut self.sum_dst.full_window_mut()
+        );
+        self.graph.clear();
+        let s = &self.sum_dst;
+        let (sum_height, sum_width) = self.sum_dst.shape();
+        let mut last_tops : Vec<_> = (0..sum_width).map(|_| NodeIndex::from(0) ).collect();
+        let mut last_left = NodeIndex::from(0);
+        for i in 0..sum_height {
+            for j in 0..sum_width {
+                match s[(i,j)] {
+                    0 => {  },
+                    1..=6 => {
+                        update_graph(&mut self.graph, &mut last_left, &mut last_tops, s, i, j, false);
+                    },
+                    7.. => {
+                        update_graph(&mut self.graph, &mut last_left, &mut last_tops, s, i, j, true);
+                    }
+                }
+            }
+        }
+    }
+
+}
+
+const FULL_WHITE_PATTERN : Pattern = Pattern {
+    center : true,
+    neigh : 0b11111111
+};
+
+/*const FULL_DARK_PATTERN : Pattern = {
+    center : false,
+    neigh : 0b00000000
+};*/
+
+/// Represents the binary pattern of the 8-neighborhood and the
+/// center pixel on/off status. The connectedness of two such neighorhoods
+/// can be determined via a single match expression.
+#[derive(Debug, Clone, Copy)]
+pub struct Pattern {
+    pub center : bool,
+    pub neigh : u8
+}
+
+pub struct PatternEncoding {
+
+    // 8-bit neighborhood and center patterns
+    patterns : Vec<Pattern>,
+
+    // Scale ranges, starting at the original image scale and multiplying
+    // by 3 at each iteration.
+    scales : Vec<Range<usize>>,
+
+    // Top left position that anchors each pattern (in the original image scale)
+    positions : Vec<(usize, usize)>,
+}
+
+pub struct PatternEncoder {
+    sums : Vec<Image<u8>>,
+    binaries : Vec<Image<u8>>
+}
+
+const PX_EVALUATED : u8 = 10;
+
+fn eval_to_next_binary_or_pattern(
+    patterns : &mut Vec<Pattern>,
+    scale_ranges : &mut Vec<Range<usize>>,
+    positions : &mut Vec<(usize, usize)>,
+    next_bin : &mut WindowMut<u8>,
+    curr_bin : &Window<u8>,
+    curr_sum : &Window<u8>,
+) {
+    assert!(curr_sum.width() * 3 == curr_bin.width());
+    assert!(next_bin.width() == curr_sum.width());
+    for i in 0..curr_sum.height() {
+        for j in 0..curr_sum.width() {
+            match curr_sum[(i, j)] {
+                0 => {
+                    // Write to be evaluated at the binary image of next level.
+                    next_bin[(i, j)] = 0;
+                },
+                9 => {
+                    // Write to be evaluated at the binary image of next level.
+                    next_bin[(i, j)] = 1;
+                },
+                s => {
+                    let offset = (i*3, j*3);
+                    if s <= 8 {
+                        // This means all iterations in the neighborhood were
+                        // hit by 0 or 1 (sum=0 or sum=9). Therefore, evaluate
+                        // the full pattern at the current level.
+                        next_bin[(i, j)] = PX_EVALUATED;
+                        patterns.push(eval_pattern(curr_bin, offset, s));
+                        positions.push(offset);
+                    } else {
+                        // This means that at least one pixel received the PX_EVALUATED
+                        // constant (10), therefore the remaining pixels that matched 1
+                        // must be inserted at the  previous level as a full white pattern.
+                        for k in 0..3 {
+                            for l in 0..3 {
+                                if curr_bin[(offset.0+k, offset.1+l)] == 1 {
+                                    if let Some(mut r) = scale_ranges.last_mut() {
+                                        patterns.push(FULL_WHITE_PATTERN);
+                                        let last = patterns.len()-1;
+                                        patterns.swap(r.end, last);
+                                        positions.push(offset);
+                                        positions.swap(r.end, last);
+                                        r.end += 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn px_at_pos(w : &Window<u8>, tl : (usize, usize), pos : u8) -> u8 {
+    w[offset_at_pos(tl, pos)]
+}
+
+fn white_at_pos(pos : u8) -> u8 {
+    /*match pos {
+        0 => 0b10000000,
+        1 => 0b01000000,
+        2 => 0b00100000,
+        3 => 0b00010000,
+        4 => 0b00001000,
+        5 => 0b00000100,
+        6 => 0b00000010,
+        7 => 0b00000001,
+        _ => panic!()
+    }*/
+    0b10000000u8 >> pos
+}
+
+fn black_at_pos(pos : u8) -> u8 {
+    /*match pos {
+        0 => 0b01111111,
+        1 => 0b10111111,
+        2 => 0b11011111,
+        3 => 0b11101111,
+        4 => 0b11110111,
+        5 => 0b11111011,
+        6 => 0b11111101,
+        7 => 0b11111110,
+        _ => panic!()
+    }*/
+    (0b01111111u8).rotate_right(pos as u32)
+}
+
+fn linear_offset_at_pos(linear_tl : usize, width : usize, pos : u8) -> usize {
+    match pos {
+        0 => linear_tl,
+        1 => linear_tl+1,
+        2 => linear_tl+2,
+        3 => linear_tl+width+2,
+        4 => linear_tl+2*width+2,
+        5 => linear_tl+2*width+1,
+        6 => linear_tl+2*width,
+        7 => linear_tl+width,
+        _ => panic!()
+    }
+}
+
+fn offset_at_pos(tl : (usize, usize), pos : u8) -> (usize, usize) {
+    match pos {
+        0 => tl,
+        1 => (tl.0, tl.1+1),
+        2 => (tl.0, tl.1+2),
+        3 => (tl.0+1, tl.1+2),
+        4 => (tl.0+2, tl.1+2),
+        5 => (tl.0+2, tl.1+1),
+        6 => (tl.0+2, tl.1),
+        7 => (tl.0+1, tl.1),
+        _ => panic!()
+    }
+}
+
+fn eval_next_white(w : &Window<u8>, tl : (usize, usize), pos : u8, neigh : u8, sum : u8) -> u8 {
+    if sum == 0 {
+        neigh
+    } else {
+        if px_at_pos(w, tl, pos) == 1 {
+            eval_next_white(w, tl, pos+1, neigh | white_at_pos(pos), sum-1)
+        } else {
+            eval_next_white(w, tl, pos+1, neigh, sum)
+        }
+    }
+}
+
+fn eval_next_black(w : &Window<u8>, tl : (usize, usize), pos : u8, neigh : u8, sum : u8) -> u8 {
+    if sum == 0 {
+        neigh
+    } else {
+        if px_at_pos(w, tl, pos) == 0 {
+            eval_next_black(w, tl, pos+1, neigh | black_at_pos(pos), sum-1)
+        } else {
+            eval_next_black(w, tl, pos+1, neigh, sum)
+        }
+    }
+}
+
+fn eval_pattern(w : &Window<u8>, tl : (usize, usize), sum : u8) -> Pattern {
+    let center = w[(tl.0+1, tl.1+1)] == 1;
+    if center {
+        if sum <= 4 {
+            Pattern { center, neigh : eval_next_white(w, tl, 0, 0b00000000, sum - 1) }
+        } else {
+            Pattern { center, neigh : eval_next_black(w, tl, 0, 0b11111111, 8 - sum - 1) }
+        }
+    } else {
+        if sum <= 4 {
+            Pattern { center, neigh : eval_next_white(w, tl, 0, 0b00000000, sum) }
+        } else {
+            Pattern { center, neigh : eval_next_black(w, tl, 0, 0b11111111, 8 - sum) }
+        }
+    }
+}
+
+impl PatternEncoder {
+
+    pub fn new(mut shape : (usize, usize)) -> Self {
+        assert!(shape.0 % 3 == 0 && shape.1 % 3 == 0);
+        let mut sums = Vec::new();
+        while shape.0 >= 3 {
+            shape.0 /= 3;
+            shape.1 /= 3;
+            sums.push(Image::new_constant(shape.0, shape.1, 0));
+        }
+        // The first binary is actually the received image, so we
+        // need one less binary than sum images.
+        let binaries = sums.clone();
+        Self { sums, binaries }
+    }
+
+    pub fn encode(&mut self, img : &Window<u8>) {
+        let mut patterns = Vec::new();
+        let mut scales = Vec::new();
+        let mut positions = Vec::new();
+        for lvl in 0..self.sums.len() {
+
+            // Calculate sum over previous binary image (the 0th sum
+            // is the original image).
+            if lvl == 0 {
+                crate::local::baseline_local_sum(
+                    &img,
+                    &mut self.sums[0].as_mut()
+                );
+            } else {
+                crate::local::baseline_local_sum(
+                    &self.binaries[lvl-1].full_window(),
+                    &mut self.sums[lvl].full_window_mut()
+                );
+            }
+
+            let mut next_binary = mem::take(&mut self.binaries[lvl]);
+            let curr_binary = if lvl == 0 {
+                img.clone()
+            } else {
+                self.binaries[lvl-1].full_window()
+            };
+
+            let size_before = patterns.len();
+            eval_to_next_binary_or_pattern(
+                &mut patterns,
+                &mut scales,
+                &mut positions,
+                &mut next_binary.full_window_mut(),
+
+                &curr_binary,
+                &self.sums[lvl].full_window()
+            );
+            self.binaries[lvl] = next_binary;
+
+            let scale_range = Range { start : size_before, end : patterns.len() };
+            scales.push(scale_range);
+
+            // Empty scale range migt mean ALL patterns might be upgraded to
+            // the next level, and does not mean level is empty.
+            /*if scale_range.is_empty() {
+                // This means all pixels were 0 at this level, so there
+                // is no point in iterating on any remaining coarser scales.
+                return;
+            } else {
+                scales.push(scale_range);
+            }*/
+
+        }
+
+    }
+
+}
+
+#[test]
+fn shl() {
+    // println!("{:#08b} {:#08b}", ONE_TL, ONE_T);
+}
+
+/*const fn shr_by<const N : u8>(a : u8) -> u8 {
+    a >> N
+}
+
+const fn shl_by<const N : u8>(a : u8) -> u8 {
+    a << N
+}
+
+const fn bitor(a : u8, b : u8) -> u8 {
+    a | b
+}
+
+pub const ZERO : u8 = 0b00000000;
+
+pub const ONE_TL : u8 = 0b10000000;
+pub const ONE_T : u8 = ONE_TL.rotate_right(1);
+pub const ONE_TR : u8 = ONE_TL.rotate_right(2);
+pub const ONE_R : u8 = ONE_TL.rotate_right(3);
+pub const ONE_BR : u8 = ONE_TL.rotate_right(4);
+pub const ONE_B : u8 = ONE_TL.rotate_right(5);
+pub const ONE_BL : u8 = ONE_TL.rotate_right(6);
+pub const ONE_L : u8 = ONE_TL.rotate_right(7);
+
+// Two values close together.
+pub const TWO_TL_T : u8 = 0b11000000;
+pub const TWO_T_TR : u8 = TWO_TL_T.rotate_right(1);
+pub const TWO_TR_R : u8 = TWO_TL_T.rotate_right(2);
+pub const TWO_R_BR : u8 = TWO_TL_T.rotate_right(3);
+pub const TWO_BR_B : u8 = TWO_TL_T.rotate_right(4);
+pub const TWO_B_BL : u8 = TWO_TL_T.rotate_right(5);
+pub const TWO_BL_L : u8 = TWO_TL_T.rotate_right(6);
+pub const TWO_L_TL : u8 = TWO_TL_T.rotate_right(7);
+
+// Two values separated by one 0.
+pub const TWO_S1_TL_TR : u8 = 0b10100000;
+pub const TWO_S1_T_R : u8 = TWO_S1_TL_TR.rotate_right(1);
+pub const TWO_S1_TR_BR : u8 = TWO_S1_TL_TR.rotate_right(2);
+pub const TWO_S1_R_B : u8 = TWO_S1_TL_TR.rotate_right(3);
+pub const TWO_S1_BR_B : u8 = TWO_S1_TL_TR.rotate_right(4);
+pub const TWO_S1_B_BL : u8 = TWO_S1_TL_TR.rotate_right(5);
+pub const TWO_S1_BL_L : u8 = TWO_S1_TL_TR.rotate_right(6);
+pub const TWO_S1_L_TL : u8 = TWO_S1_TL_TR.rotate_right(7);*/
+
+// The values w/ 5 are the bit neg of 3; values w/7 are bitneg of 2
+// values with/ 8 is unique. 3 and 4 are the hard ones.
+
+/*// Two values separated by two 0s.
+pub const TWO_S2_TL_TR : u8 = 0b100100000;
+pub const TWO_S2_T_R : u8 = TWO_S1_TL_TR.rotate_right(1);
+pub const TWO_S2_TR_BR : u8 = TWO_S1_TL_TR.rotate_right(2);
+pub const TWO_S2_R_B : u8 = TWO_S1_TL_TR.rotate_right(3);
+pub const TWO_S2_BR_B : u8 = TWO_S1_TL_TR.rotate_right(4);
+pub const TWO_S2_B_BL : u8 = TWO_S1_TL_TR.rotate_right(5);
+pub const TWO_S2_BL_L : u8 = TWO_S1_TL_TR.rotate_right(6);
+pub const TWO_S2_L_TL : u8 = TWO_S1_TL_TR.rotate_right(7);*/
+
+
+
+
+
+
+
+
+

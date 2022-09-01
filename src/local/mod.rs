@@ -8,6 +8,7 @@ use std::iter::FromIterator;
 pub use ripple::conv::*;
 use std::fmt::Debug;
 use crate::raster::Raster;
+use std::ops::Add;
 
 // Ipp only has separable convolution for f32 and i16 types; and
 // conventional convolution for f32, i16 and u8 types.
@@ -231,6 +232,24 @@ image median_filter(image in, int size)
 	return out;
 }
 */
+
+pub fn baseline_local_sum<P>(src : &Window<P>, dst : &mut WindowMut<P>)
+where
+    P : Pixel + Add<Output=P>
+{
+    assert!(src.height() % dst.height() == 0);
+    assert!(src.width() % dst.width() == 0);
+    let local_win_sz = (src.height() / dst.height(), src.width() / dst.width());
+    for i in 0..dst.height() {
+        for j in 0..dst.width() {
+            let local = src.sub_window(
+                (i*local_win_sz.0, j*local_win_sz.1),
+                local_win_sz
+            ).unwrap();
+            dst[(i, j)] = crate::global::baseline_sum(&local);
+        }
+    }
+}
 
 pub fn local_sum(src : &Window<'_, u8>, dst : &mut WindowMut<'_, i32>) {
 
@@ -955,6 +974,7 @@ where
 }
 
 pub fn linear_conv_sz(img_sz : (usize, usize), kernel_sz : (usize, usize)) -> (usize, usize) {
+    assert!(img_sz.0 > kernel_sz.0 && img_sz.1 > kernel_sz.1, "Image size = {:?}; Kernel size = {:?}", img_sz, kernel_sz);
     let nrow = img_sz.0 - kernel_sz.0 + 1;
     let ncol = img_sz.1 - kernel_sz.1 + 1;
     (nrow, ncol)

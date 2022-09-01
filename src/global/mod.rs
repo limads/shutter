@@ -22,6 +22,13 @@ pub fn supress_close_to_min_mut(w : &mut WindowMut<u8>) {
     }
 }
 
+pub fn baseline_sum<U>(s : &Window<U>) -> U 
+where
+    U : Pixel + Add<Output=U>
+{
+    s.pixels(1).fold(U::zero(), |s, p| s + *p )
+}
+
 #[cfg(feature="ipp")]
 pub fn min_max<N>(w : &dyn AsRef<Window<N>>) -> (N, N)
 where

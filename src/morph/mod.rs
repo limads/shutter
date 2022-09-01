@@ -194,6 +194,7 @@ where
 
 }
 
+#[derive(Debug, Clone)]
 #[cfg(feature="ipp")]
 pub struct IppiMorph {
     spec : Vec<u8>,
@@ -310,6 +311,63 @@ impl IppiMorph {
         }
     }
 
+}
+
+/*fn remove_salt(
+    src_dst : &mut WindowMut<u8>,
+    sum_dst : &mut WindowMut<u8>,
+) {
+    assert!(src_dst.width() / sum_dst.width() == 3 && src_dst.height() / sum_dst.height() == 3);
+    crate::local::baseline_local_sum(src_dst.as_ref(), sum_dst);
+    for i in 0..sum_dst.height() {
+        for j in 0..sum_dst.width() {
+            let center = (i * 3 + 1, j * 3 + 1);
+            if sum_dst[(i, j)] == 1 {
+                if center == 1 {
+                    src_dst[center] = 0;
+                } else {
+                    let sum_top = sum_dst[(i-1, j)];
+                    let sum_right = sum_dst[(i, j+1)];
+                    let sum_bottom = sum_dst[(i+1, j)];
+                    let sum_left = sum_dst[(i, j-1)];
+                    if sum_top == 0 && sum_right == 0 && sum_bottom == 0 && sum_left == 0 {
+                        src_dst.sub_window_mut((i*3, j*3), (3,3)).fill(0);
+                    }
+                    if  == 0 {
+
+                    } else if  == 0 {
+
+                    }
+                }
+            }
+        }
+    }
+}*/
+
+// Removes binary image fills, leaving only edges. The returned image
+// is guaranteed to only contain edges which can have at most 2-pixel
+// thickness, since the sum window edge might fall in the middle of a small
+// object. Therefore objects with side of 4x4 pixels will not have their fill removed, but
+// objects with side 5x5 pixels and larger will have the center pixel of their fill removed.
+// The binary image is assumed to contain only ones and zeros. A second pass of this function
+// over the window [1..n] at either or both directions is guaranteed to leave edges with 1 pixel only.
+pub fn remove_fill(
+    src_dst : &mut WindowMut<u8>,
+    sum_dst : &mut WindowMut<u8>,
+) {
+    assert!(src_dst.width() / sum_dst.width() == 3 && src_dst.height() / sum_dst.height() == 3);
+    crate::local::baseline_local_sum(src_dst.as_ref(), sum_dst);
+    for i in 0..sum_dst.height() {
+        for j in 0..sum_dst.width() {
+            if sum_dst[(i, j)] == 9 {
+                src_dst[(i * 3 + 1, j * 3 + 1)] = 0;
+            } else {
+                // The difference in sums to the neighbors or sum might suggest
+                // if we need to re-evaluate them as well. If the sum allows an
+                // object to be in the middle, evaluate it. Else pass.
+            }
+        }
+    }
 }
 
 /*pub struct Opening {

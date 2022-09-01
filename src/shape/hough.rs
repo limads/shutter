@@ -80,6 +80,8 @@ pub struct HoughCircle {
     // Use float because eventually we will want to blur it, but it is actually an counter.
     accum : Vec<Image<f32>>,
     
+    accum_blurred : Vec<Image<f32>>,
+
     found : BTreeMap<usize, Vec<((usize, usize), f32)>>
     
 }
@@ -94,6 +96,10 @@ impl HoughCircle {
         shape : (usize, usize)
     ) -> Self {
         assert!(n_radii >= 1);
+
+        // Required for gaussian blurring.
+        assert!(shape.0 > 5 && shape.1 > 5);
+
         let delta_sector = 2.0 * PI / n_sectors as f32;
         let angles : Vec<_> = (0..n_sectors)
             .map(|i| i as f32 * delta_sector ).collect();
@@ -113,7 +119,9 @@ impl HoughCircle {
         
         let accum : Vec<_> = (0..n_radii)
             .map(|_| Image::new_constant(shape.0, shape.1, 0.) ).collect();
-        Self { angles, radii, accum, shape, deltas, found : BTreeMap::new() }
+        let accum_blurred = (0..n_radii)
+            .map(|_| Image::new_constant(shape.0 - 5 + 1, shape.1 - 5 + 1, 0.) ).collect();
+        Self { angles, radii, accum, shape, deltas, found : BTreeMap::new(), accum_blurred }
     }
     
     pub fn best_matched_accumulator(&self) -> Option<&Image<f32>> {
@@ -126,7 +134,7 @@ impl HoughCircle {
                 .1;
             if best_at_this > max {
                 max = best_at_this;
-                acc = Some(&self.accum[*rad_ix]);
+                acc = Some(&self.accum_blurred[*rad_ix]);
             }
         }
         acc
@@ -135,13 +143,13 @@ impl HoughCircle {
     pub fn all_matched_accumulators(&self) -> Vec<&Image<f32>> {
         let mut acc = Vec::new();
         for rad_ix in self.found.keys() {
-            acc.push(&self.accum[*rad_ix]);
+            acc.push(&self.accum_blurred[*rad_ix]);
         }
         acc
     }
     
     pub fn accumulators(&self) -> &[Image<f32>] {
-        &self.accum[..]
+        &self.accum_blurred[..]
     }
     
     pub fn found(&self) -> &BTreeMap<usize, Vec<((usize, usize), f32)>> {
@@ -160,11 +168,10 @@ impl HoughCircle {
             let mut acc = &mut self.accum[i];
             acc.full_window_mut().fill(0.);
             accumulate_for_radius(pts, &self.deltas[i], acc);
-            *acc = acc.clone().full_window()
-                .convolve(&blur::GAUSS, Convolution::Linear);
+            acc.clone().full_window().convolve_mut(&blur::GAUSS, Convolution::Linear, &mut self.accum_blurred[i].full_window_mut());
         }
         let mut circles = Vec::new();
-        find_hough_maxima(&self.accum, n_expected, min_dist, &mut self.found);
+        find_hough_maxima(&self.accum_blurred[..], n_expected, min_dist, &mut self.found);
         for (rad_ix, centers) in &self.found {
             circles.extend(centers.clone().drain(..).map(|c| (c.0, self.radii[*rad_ix])));
         }
