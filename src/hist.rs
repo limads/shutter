@@ -3,6 +3,68 @@ use std::iter::FromIterator;
 use std::mem;
 use std::cmp::{Ord, Ordering};
 use num_traits::AsPrimitive;
+use std::ops::Range;
+use bayes::calc::rank::Rank;
+use bayes::calc::running::Accumulated;
+
+// For a histogram marginalized over two conditionals, the mean of
+// the marginal is the weighted average over the mean of the conditionals.
+// simply taking the histogram mean assumes the weights of the averages are the
+// same. If the weights are not the same, the mean will be biased towards the
+// conditional with more weight.
+
+// The computational cost of calculatking m x n histograms over the image
+// is the same as calculating the full image histogram, the only difference
+// is that the memory cost is much higher.
+#[derive(Debug, Clone)]
+pub struct GridHistogram {
+    pub hists : Vec<GrayHistogram>,
+    pub rows : Vec<Range<usize>>,
+}
+
+impl GridHistogram {
+
+    pub fn new(nrow : usize, ncol : usize) -> Self {
+        let mut rows = Vec::new();
+        let mut hists = Vec::new();
+        let mut n = 0;
+        for r in 0..nrow {
+            rows.push(Range { start : n, end : n + ncol });
+            n += ncol;
+            for c in 0..ncol {
+                hists.push(GrayHistogram::new());
+            }
+        }
+        Self { hists, rows }
+    }
+
+    pub fn update(&mut self, w : &Window<u8>) {
+        let ncol = self.rows[0].end - self.rows[0].start;
+        let nrow = self.rows.len();
+        let mut n = 0;
+        for sub_w in w.windows((w.height() / nrow, w.width() / ncol)) {
+            self.hists[n].update(&sub_w);
+            n += 1;
+        }
+    }
+
+    pub fn calculate(w : &Window<u8>, nrow : usize, ncol : usize) -> Self {
+        let mut grid = Self::new(nrow, ncol);
+        grid.update(w);
+        grid
+    }
+
+    pub fn at(&self, pos : (usize, usize)) -> Option<&GrayHistogram> {
+        let ncol = self.rows[0].end - self.rows[0].start;
+        self.hists.get(pos.0 * ncol + pos.1)
+    }
+
+    pub fn at_mut(&mut self, pos : (usize, usize)) -> Option<&mut GrayHistogram> {
+        let ncol = self.rows[0].end - self.rows[0].start;
+        self.hists.get_mut(pos.0 * ncol + pos.1)
+    }
+
+}
 
 #[derive(Debug, Clone)]
 pub struct GrayHistogram([u32; 256]);
@@ -160,8 +222,21 @@ where
 
 impl GrayHistogram {
 
+    pub fn accumulate(&self) -> Vec<u32> {
+        bayes::calc::running::cumulative_sum(self.0.iter().copied()).collect()
+    }
+
     pub fn new() -> Self {
         Self([0; 256])
+    }
+
+    pub fn mean(&self) -> u8 {
+        bayes::approx::mean_for_hist(&self.0) as u8
+    }
+
+    pub fn median(&self) -> u8 {
+        let acc = self.accumulate();
+        bayes::approx::median_for_accum_hist(&acc).val as u8
     }
 
     /*pub fn local_maxima(&self, interval_len : usize) -> Vec<(usize, u32)> {

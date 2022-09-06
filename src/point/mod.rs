@@ -283,6 +283,8 @@ pub trait PointOp<N> {
 
     // Apply contrast enhancement (multiply by scalar > 1.0). Perhaps call stretch/stretch_mut
     fn scalar_mul(&mut self, by : N);
+    
+    fn scalar_div(&mut self, by : N);
 
     // Perhaps add stretch_brighten/stretch_scalar_add_mut that apply both brighten and stretch in a single pass.
 
@@ -545,7 +547,7 @@ pub fn expand(src : &Window<u8>, mut dst : WindowMut<u8>, win_side : usize) {
 
 impl <N> PointOp<N> for WindowMut<'_, N>
 where
-    N : MulAssign + AddAssign + Debug + Scalar + Copy + Default + Any + Sized + num_traits::Zero
+    N : MulAssign + DivAssign + AddAssign + Debug + Scalar + Copy + Default + Any + Sized + num_traits::Zero
 {
 
     fn abs_mut(&mut self) {
@@ -691,6 +693,54 @@ where
         }
 
         self.pixels_mut(1).for_each(|p| *p *= by );
+    }
+    
+    fn scalar_div(&mut self, by : N) {
+
+        /*#[cfg(feature="ipp")]
+        unsafe {
+
+            let (byte_stride, roi) = crate::image::ipputils::step_and_size_for_window_mut(&self);
+            let scale_factor = 1;
+
+            if self.pixel_is::<u8>() {
+                let ans = crate::foreign::ipp::ippi::ippiDivC_8u_C1IRSfs(
+                    *mem::transmute::<_, &u8>(&by),
+                    mem::transmute(self.as_mut_ptr()),
+                    byte_stride,
+                    roi,
+                    scale_factor
+                );
+                assert!(ans == 0);
+                return;
+            }
+
+            if self.pixel_is::<i32>() {
+                // does not exist
+                /*let ans = crate::foreign::ipp::ippi::ippiMulC_32s_C1IRSfs(
+                    *mem::transmute::<_, &i32>(&by),
+                    mem::transmute(self.as_mut_ptr()),
+                    byte_stride,
+                    roi,
+                    scale_factor
+                );
+                assert!(ans == 0);
+                return;*/
+            }
+
+            if self.pixel_is::<f32>() {
+                let ans = crate::foreign::ipp::ippi::ippiDivC_32f_C1IR(
+                    *mem::transmute::<_, &f32>(&by),
+                    mem::transmute(self.as_mut_ptr()),
+                    byte_stride,
+                    roi
+                );
+                assert!(ans == 0);
+                return;
+            }
+        }*/
+
+        self.pixels_mut(1).for_each(|p| *p /= by );
     }
 
     /*fn truncate_mut(&mut self, above : bool, val : N) {
@@ -907,7 +957,7 @@ where
 
         assert!(self.shape() == rhs.shape());
 
-        #[cfg(feature="ipp")]
+        /*#[cfg(feature="ipp")]
         unsafe {
 
             let (src_dst_byte_stride, roi) = crate::image::ipputils::step_and_size_for_window_mut(&self);
@@ -938,7 +988,7 @@ where
                 assert!(ans == 0);
                 return;
             }
-        }
+        }*/
 
         for (out, input) in self.pixels_mut(1).zip(rhs.pixels(1)) {
             *out -= *input;

@@ -4,6 +4,8 @@ use crate::image::*;
 use crate::local::*;
 use std::collections::BTreeMap;
 use std::cmp::Ordering;
+use std::ops::SubAssign;
+use crate::point::PointOp;
 
 pub struct RectComplement {
     pub tl : (usize, usize, usize, usize),
@@ -82,7 +84,10 @@ pub struct HoughCircle {
     
     accum_blurred : Vec<Image<f32>>,
 
-    found : BTreeMap<usize, Vec<((usize, usize), f32)>>
+    found : BTreeMap<usize, Vec<((usize, usize), f32)>>,
+    
+    // Local sums over the blurred image.
+    pub ws : Image<f32>
     
 }
 
@@ -119,9 +124,12 @@ impl HoughCircle {
         
         let accum : Vec<_> = (0..n_radii)
             .map(|_| Image::new_constant(shape.0, shape.1, 0.) ).collect();
-        let accum_blurred = (0..n_radii)
+        let accum_blurred : Vec<_> = (0..n_radii)
             .map(|_| Image::new_constant(shape.0 - 5 + 1, shape.1 - 5 + 1, 0.) ).collect();
-        Self { angles, radii, accum, shape, deltas, found : BTreeMap::new(), accum_blurred }
+        let ws = Image::new_constant(
+            accum_blurred[0].height() / 4, 
+            accum_blurred[0].width() / 4, 0.0f32);
+        Self { angles, radii, accum, shape, deltas, found : BTreeMap::new(), accum_blurred, ws }
     }
     
     pub fn best_matched_accumulator(&self) -> Option<&Image<f32>> {
@@ -168,10 +176,23 @@ impl HoughCircle {
             let mut acc = &mut self.accum[i];
             acc.full_window_mut().fill(0.);
             accumulate_for_radius(pts, &self.deltas[i], acc);
-            acc.clone().full_window().convolve_mut(&blur::GAUSS, Convolution::Linear, &mut self.accum_blurred[i].full_window_mut());
+            acc.clone().full_window().convolve_mut(
+                &blur::GAUSS, 
+                Convolution::Linear, 
+                &mut self.accum_blurred[i].full_window_mut()
+            );
+            
+            /*let mut twice_blurred = self.accum_blurred[i].full_window()
+                .convolve_padded(&blur::GAUSS, Convolution::Linear);
+            twice_blurred = twice_blurred.full_window()
+                .convolve_padded(&blur::GAUSS, Convolution::Linear);    
+            self.accum_blurred[i].full_window_mut().sub_assign(twice_blurred.full_window());
+            self.accum_blurred[i].full_window_mut().abs_mut();*/
+            
+            
         }
         let mut circles = Vec::new();
-        find_hough_maxima(&self.accum_blurred[..], n_expected, min_dist, &mut self.found);
+        find_hough_maxima(&self.accum_blurred[..], n_expected, min_dist, &mut self.found, self.ws.as_mut());
         for (rad_ix, centers) in &self.found {
             circles.extend(centers.clone().drain(..).map(|c| (c.0, self.radii[*rad_ix])));
         }
@@ -216,7 +237,8 @@ fn find_hough_maxima(
     accums : &[Image<f32>], 
     n_expected : usize, 
     min_dist : usize,
-    found : &mut BTreeMap<usize, Vec<((usize, usize), f32)>>
+    found : &mut BTreeMap<usize, Vec<((usize, usize), f32)>>,
+    ws : &mut WindowMut<f32>
 ) {
     found.clear();
     for _ in 0..n_expected {
@@ -239,11 +261,19 @@ fn find_hough_maxima(
                     (0, 0, outer_shape.0, outer_shape.1)
                 ).unwrap();
                 for r in compl.as_array() {
-                    let opt_max = crate::local::min_max_idx(
+                    
+                    // Use this for absolute global maximum.
+                    /*let opt_max = crate::local::min_max_idx(
                         &accums[rad_ix].window((r.0, r.1), (r.2, r.3)).unwrap(), 
                         false,
                         true
+                    );*/
+                    let opt_max = contrasting_maximum(
+                        &accums[rad_ix].window((r.0, r.1), (r.2, r.3)).unwrap(),
+                        ws,
+                        3
                     );
+                    
                     if let (_, Some(new_max)) = opt_max {
                         if new_max.2 > max.1 {
                             max = ((new_max.0 + r.0, new_max.1 + r.1), new_max.2);
@@ -267,6 +297,38 @@ fn find_hough_maxima(
         }
         found.entry(max_rad_ix).or_insert(Vec::new()).push(max);
     }
+}
+
+fn contrasting_maximum(
+    win : &Window<f32>,
+    sum : &mut WindowMut<f32>,
+    ext : i32
+) -> (Option<(usize, usize, f32)>, Option<(usize, usize, f32)>) {
+    crate::local::baseline_local_sum(win, sum);
+    let mut max_contrast = (0, 0, 0.0);
+    for i in (ext+1)..(sum.height() as i32-(ext+1)) {
+        for j in (ext+1)..(sum.width() as i32-(ext+1)) {
+            let center = sum[(i as usize, j as usize)];
+            let mut contrast = 0.0;
+            for dx in [-ext, 0, ext] {
+                for dy in [-ext, 0, ext] {
+                
+                    if dx == 0 && dy == 0 {
+                        continue;
+                    }
+                    
+                    let surround = sum[((i+dy) as usize, (j+dx) as usize)];
+                    // contrast += (center - surround) / (center + surround);
+                    contrast += center - surround;
+                }
+            }
+            // contrast /= 8.0;
+            if contrast > 0.0 && contrast > max_contrast.2 {
+                max_contrast = (i as usize * 4, j as usize * 4, contrast);
+            }
+        }
+    }
+    (None, Some(max_contrast))
 }
 
 mod test {

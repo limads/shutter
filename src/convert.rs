@@ -14,6 +14,17 @@ use num_traits::ops::inv::Inv;
 use num_traits::One;
 use std::any::Any;
 use std::mem;
+use crate::point::normalize_max_inplace;
+use crate::point::PointOp;
+
+pub fn into_normalized_owned(w : &Window<f32>) -> Image<u8> {
+    let mut n = w.clone_owned();
+    n.full_window_mut().abs_mut();
+    normalize_max_inplace(n.as_mut());
+    n.full_window_mut().scalar_mul(255.0);
+    let dst : Image<u8> = n.convert(Conversion::Preserve);
+    dst
+}
 
 // TODO absolute value convert -> call convert(abs(M)); then only the
 // bit depth must be taken into account.

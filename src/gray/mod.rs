@@ -5,8 +5,137 @@ use std::mem;
 use bayes::calc::*;
 use std::collections::BTreeMap;
 use std::ops::Sub;
+use crate::hist::{GrayHistogram, GridHistogram};
+
+#[derive(Debug, Clone, Copy)]
+pub enum AdaptiveForeground {
+    Above,
+    Below,
+    Inside,
+    Outside
+}
+
+impl AdaptiveForeground {
+
+    fn foreground(&self, v : u8) -> Foreground {
+        match self {
+            AdaptiveForeground::Above => Foreground::Above(v),
+            AdaptiveForeground::Below => Foreground::Below(v),
+            _ => panic!()
+        }
+    }
+
+}
+
+impl Window<'_, u8> {
+
+    /// (1) Calculate partition values for each sub-window
+    /// (Or the full window if win_sz is None).
+    /// (3) Apply threshold using this partition value to each sub-window
+    /// (or the full window if win_sz is None).
+    pub fn adaptive_threshold_to(
+        &self,
+        alg : &mut impl AdadptiveThreshold,
+        mut dst : WindowMut<u8>
+    ) {
+        let bv = alg.best_values(self);
+        let mut i = 0;
+        let sub_sz = alg.sub_sz();
+        for (mut sub_dst, sub_src) in dst.windows_mut((sub_sz.0, sub_sz.1)).zip(self.windows((sub_sz.0, sub_sz.1))) {
+            sub_src.threshold_to(bv[i], &mut sub_dst);
+            i += 1;
+        }
+        assert!(i == bv.len());
+    }
+
+    // adaptive_truncate
+
+}
 
 pub trait AdadptiveThreshold {
+
+    fn new(win_sz : (usize, usize), sub_sz : Option<(usize, usize)>, fg : AdaptiveForeground) -> Self;
+
+    fn sub_sz(&self) -> (usize, usize);
+
+    fn best_values(&mut self, w : &Window<u8>) -> Vec<Foreground>;
+
+    // fn best_intervals(&mut self, w : &Window<u8>) -> Vec<(u8, u8)>;
+
+}
+
+#[derive(Debug, Clone)]
+pub struct GridHistOp {
+    grid : GridHistogram,
+    fg : AdaptiveForeground,
+    sub_sz : (usize, usize)
+}
+
+impl GridHistOp {
+
+    fn sub_sz(&self) -> (usize, usize) {
+        self.sub_sz
+    }
+
+    fn new(win_sz : (usize, usize), sub_sz : Option<(usize, usize)>, fg : AdaptiveForeground) -> Self {
+        let hist_dim = if let Some(sub_sz) = sub_sz {
+            (win_sz.0 / sub_sz.0, win_sz.1 / sub_sz.1)
+        } else {
+            (1,1)
+        };
+        Self { grid : GridHistogram::new(hist_dim.0, hist_dim.1), fg, sub_sz : sub_sz.unwrap_or(win_sz) }
+    }
+
+    fn best_value_with(&mut self, w : &Window<u8>, f : impl Fn(&GrayHistogram)->u8) -> Vec<Foreground> {
+        let mut i = 0;
+        let mut best_vals = Vec::new();
+        for w in w.windows((self.sub_sz.0, self.sub_sz.1)) {
+            self.grid.hists[i].update(&w);
+            let bv = f(&self.grid.hists[i]);
+            best_vals.push(self.fg.foreground(bv));
+            i += 1;
+        }
+        assert!(best_vals.len() == self.grid.hists.len());
+        best_vals
+    }
+
+}
+
+#[derive(Debug, Clone)]
+pub struct MeanThreshold(GridHistOp);
+
+impl AdadptiveThreshold for MeanThreshold {
+
+    fn sub_sz(&self) -> (usize, usize) {
+        self.0.sub_sz
+    }
+
+    fn new(win_sz : (usize, usize), sub_sz : Option<(usize, usize)>, fg : AdaptiveForeground) -> Self {
+        Self(GridHistOp::new(win_sz, sub_sz, fg))
+    }
+
+    fn best_values(&mut self, w : &Window<u8>) -> Vec<Foreground> {
+        self.0.best_value_with(w, |h| h.mean() )
+    }
+
+}
+
+#[derive(Debug, Clone)]
+pub struct MedianThreshold(GridHistOp);
+
+impl AdadptiveThreshold for MedianThreshold {
+
+    fn sub_sz(&self) -> (usize, usize) {
+        self.0.sub_sz
+    }
+
+    fn new(win_sz : (usize, usize), sub_sz : Option<(usize, usize)>, fg : AdaptiveForeground) -> Self {
+        Self(GridHistOp::new(win_sz, sub_sz, fg))
+    }
+
+    fn best_values(&mut self, w : &Window<u8>) -> Vec<Foreground> {
+        self.0.best_value_with(w, |h| h.median() )
+    }
 
 }
 
@@ -1064,7 +1193,7 @@ impl MaxEntropy {
     pub fn eval(h : &[u32]) -> Option<u8> {
         let probs = bayes::calc::counts_to_probs(h);
         let cumul_probs = bayes::calc::running::cumulative_sum(probs.iter().copied()).collect::<Vec<_>>();
-        let cumul_entropies = bayes::calc::cumulative_entropies(probs.iter().copied()).collect::<Vec<_>>();
+        let cumul_entropies = bayes::calc::cumulative_entropy(probs.iter().copied()).collect::<Vec<_>>();
         let total_entropy = cumul_entropies[255];
         let step = |h : &[u32], t : usize| -> usize {
             let entropy_ratio = cumul_entropies[t] / total_entropy;
@@ -1183,3 +1312,4 @@ pub fn supress_binary_speckles(win : &Window<'_, u8>, mut out : WindowMut<'_, u8
         }
     }
 }
+

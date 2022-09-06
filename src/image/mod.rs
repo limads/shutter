@@ -25,16 +25,55 @@ use crate::draw::*;
 use crate::sparse::RunLength;
 use num_traits::bounds::Bounded;
 
+/* pub mod base {
+
+    pub struct Image<S, P>
+    where
+        S :  AsRef<[P]>
+    {
+        offset : (usize, usize),
+        sz : (usize, usize),
+        slice : S
+    }
+
+    impl<S, P> Image<S>
+    where
+        S :  AsRef<[P]>
+    {
+        pub fn slice(&self) -> &[P] {
+            self.slice.as_ref()
+        }
+    }
+
+    impl<S, P> Image<S>
+    where
+        S :  AsRef<[P]> + AsMut<[P]>
+    {
+        pub fn slice_mut(&mut self) -> &mut [P] {
+            self.slice.as_mut()
+        }
+    }
+
+}
+
+// Type alias variant
+pub type ImageBuf<T> = base::Image<Box<[T]>>;
+pub type Image<'a, T> = base::Image<&'a [T]>;
+pub type ImageMut<'a, T> = base::Image<&'a [T]>;
+
+// But not for ImageBuf/ImageMut
+impl Copy for Image<'a, T>;
+
+// Default generic argument variant.
+pub struct Image<'a, S = &'a [T]> { }
+*/
+
 impl<'a> Window<'a, f32> {
 
     pub fn show(&self) {
         use crate::convert::*;
         use crate::point::*;
-        let mut n = self.clone_owned();
-        n.full_window_mut().abs_mut();
-        normalize_max_inplace(n.as_mut());
-        n.full_window_mut().scalar_mul(255.0);
-        let dst : Image<u8> = n.convert(Conversion::Preserve);
+        let dst = into_normalized_owned(self);
         dst.show();
     }
     

@@ -7,24 +7,188 @@ use serde::{Serialize, Deserialize, de::DeserializeOwned};
 use std::any::Any;
 use std::iter::FromIterator;
 
-// point kernel does nothing, really, since it will effectively ignore the neighborhood since it will never match the image.
-pub const POINT_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&[
+// Gonzalez & Woods
+pub fn boundary() {
+    // A - (A (erode) B)
+    // Where ("-" is set difference implemented by a.not(b).)
+}
+
+// Gonzalez & Woods
+pub fn hole_fill() {
+    // Start with A, an image with holes to be filled, and X0, an image
+    // with a single white pixel anywhere within each hole. Let b be the 3x3 cross
+    // SE. Then iterate:
+    // X_k = (X_k-1 (dilate) B) \intersect A^C
+    // Until X_k == X_k-1.
+    // The set union of X_k and A contains all the filled holes and their boundaries.
+}
+
+// Gonzalez & Woods
+pub fn connected_components() {
+    // Let A be the set containing one or more connected components.
+    // Let X0 be an image with a single white pixel within each connected component.
+    // Let B be the 3x3 box SE for 8-neighborhood connectivity or
+    // the 3x3 cross SE for 4-neighborhood connectivity.
+    // Then iterate:
+    // X_k = (X_k-1 (dilate) B) \intersect A
+    // until X_k == X_k-1
+}
+
+pub fn hit_or_miss() {
+    // a (hit-or-miss) b = a (*) b is defined as:
+    // let b2 be the negation of b1 (b1 AND b2 == 0).
+    // Then a (*) b = (a (erode) b1) - (a (dilate) \hat b2)
+    // The resulting image contains points where b1 matches A and b2 matches A^C.
+}
+
+pub fn convex_hull() {
+    // Let B1..B4 the the "c" structuring elements
+    // Let X_k^i = (X_k-1 (hit-or-miss) B^i) (union) A for i=1..4
+    // Let D_i be X_k^i at convergence (X_k^i == X_k)
+    // Then C(A) = \union_i D^i is the convex hull of A.
+}
+
+pub fn thinning() {
+    // The thinning operator (x) is:
+    // A (x) B = A - (A (*) B) = A \intersect (A (*) B)^C
+    // Let B^i be a rotated version of B^{i-1} in a sequence of SEs B^i ("helix" SEs).
+    // Then A (x) {B} = (A (x) B^1) (x) B^2) ... (x) B^n)
+    // Repeat until convergence.
+}
+
+pub fn thickening() {
+    // The thickening operator (.) is:
+    // A (.) B = A \union (A (*) B)
+    // Thickening is just thinning the background:
+    // Calculate thick(A) = thin(A^C)^C.
+}
+
+// Gonzalez & Woods:
+// Erosion: A (erode) B = { z | (B)z \in A} (The set of all points z such that B translated by z is contained in A)
+// or equivalently A (erode) B = { z | (B)z \intersect A^C = \empty } (the set of all points such that the
+// intersection with complement of A is the empty set). Effect: Image details smaller than the structuring element
+// are filtered away. Structuring elements are the smallest arrays padded with 0s such as to contain all coordinates
+// of interest. A center point-like SE is the identity element for the erosion of the image.
+// Dilation:
+// A (dilate) B = { z | (\hat B)z \intersect A != \empty }, Where \hat B is the reflection of the structuring element
+// B around its origin. This is the set resulting for all displacements z such that A and B share at least one element.
+// Properties:
+// (A (erode) B)^C = A^C (dilate) \hat B
+// (A (dilate) B)^C = A^C (erode) \hat B
+// if the SE is symmetric, \hat B = B.
+// Structuring elements
+pub mod se {
+
+    /*const fn invert_array<const N : usize>(s : [N; u8]) -> [N; u8] {
+        s.map(|el| 255 - el )
+    }
+
+    const fn invert_window
+
+    const fn transpose_window*/
+
+}
+
+// Helix SEs are defined in clockwise fashion starting from horiz.
+
+/*const fn transpose_array<const N : usize>(s : [N; u8]) -> [N; u8] {
+    let mut out = s.clone();
+    for i in 0..N.sqrt() {
+        for j in 0..N.sqrt() {
+            out[i*j + j] = s[j*i + i];
+        }
+    }
+}*/
+
+const fn negate_array<const N : usize>(arr : [u8; N]) -> [u8; N] {
+    let mut b = [0; N];
+    let mut i = 0;
+    while i < N {
+        b[i] = if arr[i] == 0 { 255 } else { 0 };
+        i += 1;
+    }
+    b
+}
+
+pub const HELIX_HORIZ : Window<'static, u8> = Window::from_static::<9, 3>(&[
     0, 0, 0,
-    0, 255, 0,
+    255, 0, 255,
     0, 0, 0
 ]);
 
-pub const DIAG_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&[
+pub const HELIX_DIAG_BR : Window<'static, u8> = Window::from_static::<9, 3>(&[
     255, 0, 0,
-    0, 255, 0,
+    0, 0, 0,
     0, 0, 255
 ]);
 
-pub const ANTI_DIAG_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&[
-    0, 0, 255,
+// transpose(helix_horiz)
+pub const HELIX_VERT : Window<'static, u8> = Window::from_static::<9, 3>(&[
     0, 255, 0,
+    0, 0, 0,
+    0, 255, 0
+]);
+
+// transpose(helix_diag_br)
+pub const HELIX_DIAG_BL : Window<'static, u8> = Window::from_static::<9, 3>(&[
+    0, 0, 255,
+    0, 0, 0,
     255, 0, 0
 ]);
+
+const HELIX_CLOCKWISE : [Window<'static, u8>; 4] = [
+    HELIX_HORIZ,
+    HELIX_DIAG_BR,
+    HELIX_VERT,
+    HELIX_DIAG_BL
+];
+
+const HELIX_COUNTER_CLOCKWISE : [Window<'static, u8>; 4] = [
+    HELIX_HORIZ,
+    HELIX_DIAG_BL,
+    HELIX_VERT,
+    HELIX_DIAG_BR
+];
+
+// point kernel does nothing, really, since it will effectively ignore the neighborhood since it will never match the image.
+
+pub const C_UP_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&[
+    255, 0, 255,
+    255, 0, 255,
+    255, 255, 255
+]);
+
+pub const C_RIGHT_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&[
+    255, 255, 255,
+    255, 0, 0,
+    255, 255, 255
+]);
+
+pub const C_DOWN_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&[
+    255, 255, 255,
+    255, 0, 255,
+    255, 0, 255
+]);
+
+pub const C_LEFT_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&[
+    255, 255, 255,
+    0, 0, 255,
+    255, 255, 255
+]);
+
+const PT_ARR : [u8; 9] = [
+    0, 0, 0,
+    0, 255, 0,
+    0, 0, 0
+];
+
+// point kernel does nothing, really, since it will effectively ignore the neighborhood since it will never match the image.
+pub const POINT_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&PT_ARR);
+
+// The negative point kernel, however, is useful to remove salt noise from a binary image.
+pub const NEG_POINT_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(
+    &negate_array(PT_ARR)
+);
 
 pub const HBAR_PAIR_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&[
     255, 255, 255,
@@ -38,17 +202,64 @@ pub const VBAR_PAIR_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&
     255, 0, 255
 ]);
 
-pub const HBAR_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&[
+const HBAR_ARR : [u8; 9] = [
     0, 0, 0,
     255, 255, 255,
     0, 0, 0
+];
+
+pub const HBAR_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&HBAR_ARR);
+
+pub const NEG_HBAR_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&negate_array(HBAR_ARR));
+
+pub const HBAR_5_KERNEL : Window<'static, u8> = Window::from_static::<25, 5>(&[
+    0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0,
+    1, 1, 1, 1, 1,
+    0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0,
 ]);
 
-pub const VBAR_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&[
+pub const VBAR_5_KERNEL : Window<'static, u8> = Window::from_static::<25, 5>(&[
+    0, 0, 1, 0, 0,
+    0, 0, 1, 0, 0,
+    0, 0, 1, 0, 0,
+    0, 0, 1, 0, 0,
+    0, 0, 1, 0, 0,
+]);
+
+
+const CROSS_5_ARR : [u8; 25] = [
+    0, 0, 1, 0, 0,
+    0, 0, 1, 0, 0,
+    1, 1, 1, 1, 1,
+    0, 0, 1, 0, 0,
+    0, 0, 1, 0, 0,
+];
+
+pub const CROSS_5_KERNEL : Window<'static, u8> = Window::from_static::<25, 5>(&CROSS_5_ARR);
+
+pub const NEG_CROSS_5_KERNEL : Window<'static, u8> = Window::from_static::<25, 5>(&negate_array(CROSS_5_ARR));
+
+const VBAR_ARR : [u8; 9] = [
     0, 255, 0,
     0, 255, 0,
     0, 255, 0
-]);
+];
+
+pub const VBAR_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&VBAR_ARR);
+
+pub const NEG_VBAR_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&negate_array(VBAR_ARR));
+
+const CROSS_ARR : [u8; 9] = [
+    0, 255, 0,
+    255, 255, 255,
+    0, 255, 0
+];
+
+pub const CROSS_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&CROSS_ARR);
+
+pub const NEG_CROSS_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&CROSS_ARR);
 
 pub const BLOCK_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&[
     255, 255, 255,
@@ -62,13 +273,25 @@ pub const BOX_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&[
     255, 255, 255
 ]);
 
+pub const DIAG_TL_BR_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&[
+    255, 0, 0,
+    0, 255, 0,
+    0, 0, 255
+]);
+
+pub const DIAG_TR_BL_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&[
+    0, 0, 255,
+    0, 255, 0,
+    255, 0, 0
+]);
+
 /*
 Morphological operations consider a binary image as a set of (x, y) coordinates and a binary structuring element,
 which is also a set of (x, y) elements. Dilation sets all the pixels that match the geometry of the structuring
 element to foreground whenever there is any intersection between the foreground of the structuring element and
 the image foreground. Erosion sets all pixels that match the geometry of the structutring element to background
 whenever the intersection between foreground of the structuring element and foreground of image is not complete
-(i.e. intersection = original structuring set). If the intersection is complete, the image is left untouched.
+(i.e. intersection = original structuring set to be maintained). If the intersection is complete, the image is left untouched.
 Opening is an erosion followed by a dilation; Closing is an dilation followed by an erosion.
 
 For any center pixel c in the output:

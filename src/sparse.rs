@@ -733,6 +733,11 @@ impl RunLength {
         ((self.start.1)..(self.start.1 + self.length)).map(move |c| (self.start.0, c) )
     }
 
+    pub fn middle_point(&self) -> (usize, usize) {
+        (self.start.0, self.start.1 + self.length / 2 )
+    }
+    
+    // TODO rename to inner_points
     pub fn middle_points<'a>(&'a self) -> impl Iterator<Item=(usize, usize)> + 'a {
         ((self.start.1+1)..(self.end().1.saturating_sub(1))).map(move |c| (self.start.0, c) )
     }
