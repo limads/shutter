@@ -312,13 +312,80 @@ fn is_close(a : (usize, usize), b : (usize, usize)) -> bool {
     a.1.abs_diff(b.1) <= 1 && a.0.abs_diff(b.0) <= 1
 }
 
+fn draw_chain_random(chain : &ChainEncoding, img : &mut WindowMut<u8>) {
+    img.fill(0);
+    for ch in chain.chains() {
+        let r : f64 = rand::random();
+        let color = (10.0 + r * 245.0) as u8;
+        for pt in ch.trajectory() {
+            img[pt] = color;
+        }
+    }
+}
+
+// cargo test -- chain --nocapture
+#[test]
+fn chain() {
+
+    use crate::draw::Draw;
+    use crate::draw::Mark;
+    
+    let mut img = Image::new_constant(32, 32, 0);
+    
+    for i in 8..16 {
+        img[(i, 16)] = 255;
+    }
+    
+    println!("Vertical: {:?}", ChainEncoding::encode(&img.full_window()) );
+    
+    img.full_window_mut().fill(0);
+    for i in 8..16 {
+        img[(16, i)] = 255;
+    }
+    println!("Horizontal: {:?}", ChainEncoding::encode(&img.full_window()) );
+    
+    img.full_window_mut().fill(0);
+    for i in 8..16 {
+        img[(i, i)] = 255;
+    }
+    println!("Diagonal right: {:?}", ChainEncoding::encode(&img.full_window()) );
+    
+    img.full_window_mut().fill(0);
+    for i in 8..16 {
+        img[(i, 32 - i)] = 255;
+    }
+    println!("Diagonal left: {:?}", ChainEncoding::encode(&img.full_window()) );
+    
+    img.full_window_mut().fill(0);
+    img.draw(Mark::Rect((8, 8), (16, 16), 255));
+    img.show();
+    let enc = ChainEncoding::encode(&img.full_window());
+    println!("Rect: {:?}", enc);
+    draw_chain_random(&enc, img.as_mut());
+    img.show();
+    
+    img.full_window_mut().fill(0);
+    img.draw(Mark::Circle((16, 16), 8, 255));
+    img.show();
+    let enc = ChainEncoding::encode(&img.full_window());
+    println!("Circle: {:?}", enc );
+    draw_chain_random(&enc, img.as_mut());
+    img.show();
+    
+}
+
 impl ChainEncoding {
 
+    fn chains<'a>(&'a self) -> ChainIter<'a> {
+        ChainIter { enc : self, curr : 0 }
+    }
+    
     fn encode(bin_img : &Window<u8>) -> ChainEncoding {
 
         use bumpalo::Bump;
-
-        let bump = Bump::with_capacity(std::mem::size_of::<Direction>() * bin_img.height() * bin_img.width());
+    
+        let arena_sz = mem::size_of::<Direction>() * bin_img.height() * bin_img.width();
+        let bump = Bump::with_capacity(arena_sz);
         let mut starts = Vec::new();
         let mut ends = Vec::new();
         let mut ranges : Vec<Range<usize>> = Vec::new();
@@ -351,7 +418,11 @@ impl ChainEncoding {
                     },
                     (false, true) => {
                         // If transition to new matched pixel, innaugurate a new chain.
-                        row_chains.push(OpenChain { start : (row_ix, col_ix), end : (row_ix, col_ix), directions : BumpVecDir::new_in(&bump) });
+                        row_chains.push(OpenChain { 
+                            start : (row_ix, col_ix), 
+                            end : (row_ix, col_ix), 
+                            directions : BumpVecDir::new_in(&bump) 
+                        });
                     },
                     (true, false) => {
                         // Positive->negative transitions can be ignored, since
@@ -554,6 +625,7 @@ But for edge images, representing the (start, end) pair and a set of directions 
 efficient, since each pixel is represented by a single byte tagging the direction of change,
 instead of a full usize pair. The points can be recovered from any resolution desired by
 calling trajectory(.) and sparse_trajectory(.). */
+#[derive(Debug, Clone)]
 pub struct ChainEncoding {
     starts : Vec<(usize, usize)>,
     ends : Vec<(usize, usize)>,
@@ -577,18 +649,19 @@ impl ChainEncoding {
 
 }
 
-/*impl<'a> Iterator for ChainIter<'a> {
+impl<'a> Iterator for ChainIter<'a> {
 
     type Item = Chain<'a>;
 
-    fn next(&mut self) -> Option<Chain> {
-        let start = self.starts.get(self.curr)?;
-        let traj = &self.directions[self.ranges.get(self.curr)?];
+    fn next(&mut self) -> Option<Chain<'a>> {
+        let start = self.enc.starts.get(self.curr)?;
+        let end = self.enc.ends.get(self.curr)?;
+        let traj = &self.enc.directions[self.enc.ranges.get(self.curr)?.clone()];
         self.curr += 1;
-        Some(Chain { start, traj })
+        Some(Chain { start : *start, end : *end, traj })
     }
 
-}*/
+}
 
 /** Represents an edge using an 8-direction chain code.
 Useful to represent binary images resulting from edge and contour operators. **/
@@ -615,6 +688,9 @@ impl<'a> Chain<'a> {
                 update_point(pt, *d);
                 Some(*pt)
             }))
+            
+            // Already accounted for at the last direction step.
+            // .chain(std::iter::once(self.end))
     }
 
     /* Returns every nth point this chain represents. The method is lightweight and

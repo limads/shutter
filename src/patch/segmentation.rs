@@ -68,18 +68,6 @@ int markerStep, IppiSize roiSize, IppiNorm norm, int flag, Ipp8u* pBuffer );*/
 /*IppStatus ippiSegmentGradient_8u_C1IR(const Ipp8u* pSrc, int srcStep, Ipp8u* pMarker,
 int markerStep, IppiSize roiSize, IppiNorm norm, int flags, Ipp8u* pBuffer );*/
 
-pub mod seed;
-
-pub mod raster;
-
-pub mod density;
-
-pub mod ray;
-
-pub mod pattern;
-
-pub mod edge;
-
 // use nohash-hasher;
 
 // use crate::feature::shape;

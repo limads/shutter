@@ -425,8 +425,8 @@ fn populate_points(A : &mut DMatrix<f32>, b : &mut DVector<f32>, points_copy : &
     }
 }
 
-use crate::prelude::Image;
-use crate::draw::*;
+// use crate::prelude::Image;
+// use crate::draw::*;
 
 // Credit goes to the OpenCV implementation (imgproc::shapedescr) licensed under BSD.
 fn fit_ellipse_no_direct(points : &[Vector2<f32>]) -> Result<Ellipse, &'static str> {

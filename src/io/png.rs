@@ -1,6 +1,6 @@
 use std::io::BufWriter;
 use ::image::codecs::png;
-use crate::image::Image;
+use crate::image::ImageBuf;
 use ::image::{ImageDecoder, ColorType, ExtendedColorType};
 use std::fs::File;
 use std::io::{Read, Write};
@@ -17,7 +17,7 @@ pub fn file_dimensions(path : &str) -> Option<(usize, usize)> {
     }
 }
 
-pub fn encode_to_file(dec : Image<u8>, path : &str) -> Result<(),&'static str> {
+pub fn encode_to_file(dec : ImageBuf<u8>, path : &str) -> Result<(),&'static str> {
     let mut f = File::create(path)
         .map_err(|_| { "Error creating file." })?;
     let buff : Vec<u8> = encode(dec)?;
@@ -28,7 +28,7 @@ pub fn encode_to_file(dec : Image<u8>, path : &str) -> Result<(),&'static str> {
 
 pub fn decode_from_file(
     path : &str
-) -> Result<Image<u8>, &'static str> {
+) -> Result<ImageBuf<u8>, &'static str> {
     let mut buffer = Vec::new();
     let mut f = File::open(path)
         .map_err(|_| { "Error opening file" })?;
@@ -39,9 +39,9 @@ pub fn decode_from_file(
 
 pub fn decode(
     data : Vec<u8>
-) -> Result<Image<u8>, &'static str> {
+) -> Result<ImageBuf<u8>, &'static str> {
 
-    use image::buffer::ConvertBuffer;
+    use ::image::buffer::ConvertBuffer;
 
     let dec = png::PngDecoder::new(&data[..])
         .map_err(|_| { "Error building decoder" })?;
@@ -56,14 +56,14 @@ pub fn decode(
         ExtendedColorType::L8 => {
             let mut buf = Vec::<u8>::from_iter((0..(nrows * ncols)).map(|_| 0 ));
             let img = dec.read_image(&mut buf[..]).map_err(|_| { "Error reading image" })?;
-            Ok(Image::from_vec(buf, ncols))
+            Ok(ImageBuf::from_vec(buf, ncols))
         },
         ExtendedColorType::Rgb8 => {
             let mut buf = Vec::<u8>::from_iter((0..(nrows * ncols * 3)).map(|_| 0 ));
             let img = dec.read_image(&mut buf[..]).map_err(|_| { "Error reading image" })?;
             let rgbimg = image::RgbImage::from_raw(ncols as u32, nrows as u32, buf).unwrap();
             let gray_image: image::GrayImage = rgbimg.convert();
-            Ok(Image::from_vec(gray_image.into_raw(), ncols))
+            Ok(ImageBuf::from_vec(gray_image.into_raw(), ncols))
         },
         _ => {
             Err("Image import error: Unsupported color type. Convert image to L8/RGB/RGBA first.")
@@ -85,14 +85,14 @@ pub fn decode(
 }
 
 pub fn encode(
-    dec : Image<u8>
+    dec : ImageBuf<u8>
 ) -> Result<Vec<u8>, &'static str> {
     let mut dst : Vec<u8> = Vec::new();
     {
         let ref mut writ = BufWriter::new(&mut dst);
         let encoder = png::PngEncoder::new(writ);
         encoder.encode(
-            dec.as_slice(),
+            dec.slice(),
             dec.width() as u32,
             dec.height() as u32,
             image::ColorType::L8

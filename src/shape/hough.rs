@@ -5,7 +5,8 @@ use crate::local::*;
 use std::collections::BTreeMap;
 use std::cmp::Ordering;
 use std::ops::SubAssign;
-use crate::point::PointOp;
+// use crate::point::PointOp;
+use crate::conv::*;
 
 pub struct RectComplement {
     pub tl : (usize, usize, usize, usize),
@@ -78,16 +79,16 @@ pub struct HoughCircle {
     
     shape : (usize, usize),
     
-    // Holds one matrix for each possible radius. Each matrix has the same dimension as the image.
+    // Holds one matrix for each possible radius. Each matrix has the same dimension as the ImageBuf.
     // Use float because eventually we will want to blur it, but it is actually an counter.
-    accum : Vec<Image<f32>>,
+    accum : Vec<ImageBuf<f32>>,
     
-    accum_blurred : Vec<Image<f32>>,
+    accum_blurred : Vec<ImageBuf<f32>>,
 
     found : BTreeMap<usize, Vec<((usize, usize), f32)>>,
     
-    // Local sums over the blurred image.
-    pub ws : Image<f32>
+    // Local sums over the blurred ImageBuf.
+    pub ws : ImageBuf<f32>
     
 }
 
@@ -123,16 +124,16 @@ impl HoughCircle {
         }
         
         let accum : Vec<_> = (0..n_radii)
-            .map(|_| Image::new_constant(shape.0, shape.1, 0.) ).collect();
+            .map(|_| ImageBuf::new_constant(shape.0, shape.1, 0.) ).collect();
         let accum_blurred : Vec<_> = (0..n_radii)
-            .map(|_| Image::new_constant(shape.0 - 5 + 1, shape.1 - 5 + 1, 0.) ).collect();
-        let ws = Image::new_constant(
+            .map(|_| ImageBuf::new_constant(shape.0 - 5 + 1, shape.1 - 5 + 1, 0.) ).collect();
+        let ws = ImageBuf::new_constant(
             accum_blurred[0].height() / 4, 
             accum_blurred[0].width() / 4, 0.0f32);
         Self { angles, radii, accum, shape, deltas, found : BTreeMap::new(), accum_blurred, ws }
     }
     
-    pub fn best_matched_accumulator(&self) -> Option<&Image<f32>> {
+    pub fn best_matched_accumulator(&self) -> Option<&ImageBuf<f32>> {
         let mut max = 0.0;
         let mut acc = None;
         for rad_ix in self.found.keys() {
@@ -148,7 +149,7 @@ impl HoughCircle {
         acc
     }
     
-    pub fn all_matched_accumulators(&self) -> Vec<&Image<f32>> {
+    pub fn all_matched_accumulators(&self) -> Vec<&ImageBuf<f32>> {
         let mut acc = Vec::new();
         for rad_ix in self.found.keys() {
             acc.push(&self.accum_blurred[*rad_ix]);
@@ -156,7 +157,7 @@ impl HoughCircle {
         acc
     }
     
-    pub fn accumulators(&self) -> &[Image<f32>] {
+    pub fn accumulators(&self) -> &[ImageBuf<f32>] {
         &self.accum_blurred[..]
     }
     
@@ -204,7 +205,7 @@ impl HoughCircle {
 fn accumulate_for_radius(
     pts : &[Point2<f32>], 
     deltas : &[Vector2<f32>], 
-    accum : &mut Image<f32>
+    accum : &mut ImageBuf<f32>
 ) {
     let shape = Vector2::new(accum.width() as f32, accum.height() as f32);
     for pt in pts {
@@ -234,7 +235,7 @@ fn accumulate_for_radius(
 // Repeat the above steps for each possible radius, then calculate the
 // global maxima across all radii.
 fn find_hough_maxima(
-    accums : &[Image<f32>], 
+    accums : &[ImageBuf<f32>], 
     n_expected : usize, 
     min_dist : usize,
     found : &mut BTreeMap<usize, Vec<((usize, usize), f32)>>,

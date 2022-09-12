@@ -6,28 +6,6 @@
 
 /**
 
-mod ops {
-
-    pub mod logical;
-
-    pub mod arithmetic;
-
-}
-
-mod gray {
-
-    pub mod threshold;
-
-    pub mod truncate;
-
-}
-
-mod conv {
-
-}
-
-scalar_add and scalar_mul are brighntness/contrast enhancement
-
 # Basic image processing
 
 Operations defined for raw image buffers that also result in raw image buffers
@@ -81,26 +59,44 @@ Canny
 
 **/
 
-/// Common optical manipulations (calculation of focal depth, magnification, camera calibration, lens distortion correction),
-pub mod optics;
+pub mod image;
+
+pub mod io;
+
+pub mod ops;
+
+pub mod stat;
+
+pub mod scalar;
+
+pub mod gray;
+
+pub mod hist;
 
 pub mod draw;
 
-pub mod warp;
+pub mod shape;
 
-pub mod edge;
+/// Common optical manipulations (calculation of focal depth, magnification, camera calibration, lens distortion correction),
+// pub mod optics;
 
-pub mod convert;
 
-pub mod resample;
 
-pub mod motion;
+// pub mod warp;
 
-pub mod stereo;
+// pub mod edge;
 
-pub mod object;
+// pub mod convert;
 
-pub mod graph;
+// pub mod resample;
+
+// pub mod motion;
+
+// pub mod stereo;
+
+// pub mod object;
+
+// pub mod graph;
 
 /*
 TODO traits:
@@ -124,62 +120,58 @@ float_depth -> linearize_depth / depth_to_interval / interval_to_depth
 
 */
 
-/// Structures and algorithms for sparse binary image representation (in terms of graphs, ordered arrays, etc).
-/// Offers Run-length encoding of binary image representation, and other alternative representations.
-pub mod sparse;
+// Structures and algorithms for sparse binary image representation (in terms of graphs, ordered arrays, etc).
+// Offers Run-length encoding of binary image representation, and other alternative representations.
+// pub mod sparse;
 
 // Contains algorithms to partition the images over homogeneous regions, with a criterion for
 // homegeneity that is algorithm-specific. Contains dense and sparse data structures to represent
 // image regions.
-pub mod region;
+// pub mod region;
 
 // Binary image operations
-pub mod binary;
+// pub mod binary;
 
 // Pattern and texture analysis operations (segmentation, classification)
-pub mod texture;
+// pub mod texture;
 
 /// Image-to-image grayscale operations (thresholding, segmentation)
-pub mod gray;
+// pub mod gray;
 
-/// Color image operations
-pub mod color;
+// Color image operations
+// pub mod color;
 
-/// Point-wise operations (enhance, equalize, normalize, etc).
-pub mod point;
+// Point-wise operations (enhance, equalize, normalize, etc).
+// pub mod point;
 
-/// Global operations (mean, max, avg)
-pub mod global;
+// Global operations (mean, max, avg)
+// pub mod global;
 
-pub mod hist;
+// Local (non-filtering) operations (median, min, max)
+// pub mod local;
 
-/// Local (non-filtering) operations (median, min, max)
-pub mod local;
-
-pub mod ffi;
-
-pub mod io;
+// pub mod ffi;
 
 // pub(crate) mod foreign;
 
-pub mod profile;
+// pub mod profile;
 
 // Scalar image operations
-pub mod scalar;
+// pub mod scalar;
 
 // Low-level image features
-pub mod feature;
+// pub mod feature;
 
-pub mod image;
 
-pub mod path;
 
-pub mod raster;
+// pub mod path;
+
+// pub mod raster;
 
 // #[cfg(feature="opencvlib")]
 // pub mod tracking;
 
-pub mod template;
+// pub mod template;
 
 // #[cfg(feature="opencvlib")]
 // pub mod matching;
@@ -187,16 +179,14 @@ pub mod template;
 // #[cfg(feature="opencvlib")]
 // pub mod flow;
 
-#[cfg(feature="opencv")]
-pub mod contour;
+// #[cfg(feature="opencv")]
+// pub mod contour;
 
-pub mod corner;
+// pub mod corner;
 
-pub mod integral;
+// pub mod integral;
 
 // pub mod edge;
-
-pub mod shape;
 
 // pub mod threshold;
 
@@ -205,25 +195,25 @@ pub mod shape;
 // pub mod filter;
 
 // Defines operations on binary images.
-#[cfg(feature="opencv")]
-pub mod morph;
+// #[cfg(feature="opencv")]
+// pub mod morph;
 
 // #[cfg(feature="opencv")]
 // pub mod filter;
 
-pub mod cluster;
+// pub mod cluster;
 
 // pub mod segmentation;
 
-#[cfg(feature="opencv")]
-pub mod geom;
+// #[cfg(feature="opencv")]
+// pub mod geom;
 
 // #[cfg(feature="opencvlib")]
 // pub mod detection;
 
 pub mod foreign;
 
-pub mod prelude {
+/*pub mod prelude {
 
     pub use super::image::*;
 
@@ -237,7 +227,16 @@ pub mod prelude {
 
     pub use super::draw::*;
 
-}
+}*/
+
+/*IppStatus ippiApplyHaarClassifier_32f_C1R(const Ipp32f* pSrc, int srcStep, const
+Ipp32f* pNorm, int normStep, Ipp8u* pMask, int maskStep, IppiSize roiSize, int*
+pPositive, Ipp32f threshold, IppiHaarClassifier_32f* pState );
+
+IppStatus ippiLBPImageMode3x3_<mod>(const Ipp<srcDatatype>* pSrc, int srcStep,
+Ipp<dstDatatype>* pDst, int dstStep, IppiSize dstRoiSize, int mode, IppiBorderType
+borderType, const Ipp<srcDatatype>* borderValue );
+*/
 
 /*#[cfg(feature="mlua")]
 impl mlua::UserData for crate::image::Image<u8> {
@@ -272,4 +271,54 @@ fn libshutter(lua : &mlua::Lua) -> mlua::Result<mlua::Table> {
 
     Ok(exports)
 }*/
+
+/*
+/// This should contain Patch (what is today at segmentation) Keypoint and similar structures and algorithms.
+
+/*IppStatus ippiFastN_8u_C1R(const Ipp8u* pSrc, int srcStep, Ipp8u* pDstCorner, int
+dstCornerStep, Ipp8u* pDstScore, int dstScoreStep, int* pNumCorner, IppiPoint
+srcRoiOffset, IppiSize dstRoiSize, IppiFastNSpec* pSpec, Ipp8u* pBuffer );
+
+IppStatus ippiHarrisCorner_8u32f_C1R(const Ipp8u* pSrc, int srcStep, Ipp32f* pDst, int
+dstStep, IppiSize roiSize, IppiDifferentialKernel filterType, IppiMaskSize filterMask,
+Ipp32u avgWndSize, float k, float scale, IppiBorderType borderType, Ipp8u borderValue,
+Ipp8u* pBuffer );*/
+
+/*IppStatus ippiCanny_16s8u_C1R(Ipp16s* pSrcDx, int srcDxStep, Ipp16s* pSrcDy, int
+srcDyStep, Ipp8u* pDstEdges, int dstEdgeStep, IppiSize roiSize, Ipp32f lowThreshold,
+Ipp32f highThreshold, Ipp8u* pBuffer );*/
+
+/*IppStatus ippiEigenValsVecs_8u32f_C1R(const Ipp8u* pSrc, int srcStep, Ipp32f* pEigenVV,
+int eigStep, IppiSize roiSize, IppiKernelType kernType, int apertureSize, int
+avgWindow, Ipp8u* pBuffer );
+
+IppStatus ippiHOG_<mod>(const Ipp<srcDatatype>* pSrc, int srcStep, IppiSize roiSize,
+const IppiPoint* pLocation, int nLocations, Ipp32f* pDst, const IppiHOGSpec* pHOGSpec,
+IppiBorderType borderID, Ipp<srcDatatype> borderValue, Ipp8u* pBuffer );
+
+IppStatus ippiHoughLine_8u32f_C1R(const Ipp8u* pSrc, int srcStep, IppiSize roiSize,
+IppPointPolar delta, int threshold, IppPointPolar* pLine, int maxLineCount, int*
+pLineCount, Ipp8u* pBuffer );
+
+IppStatus ippiFloodFill_4Con_<mod>(Ipp<datatype>* pImage, int imageStep, IppiSize
+roiSize, IppiPoint seed, Ipp<datatype> newVal, IppiConnectedComp* pRegion, Ipp8u*
+pBuffer );
+*/
+
+
+/// Contains utilities to represent dense pixel regions (lists of pixel coordinates)
+pub mod patch;
+
+pub mod corner;
+
+// Contains utilities for shape analysis (regions defined by their boundary or contour).
+// pub mod shape;
+
+pub mod point;
+
+// pub mod edge;
+
+// pub mod color;
+
+*/
 

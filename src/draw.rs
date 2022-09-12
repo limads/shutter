@@ -1,12 +1,14 @@
-use nalgebra::*;
+use nalgebra::DMatrix;
 use std::iter::{Iterator, IntoIterator};
 use std::convert::{TryFrom, AsMut};
 use std::ops::Range;
 use crate::image::*;
-use crate::raster::*;
+// use crate::raster::*;
 use serde::{Serialize, Deserialize};
-use crate::raster::*;
+// use crate::raster::*;
 use crate::shape::*;
+use crate::shape::ellipse::EllipseCoords;
+use crate::shape::ellipse::OrientedEllipse;
 
 pub const DARK : u8 = 0;
 
@@ -18,57 +20,63 @@ pub const LIGHT_GRAY : u8 = 191;
 
 pub const WHITE : u8 = 255;
 
-pub trait Draw {
+const TWO_PI : f64 = 6.283185307;
 
-    fn draw(&mut self, mark : Mark);
+impl<S> Image<u8, S> 
+where
+    S : StorageMut<u8>
+{
 
-    fn draw_many(&mut self, marks : impl IntoIterator<Item=Mark>) {
-        for mark in marks.into_iter() {
-            self.draw(mark);
+    // Color is decided adaptively based on the average intensity of a local window
+    // around the target pixels: Color = (255 - avg_px_col). The window size is chosen to
+    // minimally enclose the shape, and the same shape is always drawn with the same
+    // color (decided as the inversion of the average window color).
+    fn draw_contrasting(&mut self, mark : Mark) {
+        let (off, sz) = mark.enclosing_rect();
+        if let Some(sub) = self.window(off, sz) {
+            let mean = sub.mean::<f32>(1).unwrap() as u8;
+            let inv_color = 255 - mean;
+            self.draw(mark, inv_color);
         }
     }
 
-    // Color is decided adaptively based on the average intensity of the target pixels
-    // (255 - avg_px_col)
-    fn draw_contrasting(&mut self, mark : Mark) {
-
-    }
-
     fn draw_many_contrasting(&mut self, marks : impl IntoIterator<Item=Mark>) {
-
+        for mark in marks.into_iter() {
+            self.draw_contrasting(mark);
+        }
+    }
+    
+    fn draw_many(&mut self, marks : impl IntoIterator<Item=Mark>, color : u8) {
+        for mark in marks.into_iter() {
+            self.draw(mark, color);
+        }
     }
 
-}
-
-impl<'a> Draw for WindowMut<'a, u8> {
-
-    fn draw(&mut self, mark : Mark) {
-        /*let slice_ptr = self.win.data.as_mut_slice().as_mut_ptr();
-        let ptr_offset = slice_ptr as u64 - (self.original_size().0*(self.offset.1 - 1)) as u64 - self.offset.0 as u64;
-        let orig_ptr = ptr_offset as *mut u8;
-        let orig_slice = unsafe { std::slice::from_raw_parts_mut(orig_ptr, self.original_size().0 * self.original_size().1) };*/
+    fn draw(&mut self, mark : Mark, color : u8) {
         match mark {
-            Mark::Cross(pos, sz, col) => {
+            Mark::Cross(pos, sz) => {
                 let cross_pos = (self.offset().0 + pos.0, self.offset().1 + pos.1);
+                let orig_sz = self.original_size();
                 draw_cross(
-                    unsafe { self.original_slice() },
-                    self.original_size(),
+                    self.slice_mut(),
+                    orig_sz,
                     cross_pos,
-                    col,
+                    color,
                     sz
                 );
             },
-            Mark::Corner(pos, sz, col) => {
+            Mark::Corner(pos, sz) => {
                 let center_pos = (self.offset().0 + pos.0, self.offset().1 + pos.1);
+                let orig_sz = self.original_size();
                 draw_corners(
-                    unsafe { self.original_slice() },
-                    self.original_size(),
+                    self.slice_mut(),
+                    orig_sz,
                     center_pos,
-                    col,
+                    color,
                     sz
                 );
             },
-            Mark::Line(src, dst, color) => {
+            Mark::Line(src, dst) => {
                 let src_pos = (self.offset().0 + src.0, self.offset().1 + src.1);
                 let dst_pos = (self.offset().0 + dst.0, self.offset().1 + dst.1);
 
@@ -78,33 +86,47 @@ impl<'a> Draw for WindowMut<'a, u8> {
                     return;
                 }
 
+                let orig_sz = self.original_size();
                 draw_line(
-                    unsafe { self.original_slice() },
-                    self.original_size(),
+                    self.slice_mut(),
+                    orig_sz,
                     src_pos,
                     dst_pos,
                     color
                 );
             },
-            Mark::Rect(tl, sz, color) => {
+            Mark::Rect(tl, sz) => {
                 let tr = (tl.0, tl.1 + sz.1);
                 let br = (tl.0 + sz.0, tl.1 + sz.1);
                 let bl = (tl.0 + sz.0, tl.1);
-                self.draw(Mark::Line(tl, tr, color));
-                self.draw(Mark::Line(tr, br, color));
-                self.draw(Mark::Line(br, bl, color));
-                self.draw(Mark::Line(bl, tl, color));
+                self.draw(Mark::Line(tl, tr), color);
+                self.draw(Mark::Line(tr, br), color);
+                self.draw(Mark::Line(br, bl), color);
+                self.draw(Mark::Line(bl, tl), color);
             },
-            Mark::Digit(pos, val, sz, color) => {
+            Mark::Digit(pos, val, sz) => {
                 let tl_pos = (self.offset().0 + pos.0, self.offset().1 + pos.1);
 
                 #[cfg(feature="opencv")]
                 unsafe {
-                    cvutils::write_text(self.win, self.original_size().1, tl_pos, &val.to_string()[..], color);
+                    cvutils::write_text(
+                        self.win, 
+                        self.original_size().1, 
+                        tl_pos, 
+                        &val.to_string()[..], 
+                        color
+                    );
                     return;
                 }
-
-                draw_digit_native(unsafe { self.original_slice() }, self.original_size().1, tl_pos, val, sz, color);
+                let orig_w = self.original_size().1;
+                draw_digit_native(
+                    self.slice_mut(), 
+                    orig_w, 
+                    tl_pos, 
+                    val, 
+                    sz, 
+                    color
+                );
             },
             /*Mark::Label(pos, msg, sz, color) => {
                 let tl_pos = (self.offset.0 + pos.0, self.offset.1 + pos.1);
@@ -117,40 +139,58 @@ impl<'a> Draw for WindowMut<'a, u8> {
 
                 panic!("Label draw require 'opencv' feature");
             },*/
-            Mark::Circle(pos, radius, color) => {
+            Mark::Circle(pos, radius) => {
                 let center_pos = (self.offset().0 + pos.0, self.offset().1 + pos.1);
 
                 #[cfg(feature="opencv")]
                 unsafe {
-                    crate::image::cvutils::draw_circle(self.win, self.original_size().1, center_pos, radius, color);
+                    crate::image::cvutils::draw_circle(
+                        self.win, 
+                        self.original_size().1, 
+                        center_pos, 
+                        radius, 
+                        color
+                    );
                     return;
                 }
 
-                panic!("Circle draw require 'opencv' feature");
-            },
-            Mark::Dot(pos, radius, color) => {
-                for i in pos.0.saturating_sub(radius)..(pos.0 + radius).min(self.width()) {
-                    for j in pos.1.saturating_sub(radius)..(pos.1 + radius).min(self.height()) {
-                        if crate::feature::shape::point_euclidian((i, j), pos) <= radius as f32 {
+                let n_points = (TWO_PI * radius as f64) as usize + 4;
+                for ix in 0..=n_points {
+                    let theta = (ix as f64 / n_points as f64) * TWO_PI;
+                    let x = pos.1 as f64 + theta.cos() * radius as f64;
+                    let y = (self.height() - pos.0) as f64 + theta.sin() * radius as f64;
+                    if x >= 0.0 && x < self.width() as f64 {
+                        if y >= 0.0 && y < self.height() as f64 {
+                            let i = x as usize;
+                            let j = self.height() - y as usize;
                             self[(i, j)] = color;
                         }
                     }
                 }
             },
-            Mark::Shape(pts, close, col) => {
+            Mark::Dot(pos, radius) => {
+                for i in pos.0.saturating_sub(radius)..(pos.0 + radius).min(self.width()) {
+                    for j in pos.1.saturating_sub(radius)..(pos.1 + radius).min(self.height()) {
+                        if crate::shape::point_euclidian((i, j), pos) <= radius as f32 {
+                            self[(i, j)] = color;
+                        }
+                    }
+                }
+            },
+            Mark::Shape(pts, close) => {
                 let n = pts.len();
                 if n < 2 {
                     return;
                 }
                 for (p1, p2) in pts.iter().take(n-1).zip(pts.iter().skip(1)) {
-                    self.draw(Mark::Line(*p1, *p2, col));
+                    self.draw(Mark::Line(*p1, *p2), color);
                 }
 
                 if close {
-                    self.draw(Mark::Line(pts[0], pts[pts.len()-1], col));
+                    self.draw(Mark::Line(pts[0], pts[pts.len()-1]), color);
                 }
             },
-            Mark::Text(tl_pos, txt, color) => {
+            Mark::Text(tl_pos, txt) => {
 
                 #[cfg(feature="opencv")]
                 {
@@ -168,7 +208,7 @@ impl<'a> Draw for WindowMut<'a, u8> {
 
                 println!("Warning: Text drawing require opencv feature");
             },
-            Mark::Arrow(from, to, thickness, color) => {
+            Mark::Arrow(from, to, thickness) => {
 
                 #[cfg(feature="opencv")]
                 {
@@ -189,16 +229,16 @@ impl<'a> Draw for WindowMut<'a, u8> {
                 println!("Warning: Arrow drawing require opencv feature");
             },
             Mark::EllipseArrows(coords) => {
-                self.draw(Mark::Arrow(coords.center, coords.major, 1, 127));
-                self.draw(Mark::Arrow(coords.center, coords.minor, 1, 127));
+                self.draw(Mark::Arrow(coords.center, coords.major, 1), color);
+                self.draw(Mark::Arrow(coords.center, coords.minor, 1), color);
             },
-            Mark::Ellipse(el, n, color) => {
-                let pts = crate::shape::generate_ellipse_points(&el, n);
+            Mark::Ellipse(el, n) => {
+                let pts = crate::shape::ellipse::generate_ellipse_points(&el, n);
                 for n in 0..(pts.len()-1) {
                     let a = crate::shape::coord::point_to_coord(&pts[n], self.shape());
                     let b = crate::shape::coord::point_to_coord(&pts[n+1], self.shape());
                     if let (Some(coord_a), Some(coord_b)) = (a, b) {
-                        self.draw(Mark::Line(coord_a, coord_b, color));
+                        self.draw(Mark::Line(coord_a, coord_b), color);
                     }
                 }
             }
@@ -207,59 +247,92 @@ impl<'a> Draw for WindowMut<'a, u8> {
 
 }
 
-impl Draw for Image<u8> {
-
-    fn draw(&mut self, mark : Mark) {
-        let win : &mut WindowMut<'_, u8> = self.as_mut();
-        win.draw(mark);
-    }
-
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Mark {
 
     // Position, square lenght and color
-    Cross((usize, usize), usize, u8),
+    Cross((usize, usize), usize),
 
     // Position, square lenght and color
-    Corner((usize, usize), usize, u8),
+    Corner((usize, usize), usize),
 
     // Start and end positions and color
-    Line((usize, usize), (usize, usize), u8),
+    Line((usize, usize), (usize, usize)),
 
     // Position, digit value, digit size and color
-    Digit((usize, usize), usize, usize, u8),
+    Digit((usize, usize), usize, usize),
 
     // Position, label, digit value, size and color
     // Label((usize, usize), &'static str, usize, u8),
 
     // Center, radius and color
-    Circle((usize, usize), usize, u8),
+    Circle((usize, usize), usize),
 
     /// A dense circle
-    Dot((usize, usize), usize, u8),
+    Dot((usize, usize), usize),
 
     /// TL pos, size and color
-    Rect((usize, usize), (usize, usize), u8),
+    Rect((usize, usize), (usize, usize)),
 
     /// Arbitrary shape coordinates; whether to close it; and color
-    Shape(Vec<(usize, usize)>, bool, u8),
+    Shape(Vec<(usize, usize)>, bool),
 
-    Text((usize, usize), String, u8),
+    Text((usize, usize), String),
 
-    Arrow((usize, usize), (usize, usize), usize, u8),
+    Arrow((usize, usize), (usize, usize), usize),
 
     EllipseArrows(EllipseCoords),
 
-    Ellipse(OrientedEllipse, usize, u8)
+    Ellipse(OrientedEllipse, usize)
 
+}
+
+impl Mark {
+
+    pub fn enclosing_rect(&self) -> (Offset, Size) {
+        /*match self {
+        Self::Cross(center, sz, u8),
+
+        // Position, square lenght and color
+        Corner((usize, usize), usize, u8),
+
+        // Start and end positions and color
+        Line((usize, usize), (usize, usize), u8),
+
+        // Position, digit value, digit size and color
+        Digit((usize, usize), usize, usize, u8),
+
+        // Position, label, digit value, size and color
+        // Label((usize, usize), &'static str, usize, u8),
+
+        // Center, radius and color
+        Circle((usize, usize), usize, u8),
+
+        /// A dense circle
+        Dot((usize, usize), usize, u8),
+
+        /// TL pos, size and color
+        Rect((usize, usize), (usize, usize), u8),
+
+        /// Arbitrary shape coordinates; whether to close it; and color
+        Shape(Vec<(usize, usize)>, bool, u8),
+
+        Text((usize, usize), String, u8),
+
+        Arrow((usize, usize), (usize, usize), usize, u8),
+
+        EllipseArrows(EllipseCoords),
+
+        Ellipse(OrientedEllipse, usize, u8)*/
+        unimplemented!()
+    }
+    
 }
 
 impl From<(usize, usize, usize, usize)> for Mark {
 
     fn from(r : (usize, usize, usize, usize)) -> Self {
-        Mark::Rect((r.0, r.1), (r.2, r.3), 255)
+        Mark::Rect((r.0, r.1), (r.2, r.3))
     }
 
 }
@@ -331,7 +404,13 @@ pub fn draw_cross(
 }
 
 pub fn mark_window_with_color(win : &mut WindowMut<u8>, pts : &[(usize, usize)], color : u8) {
-    unsafe { mark_slice_with_color(win.essential_slice(), pts, color, win.original_width()); }
+    let orig_w = win.original_width();
+    mark_slice_with_color(
+        win.essential_slice_mut(), 
+        pts, 
+        color, 
+        orig_w
+    );
 }
 
 /// Overwrite pixels in the buffer by informing (x, y, intensity) triples.
@@ -406,7 +485,7 @@ pub fn draw_line(
 
     // Draw straight horizontal line (if applicable)
     if src.0 == dst.0 {
-        for c in src.1.min(dst.1)..(src.1.max(dst.1)) {
+        for c in src.1.min(dst.1)..=(src.1.max(dst.1)) {
             buf[src.0*ncol + c] = color;
         }
         return;
@@ -414,7 +493,7 @@ pub fn draw_line(
 
     // Draw straight vertical line (if applicable)
     if src.1 == dst.1 {
-        for r in src.0.min(dst.0)..(src.0.max(dst.0)) {
+        for r in src.0.min(dst.0)..=(src.0.max(dst.0)) {
             buf[r*ncol + src.1] = color;
         }
         return;
@@ -424,7 +503,7 @@ pub fn draw_line(
     // inclination angle, and fill all pixels across the diagonal.
     let (dist, theta) = index::index_distance(src, dst, nrow);
     let d_max = dist as usize;
-    for i in 0..d_max {
+    for i in 0..=d_max {
         let x_incr = theta.cos() * i as f64;
         let y_incr = theta.sin() * i as f64;
         let x_pos = (src.1 as i32 + x_incr as i32) as usize;

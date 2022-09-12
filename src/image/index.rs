@@ -1,5 +1,6 @@
 // use nalgebra::*;
 
+use super::*;
 use std::ops::{Sub, Add, Mul};
 use num_traits::ToPrimitive;
 

@@ -1,11 +1,26 @@
 use crate::image::*;
 use std::default::Default;
-use crate::prelude::Raster;
+// use crate::prelude::Raster;
 use std::mem;
 use bayes::calc::*;
 use std::collections::BTreeMap;
 use std::ops::Sub;
-use crate::hist::{GrayHistogram, GridHistogram};
+use crate::hist::{GrayHistogram, GridHistogram, ColorProfile};
+
+#[derive(Debug, Clone, Copy)]
+pub enum Foreground {
+
+    Exactly(u8),
+
+    Below(u8),
+
+    Above(u8),
+
+    Inside(u8, u8),
+
+    Outside(u8, u8)
+
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum AdaptiveForeground {
@@ -27,34 +42,92 @@ impl AdaptiveForeground {
 
 }
 
-impl Window<'_, u8> {
+impl<S> Image<u8, S> 
+where
+    S : Storage<u8>
+{
 
+    fn threshold_to<T>(&self, fg : Foreground, out : &mut Image<u8, T>) 
+    where
+        T : StorageMut<u8>
+    {
+        assert!(self.shape() == out.shape());
+        #[cfg(feature="ipp")]
+        unsafe { return ippi_full_threshold(fg, &self.full_window(), &mut out.full_window_mut()); }
+        
+        baseline_threshold(&self.full_window(), fg, &mut out.full_window_mut());
+    }
+    
+    fn truncate_to<T>(&self, fg : Foreground, out : &mut Image<u8, T>, fg_val : u8) 
+    where
+        T : StorageMut<u8>
+    {
+        assert!(self.shape() == out.shape());
+        
+        #[cfg(feature="ipp")]
+        unsafe { return ippi_truncate(fg, &self.full_window(), &mut out.full_window_mut(), fg_val) };
+        
+        baseline_truncate(&self.full_window(), fg, &mut out.full_window_mut(), fg_val);
+    }
+    
     /// (1) Calculate partition values for each sub-window
     /// (Or the full window if win_sz is None).
     /// (3) Apply threshold using this partition value to each sub-window
     /// (or the full window if win_sz is None).
-    pub fn adaptive_threshold_to(
+    pub fn adaptive_threshold_to<T>(
         &self,
         alg : &mut impl AdadptiveThreshold,
-        mut dst : WindowMut<u8>
-    ) {
-        let bv = alg.best_values(self);
+        dst : &mut Image<u8, T>
+    ) where
+        T : StorageMut<u8>
+    {
+        assert!(self.shape() == dst.shape());
+        let bv = alg.best_values(&self.full_window());
         let mut i = 0;
         let sub_sz = alg.sub_sz();
-        for (mut sub_dst, sub_src) in dst.windows_mut((sub_sz.0, sub_sz.1)).zip(self.windows((sub_sz.0, sub_sz.1))) {
+        let win_iter = dst.windows_mut((sub_sz.0, sub_sz.1))
+            .zip(self.windows((sub_sz.0, sub_sz.1)));
+        for (mut sub_dst, sub_src) in win_iter {
             sub_src.threshold_to(bv[i], &mut sub_dst);
             i += 1;
         }
         assert!(i == bv.len());
     }
-
+    
+    // Allocating version of threshold_to
+    fn threshold(&self, fg : Foreground) -> ImageBuf<u8> {
+        let mut out = unsafe { ImageBuf::<u8>::new_empty(self.height(), self.width()) };
+        self.threshold_to(fg, &mut out);
+        out
+    }
+    
+    fn truncate(&self, fg : Foreground, fg_val : u8) -> ImageBuf<u8> {
+        // Image cannot be created as empty here because the truncate operation leaves
+        // unmatched pixels untouched, so we must guarantee there is valid data at
+        // all pixels.
+        let mut out = ImageBuf::<u8>::new_constant(self.height(), self.width(), 0);
+        self.truncate_to(fg, &mut out, fg_val);
+        out
+    }
+    
+    // Allocating version of adapting_threshold_to
+    fn adaptive_threshold(&self, alg : &mut impl AdadptiveThreshold) -> ImageBuf<u8> {
+        let mut out = unsafe { ImageBuf::<u8>::new_empty(self.height(), self.width()) };
+        self.adaptive_threshold_to(alg, &mut out);
+        out
+    }
+    
     // adaptive_truncate
 
 }
 
 pub trait AdadptiveThreshold {
 
-    fn new(win_sz : (usize, usize), sub_sz : Option<(usize, usize)>, fg : AdaptiveForeground) -> Self;
+    fn new(
+        win_sz : (usize, usize), 
+        sub_sz : Option<(usize, usize)>, 
+        fg : AdaptiveForeground
+    ) -> Self;
 
     fn sub_sz(&self) -> (usize, usize);
 
@@ -222,13 +295,32 @@ Some partitioning algorithms assume a bimodal histogram for foreground rules (ab
 others assume a unimodal histogram for foreground rules (inside, outside).
 */
 
-pub fn copy_if_above_threshold(dst_orig : &Window<'_, u8>, orig : (usize, usize), win_dim : (usize, usize), threshold : i32, dst : &mut Image<u8>) {
-    if crate::global::sum::<_, f32>(&dst_orig.sub_window(orig, win_dim).unwrap(), 1) as i32 > threshold {
-        dst.window_mut(orig, win_dim).unwrap().copy_from(&dst_orig.sub_window(orig, win_dim).unwrap());
+pub fn copy_if_above_threshold<S>(
+    dst_orig : &Window<'_, u8>, 
+    orig : (usize, usize), 
+    win_dim : (usize, usize), 
+    threshold : i32, 
+    dst : &mut Image<u8, S>
+) 
+where 
+    S : StorageMut<u8>,
+    Box<[u8]> : StorageMut<u8>,
+    for<'a> &'a [u8] : Storage<u8>,
+    for<'a> &'a mut [u8] : StorageMut<u8>
+{
+    let sub = dst_orig.window(orig, win_dim).unwrap();
+    if sub.sum::<f32>(1) as i32 > threshold {
+        dst.window_mut(orig, win_dim).unwrap()
+            .copy_from(&dst_orig.window(orig, win_dim).unwrap());
     }
 }
 
-pub fn zero_sparse_regions(dst : &mut Image<u8>, sum : &mut WindowMut<'_, i32>, win_dim : (usize, usize), min_pts : usize) {
+/*pub fn zero_sparse_regions(
+    dst : &mut Image<u8>, 
+    sum : &mut WindowMut<'_, i32>, 
+    win_dim : (usize, usize), 
+    min_pts : usize
+) {
 
     let sum_sz = (126 / win_dim.0, 126 / win_dim.1);
 
@@ -280,7 +372,7 @@ pub fn zero_sparse_regions(dst : &mut Image<u8>, sum : &mut WindowMut<'_, i32>, 
         }
     }
 
-}
+}*/
 
 pub fn count_range(win : &Window<'_, u8>, low : u8, high : u8) -> usize {
 
@@ -324,94 +416,7 @@ pub fn equalize_mut(win : &Window<'_, u8>, dst : &mut WindowMut<'_, u8>) {
     imgproc::equalize_hist(&src, &mut dst);
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum Mask {
-
-    // 3x3 mask
-    Three,
-
-    // 5x5 mask
-    Five
-
-}
-
-pub enum Norm {
-    L1,
-    L2,
-    Inf
-}
-
-#[cfg(feature="ipp")]
-pub fn distance_transform(src : &Window<'_, u8>, dst : &mut WindowMut<'_, u8>, mask : Mask, norm : Norm) {
-
-    assert!(src.shape() == dst.shape());
-
-    let (src_byte_stride, roi) = crate::image::ipputils::step_and_size_for_window(src);
-    let dst_byte_stride = crate::image::ipputils::byte_stride_for_window_mut(&dst);
-
-    // 3x3 window uses only 2 first entries; 5x5 window uses all three entries.
-    let mut metrics : [i32; 3] = [0, 0, 0];
-
-    let mask_size = match mask {
-        Mask::Three => 3,
-        Mask::Five => 5
-    };
-
-    let norm_code = match norm {
-        Norm::L1 => crate::foreign::ipp::ippi::_IppiNorm_ippiNormL1,
-        Norm::L2 => crate::foreign::ipp::ippi::_IppiNorm_ippiNormL2,
-        Norm::Inf => crate::foreign::ipp::ippi::_IppiNorm_ippiNormInf
-    };
-    unsafe {
-        let ans = crate::foreign::ipp::ippcv::ippiGetDistanceTransformMask_32s(
-            mask_size,
-            norm_code,
-            metrics.as_mut_ptr()
-        );
-        assert!(ans == 0);
-
-        let ans = match mask {
-            Mask::Three => {
-                crate::foreign::ipp::ippcv::ippiDistanceTransform_3x3_8u_C1R(
-                    src.as_ptr(),
-                    src_byte_stride,
-                    dst.as_mut_ptr(),
-                    dst_byte_stride,
-                    std::mem::transmute(roi),
-                    metrics.as_mut_ptr()
-                )
-            },
-            Mask::Five => {
-                crate::foreign::ipp::ippcv::ippiDistanceTransform_5x5_8u_C1R(
-                    src.as_ptr(),
-                    src_byte_stride,
-                    dst.as_mut_ptr(),
-                    dst_byte_stride,
-                    std::mem::transmute(roi),
-                    metrics.as_mut_ptr()
-                )
-            }
-        };
-        assert!(ans == 0);
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum Foreground {
-
-    Exactly(u8),
-
-    Below(u8),
-
-    Above(u8),
-
-    Inside(u8, u8),
-
-    Outside(u8, u8)
-
-}
-
-pub trait Threshold
+/*pub trait Threshold
 where
     Self : Raster
 {
@@ -423,15 +428,10 @@ where
     // Binarize an image, setting foreground pixels to u8::MAX and background pixels to u8::MIN
     fn threshold_to(&self, fg : Foreground, out : &mut WindowMut<u8>);
 
-    // Allocating version of threshold_to
-    fn threshold(&self, fg : Foreground) -> Image<u8> {
-        let mut img = unsafe { Image::<u8>::new_empty(self.height(), self.width()) };
-        self.threshold_to(fg, &mut img.full_window_mut());
-        img
-    }
-}
+    
+}*/
 
-pub trait Truncate
+/*pub trait Truncate
 where
     Self : Raster
 {
@@ -444,31 +444,15 @@ where
     fn truncate_to(&self, fg : Foreground, out : &mut WindowMut<u8>, fg_val : u8);
 
     // Allocating version of truncate_to
-    fn truncate(&self, fg : Foreground, fg_val : u8) -> Image<u8> {
+    
 
-        // Image cannot be created as empty here because the truncate operation leaves
-        // unmatched pixels untouched, so we must guarantee there is valid data at
-        // all pixels.
-        let mut img = Image::<u8>::new_constant(self.height(), self.width(), 0);
+}*/
 
-        self.truncate_to(fg, &mut img.full_window_mut(), fg_val);
-        img
-    }
+/*impl<'a> Threshold for Window<'a, u8> {
 
-}
+    
 
-impl<'a> Threshold for Window<'a, u8> {
-
-    fn threshold_to(&self, fg : Foreground, out : &mut WindowMut<u8>) {
-
-        assert!(self.shape() == out.shape());
-
-        #[cfg(feature="ipp")]
-        unsafe { return ippi_full_threshold(fg, self, out); }
-        baseline_threshold(self, fg, out);
-    }
-
-}
+}*/
 
 fn baseline_threshold(src : &Window<u8>, fg : Foreground, out : &mut WindowMut<u8>) {
     match fg {
@@ -520,17 +504,11 @@ fn baseline_truncate(src : &Window<u8>, fg : Foreground, out : &mut WindowMut<u8
     }
 }
 
-impl<'a> Truncate for Window<'a, u8> {
+/*impl<'a> Truncate for Window<'a, u8> {
+ 
+}*/
 
-    fn truncate_to(&self, fg : Foreground, out : &mut WindowMut<u8>, fg_val : u8) {
-        #[cfg(feature="ipp")]
-        unsafe { return ippi_truncate(fg, self, out, fg_val) };
-        baseline_truncate(self, fg, out, fg_val);
-    }
-
-}
-
-impl Threshold for Image<u8> {
+/*impl Threshold for Image<u8> {
 
     fn threshold_to(&self, fg : Foreground, out : &mut WindowMut<u8>) {
         self.full_window().threshold_to(fg, out);
@@ -544,7 +522,7 @@ impl Truncate for Image<u8> {
         self.full_window().truncate_to(fg, out, fg_val);
     }
 
-}
+}*/
 
 #[cfg(feature="ipp")]
 unsafe fn ippi_truncate(
@@ -641,7 +619,7 @@ unsafe fn ippi_full_threshold(
         },
         Foreground::Inside(a, b) => {
             ippi_full_threshold(Foreground::Outside(a, b), src, out);
-            crate::binary::inplace_not(out);
+            out.not_mut();
         },
         Foreground::Outside(a, b) => {
             ippi_full_threshold(Foreground::Below(a.saturating_sub(1)), src, out);
@@ -875,7 +853,7 @@ pub fn binarize_bytes_mut(win : &Window<'_, u8>, out : &mut WindowMut<'_, u8>, v
     }*/
 }
 
-use crate::feature::patch::ColorProfile;
+// use crate::feature::patch::ColorProfile;
 
 /// Otsu's method determine the best discriminant for a bimodal intensity distribution.
 /// It explores the fact that for 2 classes, minimizing intra-class variance is the same
@@ -911,13 +889,13 @@ impl Otsu {
     }
 
     // From https://en.wikipedia.org/wiki/Otsu%27s_method
-    pub fn estimate(&self, profile : &ColorProfile, step : usize) -> u8 {
+    pub fn estimate(&self, hist : &ColorProfile, step : usize) -> u8 {
 
-        let num_pixels = profile.num_pxs();
+        let num_pixels = hist.num_pxs();
         let mut max_th = 0;
         let mut max_inter_var = 0.;
 
-        let probs = profile.probabilities();
+        let probs = hist.probabilities();
 
         // Class probabilities (integrate histogram bins below and above current th)
         let mut prob_a = 0.;
@@ -1297,19 +1275,5 @@ fn opencv_global_threshold(src : &Window<u8>, mut dst : WindowMut<'_, u8>, thres
     ).unwrap();
 }
 
-/// Keep only nonzero pixels when at least k in [1..8] neighboring nonzero pixels are also present,
-/// irrespective of the position of those pixels.
-pub fn supress_binary_speckles(win : &Window<'_, u8>, mut out : WindowMut<'_, u8>, min_count : usize) {
 
-    assert!(win.shape() == out.shape());
-    assert!(min_count >= 1 && min_count <= 8);
-
-    for ((r, c), neigh) in win.labeled_neighborhoods() {
-        if neigh.filter(|px| *px > 0 ).count() >= min_count {
-            out[(r, c)] = win[(r, c)];
-        } else {
-            out[(r, c)] = 0;
-        }
-    }
-}
 

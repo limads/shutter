@@ -63,6 +63,11 @@ pub fn thickening() {
     // Calculate thick(A) = thin(A^C)^C.
 }
 
+/*
+Perhaps separate ses into mod neg { } and mod pos { }, where neg and pos
+contain exactly the same SEs, but in inverted order.
+*/
+
 // Gonzalez & Woods:
 // Erosion: A (erode) B = { z | (B)z \in A} (The set of all points z such that B translated by z is contained in A)
 // or equivalently A (erode) B = { z | (B)z \intersect A^C = \empty } (the set of all points such that the
@@ -228,7 +233,6 @@ pub const VBAR_5_KERNEL : Window<'static, u8> = Window::from_static::<25, 5>(&[
     0, 0, 1, 0, 0,
 ]);
 
-
 const CROSS_5_ARR : [u8; 25] = [
     0, 0, 1, 0, 0,
     0, 0, 1, 0, 0,
@@ -256,6 +260,18 @@ const CROSS_ARR : [u8; 9] = [
     255, 255, 255,
     0, 255, 0
 ];
+
+const DIAMOND_ARR : [u8; 25] = [
+    0, 0, 1, 0, 0,
+    0, 1, 1, 1, 0,
+    1, 1, 1, 1, 1,
+    0, 1, 1, 1, 0,
+    0, 0, 1, 0, 0,
+];
+
+pub const DIAMOND_KERNEL : Window<'static, u8> = Window::from_static::<25, 5>(&DIAMOND_ARR);
+
+pub const NEG_DIAMOND_KERNEL : Window<'static, u8> = Window::from_static::<25, 5>(&negate_array(DIAMOND_ARR));
 
 pub const CROSS_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&CROSS_ARR);
 
@@ -567,6 +583,42 @@ impl IppiMorph {
     }
 }*/
 
+/*
+/// Take a binary image and transform thick into thin lines and shrink dense shapes. Ignore borders.
+/// After Davies (2005) alg. 2.15.
+pub fn shrink(src : &Window<u8>, mut dst : WindowMut<u8>, win_side : usize) {
+    assert!(win_side % 2 == 0);
+    assert!(src.shape() == dst.shape());
+    let center = (win_side / 2, win_side / 2);
+    let noncentral_max_sum = ((win_side.pow(2) - 1)*255) as u64;
+    for (mut d, s) in dst.windows_mut((win_side, win_side)).zip(src.windows((win_side, win_side))) {
+        let sum = crate::stat::accum::<_, u64>(&s) - s[center] as u64;
+        if sum < noncentral_max_sum {
+            d[center] = 0;
+        } else {
+            d[center] = 255;
+        }
+    }
+}
+
+/// Take a binary image and transform thin into thick lines and stretch dense shapes. Ignore borders.
+/// After Davies (2005) alg. 2.16.
+pub fn expand(src : &Window<u8>, mut dst : WindowMut<u8>, win_side : usize) {
+    assert!(win_side % 2 == 0);
+    assert!(src.shape() == dst.shape());
+    let center = (win_side / 2, win_side / 2);
+    for (mut d, s) in dst.windows_mut((win_side, win_side)).zip(src.windows((win_side, win_side))) {
+        let sum = crate::stat::accum::<_, u64>(&s) - s[center] as u64;
+        if sum > 0 {
+            d[center] = 255;
+        } else {
+            d[center] = 0;
+        }
+    }
+}
+
+*/
+
 // Removes binary image fills, leaving only edges. The returned image
 // is guaranteed to only contain edges which can have at most 2-pixel
 // thickness, since the sum window edge might fall in the middle of a small
@@ -641,3 +693,182 @@ impl Morphology for Dilation {
 
 // IppStatus ippiErode3x3_64f_C1R(const Ipp64f* pSrc, int srcStep, Ipp64f* pDst, int
 // dstStep, IppiSize roiSize );
+
+/* Noise removal routines. They would fit into shutter::local::logic, as would morphology ops */
+// Davies 2.18
+/*pub fn remove_salt_noise(src : &Window<u8>, mut dst : WindowMut<u8>, win_side : usize) {
+    let value_is = 255;
+    let neighbors_are = 0;
+    conditional_set_when_neighbors_sum_equal(src, dst, win_side, value_is, neighbors_are, 0);
+}
+
+pub fn conditional_set_when_neighbors_sum_equal(
+    src : &Window<u8>,
+    mut dst : WindowMut<u8>,
+    win_side : usize,
+    cond_val : u8,
+    eq_val : u64,
+    true_val : u8
+) -> usize {
+    assert!(win_side % 2 == 0);
+    assert!(src.shape() == dst.shape());
+    let center = (win_side / 2, win_side / 2);
+    let mut n_changes = 0;
+    for (mut d, s) in dst.windows_mut((win_side, win_side)).zip(src.windows((win_side, win_side))) {
+        if s[center] == 255 {
+            let sum = crate::stat::accum::<_, u64>(&s) - s[center] as u64;
+            if sum == 0 {
+                d[center] = 0;
+                n_changes += 1;
+            } else {
+                d[center] = s[center];
+            }
+        } else {
+            d[center] = s[center];
+        }
+    }
+    n_changes
+}
+
+// Davies 2.19
+pub fn remove_pepper_noise(src : &Window<u8>, mut dst : WindowMut<u8>, win_side : usize) {
+    let noncentral_max_sum = ((win_side.pow(2) - 1)*255) as u64;
+    let value_is = 0;
+    conditional_set_when_neighbors_sum_equal(src, dst, win_side, value_is, noncentral_max_sum, 255);
+}
+
+// Davies 2.20
+pub fn remove_salt_and_pepper_noise(src : &Window<u8>, mut dst : WindowMut<u8>, win_side : usize) {
+    assert!(win_side % 2 == 0);
+    assert!(src.shape() == dst.shape());
+    let center = (win_side / 2, win_side / 2);
+    let noncentral_max_sum = ((win_side.pow(2) - 1)*255) as u64;
+    for (mut d, s) in dst.windows_mut((win_side, win_side)).zip(src.windows((win_side, win_side))) {
+        let sum = crate::stat::accum::<_, u64>(&s) - s[center] as u64;
+        match s[center] {
+            0 => {
+                if sum == noncentral_max_sum {
+                    d[center] = 255;
+                } else {
+                    d[center] = s[center];
+                }
+            },
+            255 => {
+                if sum == 0 {
+                    d[center] = 0;
+                } else {
+                    d[center] = s[center];
+                }
+            },
+            _ => { }
+        }
+        if s[center] == 255 {
+            if sum == 0 {
+
+            } else {
+                d[center] = s[center];
+            }
+        } else {
+            d[center] = s[center];
+        }
+    }
+}
+
+pub fn binary_edges(src : &Window<u8>, mut dst : WindowMut<u8>, win_side : usize) {
+    let noncentral_max_sum = ((win_side.pow(2) - 1)*255) as u64;
+    set_when_neighbors_sum_equal(src, dst, win_side, noncentral_max_sum, 0, Some(255));
+}
+
+pub fn set_when_neighbors_sum_less(
+    src : &Window<u8>,
+    mut dst : WindowMut<u8>,
+    win_side : usize,
+    less_val : u64,
+    true_val : u8,
+    false_val : Option<u8>
+) -> usize {
+    assert!(win_side % 2 == 0);
+    assert!(src.shape() == dst.shape());
+    let mut n_changes = 0;
+    let center = (win_side / 2, win_side / 2);
+    for (mut d, s) in dst.windows_mut((win_side, win_side)).zip(src.windows((win_side, win_side))) {
+        let sum = crate::stat::accum::<_, u64>(&s) - s[center] as u64;
+        if sum < less_val {
+            d[center] = true_val;
+            n_changes += 1;
+        } else {
+            d[center] = false_val.unwrap_or(src[center]);
+        }
+    }
+    n_changes
+}
+
+pub fn set_when_neighbors_sum_greater(
+    src : &Window<u8>,
+    mut dst : WindowMut<u8>,
+    win_side : usize,
+    gt_val : u64,
+    true_val : u8,
+    false_val : Option<u8>
+) -> usize {
+    assert!(win_side % 2 == 0);
+    assert!(src.shape() == dst.shape());
+    let center = (win_side / 2, win_side / 2);
+    let mut n_changes = 0;
+    for (mut d, s) in dst.windows_mut((win_side, win_side)).zip(src.windows((win_side, win_side))) {
+        let sum = crate::stat::accum::<_, u64>(&s) - s[center] as u64;
+        if sum > gt_val {
+            d[center] = true_val;
+            n_changes += 1;
+        } else {
+            d[center] = false_val.unwrap_or(s[center]);
+        }
+    }
+    n_changes
+}
+
+pub fn conditional_set_when_neighbors_sum_greater(
+    src : &Window<u8>,
+    mut dst : WindowMut<u8>,
+    win_side : usize,
+    cond_val : u8,
+    gt_val : u64,
+    true_val : u8,
+    false_val : Option<u8>
+) -> usize {
+    assert!(win_side % 2 == 0);
+    assert!(src.shape() == dst.shape());
+    let center = (win_side / 2, win_side / 2);
+    let mut n_changes = 0;
+    for (mut d, s) in dst.windows_mut((win_side, win_side)).zip(src.windows((win_side, win_side))) {
+        if s[center] == cond_val {
+            let sum = crate::stat::accum::<_, u64>(&s) - s[center] as u64;
+            if sum > gt_val {
+                d[center] = true_val;
+                n_changes += 1;
+            } else {
+                d[center] = false_val.unwrap_or(s[center]);
+            }
+        } else {
+            d[center] = false_val.unwrap_or(s[center]);
+        }
+    }
+    n_changes
+}*/
+/*
+/// Keep only nonzero pixels when at least k in [1..8] neighboring nonzero pixels are also present,
+/// irrespective of the position of those pixels.
+pub fn supress_binary_speckles(win : &Window<'_, u8>, mut out : WindowMut<'_, u8>, min_count : usize) {
+
+    assert!(win.shape() == out.shape());
+    assert!(min_count >= 1 && min_count <= 8);
+
+    for ((r, c), neigh) in win.labeled_neighborhoods() {
+        if neigh.filter(|px| *px > 0 ).count() >= min_count {
+            out[(r, c)] = win[(r, c)];
+        } else {
+            out[(r, c)] = 0;
+        }
+    }
+}
+*/

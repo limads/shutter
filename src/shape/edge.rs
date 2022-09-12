@@ -1,10 +1,11 @@
 // use crate::threshold::Threshold;
-use crate::image::Window;
-use crate::image::iter;
-use crate::feature::shape::Polygon;
+// use crate::image::Window;
+// use crate::image::iter;
+use crate::shape::Polygon;
 use std::default::Default;
-use crate::raster::*;
-use crate::draw::*;
+use crate::image::*;
+// use crate::raster::*;
+// use crate::draw::*;
 
 #[derive(Debug, Copy, Clone)]
 pub struct Threshold {
@@ -317,7 +318,7 @@ pub fn horizontal_max_pair_diff_index(
     let mut max_right : (usize, i16) = (0, 0);
 
     let (mut low_found, mut high_found) = (false, false);
-    for (i, (a, b)) in crate::raster::horizontal_row_iterator(row, comp_dist) {
+    for (i, (a, b)) in horizontal_row_iterator(row, comp_dist) {
         is_white_dark_bounded_transition(&mut max_left, &mut low_found, comp_dist, a, b, i, &edge_thr);
         is_dark_white_bounded_transition(&mut max_right, &mut high_found, comp_dist, a, b, i, &edge_thr);
     }
@@ -353,7 +354,7 @@ where
     let mut found = false;
     // let upper_max_thr = upper_thr.saturating_add(intensity_tol);
     // let lower_max_thr = lower_thr.saturating_add(intensity_tol);
-    for (i, (a, b)) in crate::raster::horizontal_row_iterator(row, comp_dist) {
+    for (i, (a, b)) in horizontal_row_iterator(row, comp_dist) {
         //is_dark_white_bounded_transition(&mut max_right, &mut found, a, b, i, &iris_thr);
         transition(&mut max_right, &mut found, comp_dist, a, b, i, &edge_thr)
     }
@@ -382,7 +383,7 @@ where
     //    return Err(ContourError::RasterSmall);
     // }
     let mut found = false;
-    for (i, (a, b)) in crate::raster::vertical_row_iterator(win.rows(), comp_dist, col_ix) {
+    for (i, (a, b)) in vertical_row_iterator(win.rows(), comp_dist, col_ix) {
         // is_dark_white_bounded_transition(&mut max, &mut found, a, b, i, &iris_thr);
         transition(&mut max, &mut found, comp_dist, a, b, i, &edge_thr)
     }

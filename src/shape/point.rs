@@ -5,7 +5,7 @@ use std::cmp::Ordering;
 // pub struct Point([usize; 2]);
 // impl AsRef<usizex4> for [Point; 2];
 
-pub mod dbscan;
+// pub mod dbscan;
 
 pub struct RasterSearch {
 
