@@ -1,7 +1,7 @@
 use std::cmp::{Eq, PartialEq};
 use itertools::Itertools;
 use crate::image::{Image, Window, WindowMut};
-use crate::feature::shape::{self, *};
+use crate::shape::{self, *};
 use std::fmt;
 use std::collections::HashMap;
 use std::mem;
@@ -11,8 +11,8 @@ use nalgebra::geometry::Point2;
 use std::cmp::Ordering;
 use parry2d::query::PointQuery;
 use std::borrow::Borrow;
-use crate::feature::point;
-use crate::feature::edge::euclidian;
+use crate::shape::point;
+use crate::shape::edge::euclidian;
 use crate::image::index::index_distance;
 use super::*;
 // use away::space::SpatialClustering;
@@ -445,7 +445,7 @@ where
     let mut n_px = 0;
     let mut sum_abs_dev : u64 = 0;
     let mut abs_dev : u64 = 0;
-    let mut sum : u64 = win[seed] as u64;
+    let mut sum : u64 = win[(seed.0 as usize, seed.1 as usize)] as u64;
     let mut mean : u64 = 0;
 
     let (h, w) = (win.height() as u16, win.width() as u16);

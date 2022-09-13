@@ -20,22 +20,22 @@ instead, since PointEncoding is an encoding that is potentially memory-heavy. Bu
 speckle-like, then the RunLength encoding would mostly carry a start and length=1 that wouldn't
 be very informative, so PointEncoding would be a best option. */
 #[derive(Default)]
-pub struct PointEncoding {
+pub struct PointCode {
     pub pts :  Vec<(usize, usize)>,
     pub rows : Vec<Range<usize>>
 }
 
-impl Encoding for PointEncoding {
+impl Encoding for PointCode {
 
     fn points<'a>(&'a self) -> PointIter<'a> {
         PointIter(Box::new(self.pts.clone().into_iter()))
     }
 
-    fn encode_distinct(img : &dyn AsRef<Window<u8>>) -> BTreeMap<u8, Self> {
+    fn encode_distinct<S>(img : &Image<u8, S>) -> BTreeMap<u8, Self> {
         unimplemented!()
     }
 
-    fn encode_from(&mut self, img : &dyn AsRef<Window<u8>>) {
+    fn encode_from<S>(&mut self, img : &Image<u8, S>) {
         unimplemented!()
     }
 
@@ -56,7 +56,7 @@ fn rows_for_sorted_points(pts : &[(usize, usize)], rows : &mut Vec<Range<usize>>
     }
 }
 
-impl PointEncoding {
+impl PointCode {
 
     // Builds a PointEncoding from a set of points (assume neither order or uniqueness
     // of the underlying array).
@@ -312,7 +312,7 @@ fn is_close(a : (usize, usize), b : (usize, usize)) -> bool {
     a.1.abs_diff(b.1) <= 1 && a.0.abs_diff(b.0) <= 1
 }
 
-fn draw_chain_random(chain : &ChainEncoding, img : &mut WindowMut<u8>) {
+fn draw_chain_random(chain : &ChainCode, img : &mut WindowMut<u8>) {
     img.fill(0);
     for ch in chain.chains() {
         let r : f64 = rand::random();
@@ -336,30 +336,30 @@ fn chain() {
         img[(i, 16)] = 255;
     }
     
-    println!("Vertical: {:?}", ChainEncoding::encode(&img.full_window()) );
+    println!("Vertical: {:?}", ChainCode::encode(&img.full_window()) );
     
     img.full_window_mut().fill(0);
     for i in 8..16 {
         img[(16, i)] = 255;
     }
-    println!("Horizontal: {:?}", ChainEncoding::encode(&img.full_window()) );
+    println!("Horizontal: {:?}", ChainCode::encode(&img.full_window()) );
     
     img.full_window_mut().fill(0);
     for i in 8..16 {
         img[(i, i)] = 255;
     }
-    println!("Diagonal right: {:?}", ChainEncoding::encode(&img.full_window()) );
+    println!("Diagonal right: {:?}", ChainCode::encode(&img.full_window()) );
     
     img.full_window_mut().fill(0);
     for i in 8..16 {
         img[(i, 32 - i)] = 255;
     }
-    println!("Diagonal left: {:?}", ChainEncoding::encode(&img.full_window()) );
+    println!("Diagonal left: {:?}", ChainCode::encode(&img.full_window()) );
     
     img.full_window_mut().fill(0);
     img.draw(Mark::Rect((8, 8), (16, 16), 255));
     img.show();
-    let enc = ChainEncoding::encode(&img.full_window());
+    let enc = ChainCode::encode(&img.full_window());
     println!("Rect: {:?}", enc);
     draw_chain_random(&enc, img.as_mut());
     img.show();
@@ -367,20 +367,20 @@ fn chain() {
     img.full_window_mut().fill(0);
     img.draw(Mark::Circle((16, 16), 8, 255));
     img.show();
-    let enc = ChainEncoding::encode(&img.full_window());
+    let enc = ChainCode::encode(&img.full_window());
     println!("Circle: {:?}", enc );
     draw_chain_random(&enc, img.as_mut());
     img.show();
     
 }
 
-impl ChainEncoding {
+impl ChainCode {
 
     fn chains<'a>(&'a self) -> ChainIter<'a> {
         ChainIter { enc : self, curr : 0 }
     }
     
-    fn encode(bin_img : &Window<u8>) -> ChainEncoding {
+    fn encode(bin_img : &Window<u8>) -> ChainCode {
 
         use bumpalo::Bump;
     
@@ -544,7 +544,7 @@ impl ChainEncoding {
             }
         }
 
-        ChainEncoding {
+        ChainCode {
             starts,
             directions,
             ranges,
@@ -578,11 +578,11 @@ where
     // equal to 1, and unmatched pixels are represented by zero, then encode_distinct
     // should return a set of distinct encodings that map to each label, as if each labeled
     // pixel were a binary image encoded as "this label against all others".
-    fn encode_distinct(img : &dyn AsRef<Window<u8>>) -> BTreeMap<u8, Self>;
+    fn encode_distinct<S>(img : &Image<u8, S>) -> BTreeMap<u8, Self>;
 
-    fn encode_from(&mut self, img : &dyn AsRef<Window<u8>>);
+    fn encode_from<S>(&mut self, img : &Image<u8, S>);
 
-    fn encode(img : &dyn AsRef<Window<u8>>) -> Self {
+    fn encode<S>(img : &Image<u8, S>) -> Self {
         let mut encoding : Self = Default::default();
         encoding.encode_from(img);
         encoding
@@ -590,8 +590,10 @@ where
 
     // Tries to decode points into the image. If size is insufficient, return false
     // and stops.
-    fn decode_to(&self, img : &mut dyn AsMut<WindowMut<u8>>) -> bool {
-        let mut img = img.as_mut();
+    fn decode_to<T>(&self, img : &mut Image<u8, T>) -> bool 
+    where
+        T : StorageMut<u8>
+    {
         img.fill(0);
         for pt in self.points().0 {
             if pt.0 < img.height() && pt.1 < img.width() {
@@ -603,7 +605,10 @@ where
         true
     }
 
-    fn decode(&self, shape : (usize, usize)) -> Option<Image<u8>> {
+    fn decode(&self, shape : (usize, usize)) -> Option<ImageBuf<u8>> 
+    where
+        Box<[u8]> : StorageMut<u8>
+    {
         // Assumes image must always be filled with zeros at the start of the call of decode_to
         let mut img = unsafe { Image::new_empty(shape.0, shape.1) };
         if self.decode_to(&mut img) {
@@ -626,7 +631,7 @@ efficient, since each pixel is represented by a single byte tagging the directio
 instead of a full usize pair. The points can be recovered from any resolution desired by
 calling trajectory(.) and sparse_trajectory(.). */
 #[derive(Debug, Clone)]
-pub struct ChainEncoding {
+pub struct ChainCode {
     starts : Vec<(usize, usize)>,
     ends : Vec<(usize, usize)>,
     directions : Vec<Direction>,
@@ -634,11 +639,11 @@ pub struct ChainEncoding {
 }
 
 pub struct ChainIter<'a> {
-    enc : &'a ChainEncoding,
+    enc : &'a ChainCode,
     curr : usize
 }
 
-impl ChainEncoding {
+impl ChainCode {
 
     pub fn iter(&self) -> ChainIter {
         ChainIter {
@@ -1006,27 +1011,27 @@ pub fn vertical_nonzero_bound_window<'a>(w : &'a Window<'a, u8>) -> Window<'a, u
 // and also by rows, so to determine if a pixel is positive can be
 // done by bisection.
 #[derive(Debug, Clone, Default)]
-pub struct RunLengthEncoding {
+pub struct RunLengthCode {
     pub rles : Vec<RunLength>,
     pub rows : Vec<Range<usize>>
 }
 
 pub struct RunLengthIter<'a> {
-    enc : &'a RunLengthEncoding,
+    enc : &'a RunLengthCode,
     curr : usize
 }
 
-impl Encoding for RunLengthEncoding {
+impl Encoding for RunLengthCode {
 
     fn points<'a>(&'a self) -> PointIter<'a> {
         PointIter(Box::new(self.rles.iter().map(move |rle| rle.points() ).flatten()))
     }
 
-    fn encode_distinct(img : &dyn AsRef<Window<u8>>) -> BTreeMap<u8, Self> {
+    fn encode_distinct<T>(img : &Image<u8, T>) -> BTreeMap<u8, Self> {
         unimplemented!()
     }
 
-    fn encode_from(&mut self, img : &dyn AsRef<Window<u8>>) {
+    fn encode_from<T>(&mut self, img : &Image<u8, T>) {
         unimplemented!()
     }
 
@@ -1283,7 +1288,7 @@ fn rows_for_sorted_rles(rles : &[RunLength], rows : &mut Vec<Range<usize>>) {
     }
 }
 
-impl RunLengthEncoding {
+impl RunLengthCode {
 
     /* Transpose this RunLenght, so that its decoding is equivalent to the decoding of the transposed image */
     pub fn transpose(mut self) -> Self {
@@ -1298,7 +1303,7 @@ impl RunLengthEncoding {
         self
     }
     
-    pub fn preserve_larger(&self, min_len : usize) -> RunLengthEncoding {
+    pub fn preserve_larger(&self, min_len : usize) -> RunLengthCode {
         let mut new_rles = self.rles.clone();
         new_rles.retain(|rle| rle.length >= min_len );
         let mut new_rows : Vec<Range<usize>> = Vec::new();
@@ -1650,7 +1655,7 @@ fn update_range(
     }
 }
 
-fn verify_rle_state(rle : &RunLengthEncoding) {
+fn verify_rle_state(rle : &RunLengthCode) {
 
     // Verify each row index at least one valid RLE
     assert!(rle.rows.iter().all(|r| r.end - r.start >= 1 ));
@@ -1675,7 +1680,7 @@ fn verify_rle_state(rle : &RunLengthEncoding) {
     }
 }*/
 
-pub fn draw_distinct(img : &mut WindowMut<u8>, graph : &UnGraph<RunLength, /*Interval<usize>*/ ()>, split : &SplitGraph) {
+/*pub fn draw_distinct(img : &mut WindowMut<u8>, graph : &UnGraph<RunLength, /*Interval<usize>*/ ()>, split : &SplitGraph) {
     for range in &split.ranges  {
         let r : f64 = rand::random();
         let color : u8 = 64 + ((256. - 64.)*r) as u8;
@@ -1683,7 +1688,7 @@ pub fn draw_distinct(img : &mut WindowMut<u8>, graph : &UnGraph<RunLength, /*Int
             img[graph[*ix]].iter_mut().for_each(|px| *px = color );
         }
     }
-}
+}*/
 
 /// A graph of connected RunLength elements is much cheaper to represent than a graph of connected pixels,
 /// and encode the same set of spatial relationships by making horizontal pixel
@@ -2079,7 +2084,7 @@ pub enum Knot {
 // represent an object.
 pub struct RectEncoder {
 
-    sum_dst : Image<u8>,
+    sum_dst : ImageBuf<u8>,
 
     // Indices of the local sum image.
     graph : UnGraph<(usize, usize), Knot>
@@ -2106,7 +2111,7 @@ fn update_graph(
     graph : &mut UnGraph<(usize, usize), Knot>,
     last_left : &mut NodeIndex,
     last_tops : &mut [NodeIndex],
-    s : &Image<u8>,
+    s : &ImageBuf<u8>,
     i : usize,
     j : usize,
     can_be_tight : bool
@@ -2141,7 +2146,7 @@ impl RectEncoder {
         }
     }
 
-    pub fn encode(&mut self, img : &Image<u8>) {
+    pub fn encode(&mut self, img : &ImageBuf<u8>) {
         crate::local::baseline_local_sum(
             &img.full_window(),
             &mut self.sum_dst.full_window_mut()
@@ -2187,7 +2192,7 @@ pub struct Pattern {
     pub neigh : u8
 }
 
-pub struct PatternEncoding {
+pub struct PatternCode {
 
     // 8-bit neighborhood and center patterns
     patterns : Vec<Pattern>,
@@ -2201,8 +2206,8 @@ pub struct PatternEncoding {
 }
 
 pub struct PatternEncoder {
-    sums : Vec<Image<u8>>,
-    binaries : Vec<Image<u8>>
+    sums : Vec<ImageBuf<u8>>,
+    binaries : Vec<ImageBuf<u8>>
 }
 
 const PX_EVALUATED : u8 = 10;
@@ -2380,8 +2385,8 @@ impl PatternEncoder {
         let binaries = sums.clone();
         Self { sums, binaries }
     }
-
-    pub fn encode(&mut self, img : &Window<u8>) {
+    
+    pub fn encode(&mut self, img : &Window<u8>) -> PatternCode {
         let mut patterns = Vec::new();
         let mut scales = Vec::new();
         let mut positions = Vec::new();
@@ -2392,7 +2397,7 @@ impl PatternEncoder {
             if lvl == 0 {
                 crate::local::baseline_local_sum(
                     &img,
-                    &mut self.sums[0].as_mut()
+                    &mut self.sums[0].full_window_mut()
                 );
             } else {
                 crate::local::baseline_local_sum(
@@ -2434,7 +2439,7 @@ impl PatternEncoder {
             }*/
 
         }
-
+        PatternCode { patterns, scales, positions }
     }
 
 }

@@ -1,7 +1,7 @@
 use crate::image::Window;
 use super::Patch;
 use std::cmp::{PartialEq, Eq};
-use crate::feature::shape;
+use crate::shape;
 
 // TODO rename to RadialSegmenter
 

@@ -216,6 +216,23 @@ where
 
 }*/
 
+impl<P> Default for ImageBuf<P> 
+where
+    P : Pixel
+{
+
+    fn default() -> Self {
+        Image { 
+            offset : (0, 0), 
+            sz : (0, 0), 
+            width : 0, 
+            slice : Vec::new().into_boxed_slice(),
+            _px : PhantomData 
+        }
+    }
+    
+}
+
 /* The most generic implementations, not requiring any trait bounds over the storage
 and/or pixels. */
 impl<P, S> Image<P, S> {
@@ -1145,9 +1162,38 @@ where
     
 }
 
+impl<P, S> Index<(u16, u16)> for Image<P, S> 
+//where
+//    N : Scalar + Copy + Any
+where 
+    S : Storage<P>
+{
+
+    type Output = P;
+
+    fn index(&self, index: (u16, u16)) -> &Self::Output {
+        &self[(index.0 as usize, index.1 as usize)]
+    }
+}
+
+impl<P, S> IndexMut<(u16, u16)> for Image<P, S>
+// where
+//     N : Scalar + Copy + Default + Copy + Any
+where
+    S : StorageMut<P>
+{
+    
+    fn index_mut(&mut self, index: (u16, u16)) -> &mut Self::Output {
+        &mut self[(index.0 as usize, index.1 as usize)]
+    }
+    
+}
+
 impl<'a, N> Window<'a, N> {
 
-    pub const fn from_static<const S : usize, const W : usize>(array : &'static [N; S]) -> Window<'static, N> {
+    pub const fn from_static<const S : usize, const W : usize>(
+        array : &'static [N; S]
+    ) -> Window<'static, N> {
 
         if S % W != 0 {
             panic!("Invalid image dimensions");

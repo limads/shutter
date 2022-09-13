@@ -7,7 +7,7 @@ use nalgebra::Scalar;
 use std::iter::FromIterator;
 pub use ripple::conv::*;
 use std::fmt::Debug;
-use crate::raster::Raster;
+// use crate::raster::Raster;
 use std::ops::Add;
 
 // Ipp only has separable convolution for f32 and i16 types; and
@@ -21,15 +21,15 @@ use std::ops::Add;
 #[derive(Debug, Clone)]
 pub struct SepFilter<T>
 where
-    T : Scalar + Debug + Copy
+    T : Pixel
 {
-    pub col : Image<T>,
-    pub row : Image<T>
+    pub col : ImageBuf<T>,
+    pub row : ImageBuf<T>
 }
 
 impl<T> SepFilter<T>
 where
-    T : Scalar + Copy + Debug + Default + Zero,
+    T : Pixel + Scalar + Copy + Debug + Default + Zero,
     f32 : AsPrimitive<T>
 {
 
@@ -40,9 +40,9 @@ where
         let svd = nalgebra::linalg::SVD::new(m, true, true);
         if svd.rank(10.0e-8) == 1 {
             let sroot = svd.singular_values[0].sqrt();
-            let mut col = Image::from_iter(svd.u.as_ref().unwrap().column(0).iter()
+            let mut col = ImageBuf::<T>::from_iter(svd.u.as_ref().unwrap().column(0).iter()
                 .map(|c| { let out : T = (c*sroot).as_(); out }), 1);
-            let mut row = Image::from_iter(svd.v_t.as_ref().unwrap().row(0).iter()
+            let mut row = ImageBuf::<T>::from_iter(svd.v_t.as_ref().unwrap().row(0).iter()
                 .map(|r| { let out : T = (r*sroot).as_(); out }), w);
             Some(Self { row, col })
         } else {
@@ -58,47 +58,46 @@ where
 /// sqrt(sigma_0) u0 and sqrt(sigma_0) v0^T (first left and right singular vectors weighted
 /// by first singular value) are the separate components of the filter. Separable convolutions
 /// reduces the number of operations from K^2 multiply-adds per pixel to 2K multiply-adds per pixel.
-pub trait ConvolveSep {
-
-    type Output;
-
-    type OwnedOutput;
+pub trait ConvolveSep<O, M> {
 
     // Separable convolution is with border only input.shape() == output.shape()
-    fn convolve_sep_mut(&self, filter_vert : &Self, filter_horiz : &Self, conv : Convolution, out : &mut Self::Output);
+    fn convolve_sep_to(&self, filter_vert : &Self, filter_horiz : &Self, out : &mut M);
 
     // Separable convolution is with border only input.shape() == output.shape()
-    fn convolve_sep(&self, filter_vert : &Self, filter_horiz : &Self, conv : Convolution) -> Self::OwnedOutput;
+    fn convolve_sep(&self, filter_vert : &Self, filter_horiz : &Self) -> O;
 
 }
 
-impl<'a, N> ConvolveSep for Window<'a, N>
+impl<P, S, T> ConvolveSep<ImageBuf<P>, Image<P, T>> for Image<P, S>
 where
-    N : Scalar + Clone + Copy + Debug + Default + Zero
+    P : Pixel,
+    S : Storage<P>,
+    T : StorageMut<P>
 {
 
-    type Output = WindowMut<'a, N>;
-
-    type OwnedOutput = Image<N>;
-
-    fn convolve_sep_mut(&self, filter_vert : &Self, filter_horiz : &Self, conv : Convolution, out : &mut Self::Output) {
+    fn convolve_sep_to(
+        &self, 
+        filter_vert : &Self, 
+        filter_horiz : &Self, 
+        out : &mut Image<P, T>
+    ) {
 
         #[cfg(feature="ipp")]
         unsafe {
             if self.pixel_is::<f32>() {
                 ipp_sep_convolution_float(
-                    mem::transmute(self),
-                    mem::transmute(filter_vert),
-                    mem::transmute(filter_horiz),
-                    mem::transmute(out)
+                    mem::transmute(&self.full_window()),
+                    mem::transmute(&filter_vert.full_window()),
+                    mem::transmute(&filter_horiz.full_window()),
+                    mem::transmute(&mut out.full_window_mut())
                 );
                 return;
             } else if self.pixel_is::<i16>() {
                 ipp_sep_convolution_integer(
-                    mem::transmute(self),
-                    mem::transmute(filter_vert),
-                    mem::transmute(filter_horiz),
-                    mem::transmute(out)
+                    mem::transmute(&self.full_window()),
+                    mem::transmute(&filter_vert.full_window()),
+                    mem::transmute(&filter_horiz.full_window()),
+                    mem::transmute(&mut out.full_window_mut())
                 );
                 return;
             } else if self.pixel_is::<i32>() {
@@ -116,9 +115,17 @@ where
         unimplemented!();
     }
 
-    fn convolve_sep(&self, filter_vert : &Self, filter_horiz : &Self, conv : Convolution) -> Self::OwnedOutput {
+    fn convolve_sep(
+        &self, 
+        filter_vert : &Self, 
+        filter_horiz : &Self, 
+    ) -> ImageBuf<P> {
         let mut out = unsafe { Image::new_empty_like(self) };
-        self.convolve_sep_mut(filter_vert, filter_horiz, conv, &mut out.full_window_mut());
+        self.convolve_sep_to(
+            filter_vert, 
+            filter_horiz,
+            &mut out.full_window_mut()
+        );
         out
     }
 
@@ -417,9 +424,9 @@ pub mod blur {
 
 }
 
-pub fn convolution_buffer<N>(img_sz : (usize, usize), kernel_sz : (usize, usize)) -> Image<N>
+pub fn convolution_buffer<N>(img_sz : (usize, usize), kernel_sz : (usize, usize)) -> ImageBuf<N>
 where
-    N : Scalar + Clone + Zero + Serialize + DeserializeOwned + Copy + Default
+    N : Pixel
 {
     let (nrow, ncol) = linear_conv_sz(img_sz, kernel_sz);
     Image::new_constant(nrow, ncol, N::zero())
@@ -434,18 +441,26 @@ pub fn linear_conv_sz(img_sz : (usize, usize), kernel_sz : (usize, usize)) -> (u
 
 fn padded_baseline_convolution<'a, N>(input : &Window<'_, N>, filter : &Window<'_, N>, out : &'a mut WindowMut<'a, N>)
 where
-    N : Scalar + Copy + Default + Zero + Copy + Serialize + DeserializeOwned +
+    N : Pixel + Scalar + Copy + Default + Zero + Copy + Serialize + DeserializeOwned +
     Any + std::ops::Mul<Output = N> + std::ops::AddAssign
 {
-    let mut extended_in = Image::new_constant(
+    let mut extended_in = ImageBuf::<N>::new_constant(
         input.height() + filter.height() / 2 + 1,
         input.width() + filter.width() / 2 + 1,
         N::zero()
     );
     let mut extended_out = extended_in.clone();
     extended_in.window_mut(((filter.height() / 2), (filter.width() / 2)), out.shape()).unwrap().copy_from(&input);
-    baseline_convolution(extended_in.as_ref(), filter, &mut extended_out.full_window_mut());
-    out.copy_from(&extended_out.window(((filter.height() / 2), (filter.width() / 2)), out.shape()).unwrap());
+    baseline_convolution(
+        &extended_in.full_window(), 
+        filter, 
+        &mut extended_out.full_window_mut()
+    );
+    let ext_win = extended_out.window(
+        ((filter.height() / 2), (filter.width() / 2)), 
+        out.shape()
+    ).unwrap();
+    out.copy_from(&ext_win);
 }
 
 /*fn extended_baseline_convolution<N>(input : &Window<'_, N>, filter : &Window<'_, N>, out : &mut WindowMut<'_, N>)
@@ -464,10 +479,13 @@ where
     out.copy_from(&extended_out.sub_window().unwrap());*/
 }*/
 
-fn baseline_convolution<N>(input : &Window<'_, N>, filter : &Window<'_, N>, out : &mut WindowMut<'_, N>)
-where
-    N : Scalar + Copy + Default + Zero + Copy + Serialize + DeserializeOwned +
-        Any + std::ops::Mul<Output = N> + std::ops::AddAssign
+fn baseline_convolution<N>(
+    input : &Window<'_, N>, 
+    filter : &Window<'_, N>, 
+    out : &mut WindowMut<'_, N>
+) where
+    // for<'a>&[N]
+    N : Pixel + std::ops::Mul<Output = N> + std::ops::AddAssign
 {
     // assert!(out.height() == input.height() - filter.height() + 1);
     // assert!(out.width() == input.width() - filter.width() + 1);
@@ -513,7 +531,9 @@ impl ConvSepParams {
         out : &mut WindowMut<T>
     ) -> Self
     where
-        T : Scalar + Copy + Debug + Default
+        T : Pixel + Scalar + Copy + Debug + Default,
+        for<'a> &'a [T] : Storage<T>,
+        for<'a> &'a mut [T] : StorageMut<T>,
     {
         use crate::foreign::ipp::ippi::*;
 
@@ -599,7 +619,7 @@ unsafe fn ipp_sep_convolution_integer(
     // Since the full kernel is the external product of two vecs, the sum over
     // the kernel is the sum over the products.
     // let divisor=1;
-    let divisor = (crate::global::sum::<_, f64>(col_kernel, 1) as i32).max(1);
+    let divisor = (col_kernel.sum::<f32>(1) as i32).max(1);
     // let divisor = (col_kernel.pixels(1).zip(row_kernel.pixels(1)).fold(0, |s, (a, b)| s+a.abs()*b.abs()) as i32).max(1);
 
     let mut params = ConvSepParams::evaluate(img, row_kernel, col_kernel, out);
@@ -719,7 +739,9 @@ impl ConvParams {
 
     unsafe fn evaluate<T>(img : &Window<T>, kernel : &Window<T>, out : &mut WindowMut<T>) -> Self
     where
-        T : Scalar + Debug + Copy
+        T : Pixel + Scalar + Debug + Copy,
+        for<'a> &'a [T] : Storage<T>,
+        for<'a> &'a mut [T] : StorageMut<T>,
     {
 
         use crate::foreign::ipp::ippi::*;
@@ -810,7 +832,7 @@ unsafe fn ipp_convolution_u8(img : &Window<u8>, kernel : &Window<u8>, out : &mut
     // In the worst case that the image content is u8::MAX and the kernel
     // is u8::MAX, the result will be divided by u8::MAX*kernel_sz, thus
     // making the output u8::MAX.
-    let divisor = (crate::global::sum::<_, f64>(kernel, 1) as i32).max(1);
+    let divisor = (kernel.sum::<f32>(1) as i32).max(1);
 
     let status = ippiConv_8u_C1R(
         img.as_ptr(),
@@ -888,30 +910,30 @@ where
 
 }*/
 
-impl<'a, N> Convolve for Window<'a, N>
+impl<P, S, T> Convolve<ImageBuf<P>, Image<P, T>> for Image<P, S>
 where
-N : Scalar + Copy + Default + Zero + Copy + Serialize + DeserializeOwned +
-    Any + std::ops::Mul<Output = N> + std::ops::AddAssign
+    S : Storage<P>,
+    T : StorageMut<P>,
+    P : Pixel + std::ops::Mul<Output = P> + std::ops::AddAssign
 {
-
-    type Output = WindowMut<'a, N>;
-
-    type OwnedOutput = Image<N>;
 
     // Convolution is whithout border (require out.width == self.width-kernel.width+1
     // and out.height == self.height-kernel.height+1). To keep the original size, use
     // convolve_padded_mut, which will write the result to the center of the buffer.
-    fn convolve_padded_mut(&self, filter : &Self, conv : Convolution, mut out : Self::Output) {
+    fn convolve_padded_mut(&self, filter : &Self, out : &mut Image<P, T>) {
         assert!(self.shape() == out.shape());
         let shape = (self.height()-filter.height()+1, self.width()-filter.width()+ 1);
+        let mut out_sub = out.sub_window_mut(
+            (filter.height() / 2, filter.width() / 2), 
+            shape
+        ).unwrap();
         self.convolve_mut(
             filter,
-            conv,
-            &mut out.sub_window_mut((filter.height() / 2, filter.width() / 2), shape).unwrap()
+            &mut out_sub
         );
     }
 
-    fn convolve_mut(&self, filter : &Self, conv : Convolution, out : &mut Self::Output) {
+    fn convolve_mut(&self, filter : &Self, out : &mut Image<P, T>) {
 
         #[cfg(feature="ipp")]
         unsafe {
@@ -921,7 +943,11 @@ N : Scalar + Copy + Default + Zero + Copy + Serialize + DeserializeOwned +
             }
 
             if self.pixel_is::<u8>() {
-                ipp_convolution_u8(mem::transmute(self), mem::transmute(filter), mem::transmute(out));
+                ipp_convolution_u8(
+                    mem::transmute(self), 
+                    mem::transmute(filter), 
+                    mem::transmute(out)
+                );
                 return;
             }
 
@@ -973,20 +999,30 @@ N : Scalar + Copy + Default + Zero + Copy + Serialize + DeserializeOwned +
         }
 
         // println!("Processing with baseline");
-        baseline_convolution(&self, &filter, out);
+        baseline_convolution(
+            &self.full_window(), 
+            &filter.full_window(), 
+            &mut out.full_window_mut()
+        );
     }
 
-    fn convolve(&self, filter : &Self, conv : Convolution) -> Image<N> {
+    fn convolve(&self, filter : &Self) -> ImageBuf<P> {
         let (height, width) = linear_conv_sz(self.shape(), filter.shape());
         let mut out = unsafe { Image::new_empty(height, width) };
-        self.convolve_mut(filter, conv, &mut out.full_window_mut());
+        self.convolve_mut(filter, &mut out.full_window_mut());
         out
     }
 
-    fn convolve_padded(&self, filter : &Self, conv : Convolution) -> Image<N> {
+    fn convolve_padded(&self, filter : &Self) -> ImageBuf<P> {
         let (height, width) = linear_conv_sz(self.shape(), filter.shape());
         let mut out = unsafe { Image::new_empty(self.height(), self.width()) };
-        self.convolve_mut(filter, conv, &mut out.window_mut((filter.height() / 2, filter.width() / 2), (height, width)).unwrap());
+        let mut out_sub = out.window_mut(
+            (filter.height() / 2, filter.width() / 2), 
+            (height, width)
+        ).unwrap();
+        self.convolve_mut(
+            filter, 
+            &mut out_sub);
         out
     }
 

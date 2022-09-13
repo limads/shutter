@@ -77,6 +77,18 @@ pub mod draw;
 
 pub mod shape;
 
+pub mod conv;
+
+pub mod local;
+
+pub mod morph;
+
+pub mod patch;
+
+pub mod code;
+
+pub mod graph;
+
 /// Common optical manipulations (calculation of focal depth, magnification, camera calibration, lens distortion correction),
 // pub mod optics;
 
@@ -161,8 +173,6 @@ float_depth -> linearize_depth / depth_to_interval / interval_to_depth
 
 // Low-level image features
 // pub mod feature;
-
-
 
 // pub mod path;
 

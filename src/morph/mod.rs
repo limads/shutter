@@ -1,4 +1,6 @@
+#[cfg(feature="opencv")]
 use opencv::{core, imgproc};
+
 use crate::image::*;
 use nalgebra::Scalar;
 use std::fmt::Debug;
@@ -318,6 +320,7 @@ structuring element are set to background.
 (Dilation) c = 1 iff at least one 1-neighbor match structuring element. c = 0 otherwise.
 */
 
+#[cfg(feature="opencv")]
 #[derive(Clone, Debug)]
 pub enum MorphShape {
     Rectangle,
@@ -325,6 +328,7 @@ pub enum MorphShape {
     Ellipse
 }
 
+#[cfg(feature="opencv")]
 #[derive(Debug)]
 struct MorphKernel {
     iterations : i32,
@@ -334,6 +338,7 @@ struct MorphKernel {
     kernel : core::Mat
 }
 
+#[cfg(feature="opencv")]
 fn build_kernel(sz : usize, iterations : usize, shape : MorphShape) -> MorphKernel {
     let kernel_sz = (2*sz+1) as i32;
     let shape = match shape {
@@ -351,18 +356,20 @@ fn build_kernel(sz : usize, iterations : usize, shape : MorphShape) -> MorphKern
     MorphKernel { iterations : iterations as i32, sz : sz as i32, anchor, border_val, kernel }
 }
 
+#[cfg(feature="opencv")]
 #[derive(Debug)]
 pub struct Erosion<P>
 where
-    P : Scalar + From<u8> + Debug + Copy + Default + Serialize + DeserializeOwned + Any
+    P : Pixel + Scalar + From<u8> + Debug + Copy + Default + Serialize + DeserializeOwned + Any
 {
-    tgt : Image<P>,
+    tgt : ImageBuf<P>,
     kernel : MorphKernel
 }
 
+#[cfg(feature="opencv")]
 impl<P> Erosion<P>
 where
-    P : Scalar + From<u8> + Debug + Copy + Default + Zero + Serialize + DeserializeOwned + Any
+    P : Pixel + Scalar + From<u8> + Debug + Copy + Default + Zero + Serialize + DeserializeOwned + Any
 {
 
     pub fn new(img_sz : (usize, usize), kernel_sz : usize, shape : MorphShape, iterations : usize) -> Self {
@@ -392,17 +399,19 @@ where
     }
 }
 
+#[cfg(feature="opencv")]
 pub struct Dilation<P>
 where
-    P : Scalar + From<u8> + Debug + Copy + Default + Serialize + DeserializeOwned + Any
+    P : Pixel + Scalar + From<u8> + Debug + Copy + Default + Serialize + DeserializeOwned + Any
 {
-    tgt : Image<P>,
+    tgt : ImageBuf<P>,
     kernel : MorphKernel
 }
 
+#[cfg(feature="opencv")]
 impl<P> Dilation<P>
 where
-    P : Scalar + From<u8> + Debug + Copy + Default + Zero + Serialize + DeserializeOwned
+    P : Pixel + Scalar + From<u8> + Debug + Copy + Default + Zero + Serialize + DeserializeOwned
 {
 
     pub fn new(img_sz : (usize, usize), kernel_sz : usize, shape : MorphShape, iterations : usize) -> Self {
@@ -438,18 +447,24 @@ where
 pub struct IppiMorph {
     spec : Vec<u8>,
     buf : Vec<u8>,
-    kernel : Image<u8>,
+    kernel : ImageBuf<u8>,
     is_dilate : bool
 }
 
 #[cfg(feature="ipp")]
 impl IppiMorph {
 
-    pub fn new(kernel : Image<u8>, img_sz : (usize, usize), is_dilate : bool) -> Self {
+    pub fn new(kernel : ImageBuf<u8>, img_sz : (usize, usize), is_dilate : bool) -> Self {
         unsafe {
             let kernel_sz = kernel.full_window().shape();
-            let img_roi_sz = crate::foreign::ipp::ippcv::IppiSizeL { width : img_sz.1 as i64, height : img_sz.0 as i64 };
-            let kernel_roi_sz = crate::foreign::ipp::ippcv::IppiSizeL { width : kernel_sz.1 as i64, height : kernel_sz.0 as i64 };
+            let img_roi_sz = crate::foreign::ipp::ippcv::IppiSizeL { 
+                width : img_sz.1 as i64, 
+                height : img_sz.0 as i64 
+            };
+            let kernel_roi_sz = crate::foreign::ipp::ippcv::IppiSizeL { 
+                width : kernel_sz.1 as i64, 
+                height : kernel_sz.0 as i64 
+            };
             // let img_roi_sz : IppiSizeL = (img_sz.0 * img_sz.1) as i128;
             // let kernel_roi_sz = (kernel_sz.0 * kernel_sz.1) as i128;
             let num_channels = 1;
@@ -619,7 +634,7 @@ pub fn expand(src : &Window<u8>, mut dst : WindowMut<u8>, win_side : usize) {
 
 */
 
-// Removes binary image fills, leaving only edges. The returned image
+/*// Removes binary image fills, leaving only edges. The returned image
 // is guaranteed to only contain edges which can have at most 2-pixel
 // thickness, since the sum window edge might fall in the middle of a small
 // object. Therefore objects with side of 4x4 pixels will not have their fill removed, but
@@ -643,7 +658,7 @@ pub fn remove_fill(
             }
         }
     }
-}
+}*/
 
 /*pub struct Opening {
 

@@ -7,10 +7,9 @@ use nalgebra::Scalar;
 use std::iter::FromIterator;
 pub use ripple::conv::*;
 use std::fmt::Debug;
-use crate::raster::Raster;
 use std::ops::Add;
 
-/*
+/*/*
 The filling routines assumes 3x3 neighborhoods at object edges must have a given
 number of positive entries for the overall shape to be convex. The center pixel
 of the local 3x3 window is a potential concavity, that is filled whenever the local sum
@@ -26,7 +25,7 @@ pub fn fill_without_corners(src : &Window<u8>, mut dst : WindowMut<u8>) {
     dst.copy_from(src);
     while n_changed > 0 {
         let mut dst = unsafe { WindowMut::sub_from_slice(dst.original_slice(), dst.original_width(), dst.offset(), dst.shape()).unwrap() };
-        n_changed = crate::point::conditional_set_when_neighbors_sum_greater(
+        n_changed = crate::morph::conditional_set_when_neighbors_sum_greater(
             src,
             dst,
             win_sz,
@@ -36,17 +35,21 @@ pub fn fill_without_corners(src : &Window<u8>, mut dst : WindowMut<u8>) {
             None
         );
     }
-}
+}*/
 
 fn bool_to_u64(b : bool) -> u64 {
     if b { 255 } else { 0 }
 }
 
-// After Davies (2005) Alg. 6.10. Makes shapes in a binary imageg convex.
+/*// After Davies (2005) Alg. 6.10. Makes shapes in a binary imageg convex.
 // (Account for corners, but more costly). The notation of the author is:
 // A0 is the middle element; A1-A8 are the neighbors element in a clockwise
 // fashion around A0 starting from top-left.
-pub fn fill_with_corners(src : &Window<u8>, mut dst : WindowMut<u8>) {
+pub fn fill_with_corners(src : &Window<u8>, mut dst : WindowMut<u8>) 
+where
+    u64 : Pixel,
+    u8 : Pixel
+{
     assert!(src.shape() == dst.shape());
     let center = (1usize,1usize);
     let mut n_changed = usize::MAX;
@@ -60,7 +63,7 @@ pub fn fill_with_corners(src : &Window<u8>, mut dst : WindowMut<u8>) {
                 let q2 = bool_to_u64(*s.linear_index(2) == 255 && *s.linear_index(5) != 255 && *s.linear_index(8) == 255);
                 let q3 = bool_to_u64(*s.linear_index(8) == 255 && *s.linear_index(7) != 255 && *s.linear_index(6) == 255);
                 let q4 = bool_to_u64(*s.linear_index(6) == 255 && *s.linear_index(3) != 255 && *s.linear_index(0) == 255);
-                let sum = crate::global::accum::<_, u64>(&s) - s[center] as u64 + q1 + q2 + q3 + q4;
+                let sum = s.accum::<u64>() - s[center] as u64 + q1 + q2 + q3 + q4;
                 if sum > 3 {
                     d[center] = 255;
                     n_changed += 1;
@@ -74,7 +77,7 @@ pub fn fill_with_corners(src : &Window<u8>, mut dst : WindowMut<u8>) {
             }
         }
     }
-}
+}*/
 
 const MEDIAN_POS_3 : u64 = 5;
 
@@ -204,7 +207,7 @@ where
                 (i*local_win_sz.0, j*local_win_sz.1),
                 local_win_sz
             ).unwrap();
-            dst[(i, j)] = crate::global::baseline_sum(&local);
+            dst[(i, j)] = local.accum::<P>();
         }
     }
 }
@@ -253,7 +256,8 @@ pub fn local_sum(src : &Window<'_, u8>, dst : &mut WindowMut<'_, i32>) {
     }*/
     for i in 0..dst.height() {
         for j in 0..dst.width() {
-            dst[(i, j)] = crate::global::sum::<_, f32>(&src.sub_window((i*local_win_sz.0, j*local_win_sz.1), local_win_sz).unwrap(), 1) as i32;
+            let off = (i*local_win_sz.0, j*local_win_sz.1);
+            dst[(i, j)] = src.sub_window(off, local_win_sz).unwrap().sum::<f32>(1) as i32;
         }
     }
 
@@ -279,7 +283,9 @@ pub fn block_min_or_max<N>(
     min_dst : Option<&mut WindowMut<'_, N>>,
     max_dst : Option<&mut WindowMut<'_, N>>
 ) where
-    N : Scalar + Copy + Default + Zero + Copy
+    N : Pixel,
+    for<'a> &'a [N] : Storage<N>,
+    for<'a> &'a mut [N] : StorageMut<N>,
 {
 
     let mut block_sz = (0, 0);
@@ -294,7 +300,7 @@ pub fn block_min_or_max<N>(
         if block_sz.0 == 0 {
             block_sz = (win.height() / dst.height(), win.width() / dst.width());
         } else {
-            assert!(win.height() / dst.height() == block_sz.0 && win.width / dst.width() == block_sz.1);
+            assert!(win.height() / dst.height() == block_sz.0 && win.width() / dst.width() == block_sz.1);
         }
     }
     assert!(block_sz.0 > 0 && block_sz.1 > 0);
@@ -376,8 +382,10 @@ pub fn min_max_idx<N>(
     max : bool
 ) -> (Option<(usize, usize, N)>, Option<(usize, usize, N)>)
 where
-    N : Debug + Clone + Copy + Scalar + AsPrimitive<f32>,
-    f32 : AsPrimitive<N>
+    N : Pixel + AsPrimitive<f32>,
+    f32 : AsPrimitive<N>,
+    for<'a> &'a [N] : Storage<N>,
+    for<'a> &'a mut [N] : StorageMut<N>,
 {
 
     #[cfg(feature="ipp")]
@@ -488,7 +496,11 @@ where
     unimplemented!()
 }
 
-pub fn find_peaks(win : &Window<'_, i32>, threshold : i32, max_peaks : usize) -> Vec<(usize, usize)> {
+pub fn find_peaks(
+    win : &Window<'_, i32>, 
+    threshold : i32, 
+    max_peaks : usize
+) -> Vec<(usize, usize)> {
 
     #[cfg(feature="ipp")]
     unsafe {
@@ -558,11 +570,11 @@ pub struct AvgPool {
 
 }
 
-pub fn local_min(src : Window<'_, u8>, dst : WindowMut<'_, u8>, kernel_sz : usize) -> Image<u8> {
+pub fn local_min(src : Window<'_, u8>, dst : WindowMut<'_, u8>, kernel_sz : usize) -> ImageBuf<u8> {
     unimplemented!()
 }
 
-pub fn local_max(src : Window<'_, u8>, dst : WindowMut<'_, u8>, kernel_sz : usize) -> Image<u8> {
+pub fn local_max(src : Window<'_, u8>, dst : WindowMut<'_, u8>, kernel_sz : usize) -> ImageBuf<u8> {
     unimplemented!()
 }
 

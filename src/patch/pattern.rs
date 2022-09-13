@@ -178,7 +178,7 @@ impl PatternSegmenter {
                 if match_func(&sub_win, scale, fg, bg) {
                     let new_patch = patch_func(i as u16, j as u16, scale, win);
                     let overlaps_last = if let Some(last) = patches.last() {
-                        crate::feature::shape::rect_overlaps(&last.outer_rect, &new_patch.outer_rect)
+                        crate::shape::rect_overlaps(&last.outer_rect, &new_patch.outer_rect)
                     } else {
                         false
                     };

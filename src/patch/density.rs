@@ -1,4 +1,5 @@
 use super::*;
+use std::convert::TryInto;
 
 #[derive(Clone, Debug)]
 pub struct DensitySegmenter {
