@@ -28,6 +28,10 @@ use std::clone::Clone;
 use std::any::{TypeId};
 use std::marker::PhantomData;
 use nalgebra::Vector2;
+use nalgebra::Complex;
+
+#[cfg(feature="opencv")]
+use nalgebra::{Matrix3, Vector3};
 
 // use crate::io;
 
@@ -36,6 +40,12 @@ pub(crate) mod ipputils;
 
 #[cfg(feature="opencv")]
 pub mod cvutils;
+
+#[cfg(feature="opencv")]
+use opencv::core;
+
+#[cfg(feature="opencv")]
+use opencv::core::Mat;
 
 pub mod index;
 
@@ -105,7 +115,8 @@ pub type ImageMut<'a, P> = Image<P, &'a mut [P]>;
 
 pub trait Pixel 
 where
-    Self : Clone + Copy + Scalar + Debug + Zero + Bounded + Any + Default + 'static
+    Self : Clone + Copy + Scalar + Debug + Zero + Any + Bounded + Default + 'static
+    // Bounded is implemented for all except Complex<f32>
 {
 
     fn depth() -> Depth;
@@ -159,6 +170,16 @@ impl Pixel for f32 {
     }
     
 }
+
+/*impl Pixel for Complex<f32> {
+
+    fn depth() -> Depth {
+        unimplemented!()
+    }
+    
+}*/
+
+// impl FloatPixel for Complex<f32> { }
 
 /*pub trait BinaryPixel {
 
@@ -310,6 +331,20 @@ where
     P : Pixel
 {
     
+    pub fn get(&self, index : (usize, usize)) -> Option<&P> {
+        if index.0 < self.height() && index.1 < self.width() {
+            unsafe { Some(self.get_unchecked(index)) }
+        } else {
+            None
+        }
+    }
+    
+    pub unsafe fn get_unchecked(&self, index : (usize, usize)) -> &P {
+        let off_ix = (self.offset.0 + index.0, self.offset.1 + index.1);
+        let (limit_row, limit_col) = (self.offset.0 + self.sz.0, self.offset.1 + self.sz.1);
+        unsafe { self.slice.as_ref().get_unchecked(index::linear_index(off_ix, self.original_size().1)) }
+    }
+
     /// Returns a borrowed view over the whole window. Same as self.as_ref(). But is
     /// convenient to have, since type inference for the AsRef impl might not be triggered
     /// or you need an owned version of the window
@@ -1265,20 +1300,6 @@ where
         (rect.0 + rect.2 / 2, rect.1 + rect.3 / 2)
     }
 
-    pub fn get(&self, index : (usize, usize)) -> Option<&N> {
-        if index.0 < self.height() && index.1 < self.width() {
-            unsafe { Some(self.get_unchecked(index)) }
-        } else {
-            None
-        }
-    }
-
-    pub unsafe fn get_unchecked(&self, index : (usize, usize)) -> &N {
-        let off_ix = (self.offset.0 + index.0, self.offset.1 + index.1);
-        let (limit_row, limit_col) = (self.offset.0 + self.sz.0, self.offset.1 + self.sz.1);
-        unsafe { self.slice.as_ref().get_unchecked(index::linear_index(off_ix, self.original_size().1)) }
-    }
-
     /// Returns either the given sub window, or trim it to the window borders and return a smaller but also valid window
     pub fn largest_valid_sub_window(&'a self, offset : (usize, usize), dims : (usize, usize)) -> Option<Window<'a, N>> {
         let diff_h = offset.0 as i64 + dims.0 as i64 - self.height() as i64;
@@ -1668,9 +1689,9 @@ where
 }*/
 
 #[cfg(feature="opencv")]
-impl<N> opencv::core::ToInputArray for Image<N>
+impl<N> opencv::core::ToInputArray for ImageBuf<N>
 where
-    N : Scalar + Copy + Default + Zero + Any
+    N : Pixel + Scalar + Copy + Default + Zero + Any
 {
 
     fn input_array(&self) -> opencv::Result<opencv::core::_InputArray> {
@@ -1681,9 +1702,9 @@ where
 }
 
 #[cfg(feature="opencv")]
-impl<N> opencv::core::ToOutputArray for Image<N>
+impl<N> opencv::core::ToOutputArray for ImageBuf<N>
 where
-    N : Scalar + Copy + Default + Zero + Any
+    N : Pixel + Scalar + Copy + Default + Zero + Any
 {
 
     fn output_array(&mut self) -> opencv::Result<opencv::core::_OutputArray> {
@@ -1696,7 +1717,7 @@ where
 #[cfg(feature="opencv")]
 impl<N> opencv::core::ToInputArray for Window<'_, N>
 where
-    N : Scalar + Copy + Default + Zero + Any
+    N : Pixel + Scalar + Copy + Default + Zero + Any
 {
 
     fn input_array(&self) -> opencv::Result<opencv::core::_InputArray> {
@@ -1709,7 +1730,7 @@ where
 #[cfg(feature="opencv")]
 impl<N> opencv::core::ToOutputArray for WindowMut<'_, N>
 where
-    N : Scalar + Copy + Default + Zero + Any
+    N : Pixel + Scalar + Copy + Default + Zero + Any
 {
 
     fn output_array(&mut self) -> opencv::Result<opencv::core::_OutputArray> {
@@ -1724,7 +1745,7 @@ pub fn median_blur(slice : &Window<'_, u8>, output : WindowMut<'_, u8>, kernel :
 
     use opencv::{imgproc, core};
 
-    let input : core::Mat = win.clone().into();
+    let input : core::Mat = slice.clone().into();
     let mut out : core::Mat = output.into();
     imgproc::median_blur(&input, &mut out, kernel as i32).unwrap();
 
@@ -1733,10 +1754,10 @@ pub fn median_blur(slice : &Window<'_, u8>, output : WindowMut<'_, u8>, kernel :
 #[cfg(feature="opencv")]
 impl<N> From<core::Mat> for ImageBuf<N>
 where
-    N : Scalar + Copy + Default + Zero + Any + opencv::core::DataType
+    N : Pixel + Scalar + Copy + Default + Zero + Any + opencv::core::DataType
 {
 
-    fn from(m : core::Mat) -> Image<N> {
+    fn from(m : core::Mat) -> ImageBuf<N> {
 
         use opencv::prelude::MatTraitManual;
         use opencv::prelude::MatTrait;
@@ -1760,7 +1781,7 @@ where
 #[cfg(feature="opencv")]
 impl<N> Into<core::Mat> for &ImageBuf<N>
 where
-    N : Scalar + Copy + Default + Zero + Any
+    N : Pixel + Scalar + Copy + Default + Zero + Any
 {
 
     fn into(self) -> core::Mat {
@@ -1774,7 +1795,7 @@ where
 #[cfg(feature="opencv")]
 impl<N> Into<core::Mat> for &mut ImageBuf<N>
 where
-    N : Scalar + Copy + Default + Zero + Any
+    N : Pixel + Scalar + Copy + Default + Zero + Any
 {
 
     fn into(self) -> core::Mat {
@@ -1789,7 +1810,7 @@ where
 #[cfg(feature="opencv")]
 impl<N> Into<core::Mat> for Window<'_, N>
 where
-    N : Scalar + Copy + Default
+    N : Pixel + Scalar + Copy + Default
 {
 
     fn into(self) -> core::Mat {
@@ -1802,7 +1823,7 @@ where
 #[cfg(feature="opencv")]
 impl<N> Into<core::Mat> for &Window<'_, N>
 where
-    N : Scalar + Copy + Default
+    N : Pixel + Scalar + Copy + Default
 {
 
     fn into(self) -> core::Mat {
@@ -1816,7 +1837,7 @@ where
 #[cfg(feature="opencv")]
 impl<N> Into<core::Mat> for WindowMut<'_, N>
 where
-    N : Scalar + Copy + Default
+    N : Pixel + Scalar + Copy + Default
 {
 
     fn into(self) -> core::Mat {
@@ -1829,7 +1850,7 @@ where
 #[cfg(feature="opencv")]
 impl<N> Into<core::Mat> for &mut WindowMut<'_, N>
 where
-    N : Scalar + Copy + Default
+    N : Pixel + Scalar + Copy + Default
 {
 
     fn into(self) -> core::Mat {

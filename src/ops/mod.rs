@@ -566,14 +566,18 @@ pub trait BinaryIntegerOp<O> {
 
     fn abs_diff_assign(&mut self, rhs : O);
 
-}
+}*/
 
-impl<'a, N> BinaryIntegerOp<Window<'a, N>> for WindowMut<'a, N>
+impl<P, S> Image<P, S>
 where
-    N : UnsignedPixel
+    P : UnsignedPixel,
+    S : StorageMut<P>,
 {
 
-    fn abs_diff_assign(&mut self, rhs : Window<'a, N>) {
+    pub fn abs_diff_assign<T>(&mut self, rhs : &Image<P, T>) 
+    where
+        T : Storage<P>
+    {
         #[cfg(feature="ipp")]
         unsafe {
             let mut copy = self.clone_owned();
@@ -599,7 +603,7 @@ where
 
 }
 
-impl<'a, N> BinaryFloatOp<Window<'a, N>> for WindowMut<'a, N>
+/*impl<'a, N> BinaryFloatOp<Window<'a, N>> for WindowMut<'a, N>
 where
     N : Div<Output=N> + Mul<Output=N> + num_traits::Float + AddAssign + Add<Output=N> + Debug + Scalar + Copy + Default + Any + Sized + From<f32>
 {

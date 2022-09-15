@@ -20,16 +20,14 @@ pub use ripple::resample::*;
 use std::fmt::Debug;
 use std::any::Any;
 
-impl<'a, N> Resample for Window<'a, N>
+impl<N, S, T> Resample<ImageBuf<N>, Image<N, T>> for Image<N, S>
 where
-    N : Scalar + Clone + Copy + Debug + Any + Default + num_traits::Zero
+    N : Pixel,
+    S : Storage<N>,
+    T : StorageMut<N>
 {
 
-    type Output = WindowMut<'a, N>;
-
-    type OwnedOutput = Image<N>;
-
-    fn downsample_to(&self, out : &mut Self::Output, down : Downsample) {
+    fn downsample_to(&self, out : &mut Image<N, T>, down : Downsample) {
 
         assert!(self.height() % out.height() == 0 && self.width() % out.width() == 0);
 
@@ -48,34 +46,34 @@ where
 
         #[cfg(feature="ipp")]
         unsafe {
-            crate::image::ipputils::resize(self, out);
+            crate::image::ipputils::resize(&self.full_window(), &mut out.full_window_mut());
             return;
         }
 
         unimplemented!()
     }
 
-    fn upsample_to(&self, out : &mut Self::Output, up : Upsample) {
+    fn upsample_to(&self, out : &mut Image<N, T>, up : Upsample) {
 
         #[cfg(feature="ipp")]
         unsafe {
-            crate::image::ipputils::resize(self, out);
+            crate::image::ipputils::resize(&self.full_window(), &mut out.full_window_mut());
             return;
         }
 
         unimplemented!()
     }
 
-    fn downsample(&self, down : Downsample, by : usize) -> Self::OwnedOutput {
+    fn downsample(&self, down : Downsample, by : usize) -> ImageBuf<N> {
         assert!(self.height() % by == 0 && self.width() % by == 0);
-        let mut downsampled = unsafe { Image::<N>::new_empty(self.height() / by, self.width() / by) };
+        let mut downsampled = unsafe { ImageBuf::<N>::new_empty(self.height() / by, self.width() / by) };
         self.downsample_to(&mut downsampled.full_window_mut(), down);
         downsampled
     }
 
-    fn upsample(&self, up : Upsample, by : usize) -> Self::OwnedOutput {
+    fn upsample(&self, up : Upsample, by : usize) -> ImageBuf<N> {
         // assert!(self.height() % by == 0 && self.width() % by == 0);
-        let mut upsampled = unsafe { Image::<N>::new_empty(self.height() * by, self.width() * by) };
+        let mut upsampled = unsafe { ImageBuf::<N>::new_empty(self.height() * by, self.width() * by) };
         self.upsample_to(&mut upsampled.full_window_mut(), up);
         upsampled
     }

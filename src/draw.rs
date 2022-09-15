@@ -31,7 +31,7 @@ where
     // around the target pixels: Color = (255 - avg_px_col). The window size is chosen to
     // minimally enclose the shape, and the same shape is always drawn with the same
     // color (decided as the inversion of the average window color).
-    fn draw_contrasting(&mut self, mark : Mark) {
+    pub fn draw_contrasting(&mut self, mark : Mark) {
         let (off, sz) = mark.enclosing_rect();
         if let Some(sub) = self.window(off, sz) {
             let mean = sub.mean::<f32>(1).unwrap() as u8;
@@ -40,19 +40,19 @@ where
         }
     }
 
-    fn draw_many_contrasting(&mut self, marks : impl IntoIterator<Item=Mark>) {
+    pub fn draw_many_contrasting(&mut self, marks : impl IntoIterator<Item=Mark>) {
         for mark in marks.into_iter() {
             self.draw_contrasting(mark);
         }
     }
     
-    fn draw_many(&mut self, marks : impl IntoIterator<Item=Mark>, color : u8) {
+    pub fn draw_many(&mut self, marks : impl IntoIterator<Item=Mark>, color : u8) {
         for mark in marks.into_iter() {
             self.draw(mark, color);
         }
     }
 
-    fn draw(&mut self, mark : Mark, color : u8) {
+    pub fn draw(&mut self, mark : Mark, color : u8) {
         match mark {
             Mark::Cross(pos, sz) => {
                 let cross_pos = (self.offset().0 + pos.0, self.offset().1 + pos.1);
@@ -82,7 +82,14 @@ where
 
                 #[cfg(feature="opencv")]
                 unsafe {
-                    cvutils::draw_line(self.win, self.original_size().1, src_pos, dst_pos, color);
+                    let orig_sz = self.original_size();
+                    cvutils::draw_line(
+                        self.slice_mut(), 
+                        orig_sz.1, 
+                        src_pos, 
+                        dst_pos, 
+                        color
+                    );
                     return;
                 }
 
@@ -106,18 +113,20 @@ where
             },
             Mark::Digit(pos, val, sz) => {
                 let tl_pos = (self.offset().0 + pos.0, self.offset().1 + pos.1);
-
+                
                 #[cfg(feature="opencv")]
                 unsafe {
+                    let m_sz = self.original_size();
                     cvutils::write_text(
-                        self.win, 
-                        self.original_size().1, 
-                        tl_pos, 
+                        self.slice_mut(),
+                        m_sz.1, 
+                        tl_pos,
                         &val.to_string()[..], 
                         color
                     );
                     return;
                 }
+                
                 let orig_w = self.original_size().1;
                 draw_digit_native(
                     self.slice_mut(), 
@@ -144,9 +153,10 @@ where
 
                 #[cfg(feature="opencv")]
                 unsafe {
+                    let orig_sz = self.original_size();
                     crate::image::cvutils::draw_circle(
-                        self.win, 
-                        self.original_size().1, 
+                        self.slice_mut(), 
+                        orig_sz.1, 
                         center_pos, 
                         radius, 
                         color
@@ -194,11 +204,13 @@ where
 
                 #[cfg(feature="opencv")]
                 {
+                    let sz = self.original_size();
+                    let off = self.offset();
                     unsafe {
                         crate::image::cvutils::write_text(
-                            self.win,
-                            self.original_size().1,
-                            (self.offset.0 + tl_pos.0, self.offset.1 + tl_pos.1),
+                            self.slice_mut(),
+                            sz.1,
+                            (off.0 + tl_pos.0, off.1 + tl_pos.1),
                             &txt[..],
                             color
                         );
@@ -212,7 +224,7 @@ where
 
                 #[cfg(feature="opencv")]
                 {
-                    let mut out : opencv::core::Mat = self.into();
+                    /*let mut out : opencv::core::Mat = self.into();
                     opencv::imgproc::arrowed_line(
                         &mut out,
                         opencv::core::Point2i::new(from.1 as i32, from.0 as i32),
@@ -223,7 +235,8 @@ where
                         0,
                         0.1
                     );
-                    return;
+                    return;*/
+                    unimplemented!()
                 }
 
                 println!("Warning: Arrow drawing require opencv feature");

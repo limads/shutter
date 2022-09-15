@@ -177,10 +177,9 @@ impl HoughCircle {
             let mut acc = &mut self.accum[i];
             acc.full_window_mut().fill(0.);
             accumulate_for_radius(pts, &self.deltas[i], acc);
-            acc.clone().full_window().convolve_mut(
+            acc.full_window().convolve_mut(
                 &blur::GAUSS, 
-                Convolution::Linear, 
-                &mut self.accum_blurred[i].full_window_mut()
+                &mut self.accum_blurred[i]
             );
             
             /*let mut twice_blurred = self.accum_blurred[i].full_window()
@@ -193,7 +192,7 @@ impl HoughCircle {
             
         }
         let mut circles = Vec::new();
-        find_hough_maxima(&self.accum_blurred[..], n_expected, min_dist, &mut self.found, self.ws.as_mut());
+        find_hough_maxima(&self.accum_blurred[..], n_expected, min_dist, &mut self.found, &mut self.ws.full_window_mut());
         for (rad_ix, centers) in &self.found {
             circles.extend(centers.clone().drain(..).map(|c| (c.0, self.radii[*rad_ix])));
         }
@@ -284,7 +283,7 @@ fn find_hough_maxima(
                 }
             } else {
                 let opt_max = crate::local::min_max_idx(
-                    accums[rad_ix].as_ref(), 
+                    &accums[rad_ix].full_window(), 
                     false, 
                     true
                 );
@@ -356,7 +355,7 @@ mod test {
         let ans = hough.calculate(&pts[..], 1, 1);
         println!("{:?}", ans);
         for i in 0..n_radii {
-            hough.accum[i].show();
+            // hough.accum[i].show();
         }
     }
     

@@ -11,7 +11,7 @@ where
     //for<'a> &'a mut [P] : StorageMut<P>,
 {
 
-    fn abs_mut(&mut self) {
+    pub fn abs_mut(&mut self) {
 
         if self.pixel_is::<u8>() || self.pixel_is::<u64>() {
             return;
@@ -46,7 +46,7 @@ where
         unimplemented!()
     }
 
-    fn scalar_abs_diff_mut(&mut self, by : P) {
+    pub fn scalar_abs_diff_mut(&mut self, by : P) {
 
         #[cfg(feature="ipp")]
         unsafe {
@@ -72,7 +72,7 @@ where
         unimplemented!()
     }
 
-    fn scalar_add_mut(&mut self, by : P) {
+    pub fn scalar_add_mut(&mut self, by : P) {
 
         #[cfg(feature="ipp")]
         unsafe {
@@ -108,7 +108,7 @@ where
         unimplemented!()
     }
 
-    fn scalar_mul_mut(&mut self, by : P) {
+    pub fn scalar_mul_mut(&mut self, by : P) {
 
         #[cfg(feature="ipp")]
         unsafe {
@@ -156,7 +156,7 @@ where
         self.pixels_mut(1).for_each(|p| *p *= by );
     }
     
-    fn scalar_div_mut(&mut self, by : P) {
+    pub fn scalar_div_mut(&mut self, by : P) {
 
         /*#[cfg(feature="ipp")]
         unsafe {

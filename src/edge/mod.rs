@@ -1,4 +1,3 @@
-use crate::image::{Window, WindowMut};
 use std::mem;
 use std::iter::FromIterator;
 use std::cmp::PartialOrd;
@@ -11,10 +10,11 @@ use petgraph::graph::NodeIndex;
 use petgraph::unionfind::UnionFind;
 use petgraph::visit::EdgeRef;
 use petgraph::visit::NodeIndexable;
-use crate::sparse::Direction;
+use crate::code::Direction;
 use itertools::Itertools;
 use std::collections::HashMap;
 use std::ops::Range;
+use crate::image::*;
 
 pub struct Edge(Vec<(usize, usize)>);
 
@@ -38,8 +38,9 @@ pub trait Tracer {
 
     fn trace<N>(&mut self, win : &Window<N>)
     where
-        N : Debug + Copy + Clone + PartialOrd + Scalar + AsPrimitive<f32>,
-        f32 : AsPrimitive<N>;
+        N : Pixel + PartialOrd + AsPrimitive<f32>,
+        f32 : AsPrimitive<N>,
+        for<'a> &'a [N] : Storage<N>;
 
 }
 
@@ -304,8 +305,9 @@ impl Tracer for EdgeGraphTracer {
 
     fn trace<N>(&mut self, win : &Window<N>)
     where
-        N : Debug + Copy + Clone + PartialOrd + Scalar + AsPrimitive<f32>,
-        f32 : AsPrimitive<N>
+        N : Pixel + PartialOrd + AsPrimitive<f32>,
+        f32 : AsPrimitive<N>,
+        for<'a> &'a [N] : Storage<N>
     {
         self.graph.clear();
 
@@ -373,7 +375,12 @@ Repeat this step while condition is met.
 */
 
 #[cfg(feature="ipp")]
-pub unsafe fn ippi_canny(src_dx : &Window<f32>, src_dy : &Window<f32>, dst : &mut WindowMut<u8>, thr : (f32, f32)) {
+pub unsafe fn ippi_canny(
+    src_dx : &Window<f32>, 
+    src_dy : &Window<f32>, 
+    dst : &mut WindowMut<u8>, 
+    thr : (f32, f32)
+) {
 
     let (step_dx, sz_dx) = crate::image::ipputils::step_and_size_for_window(src_dx);
     let (step_dy, sz_dy) = crate::image::ipputils::step_and_size_for_window(src_dy);

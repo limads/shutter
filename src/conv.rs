@@ -973,7 +973,7 @@ where
             }*/
         }
 
-        #[cfg(feature="opencv")]
+        /*#[cfg(feature="opencv")]
         {
             use opencv;
 
@@ -996,7 +996,7 @@ where
                 opencv::core::BORDER_DEFAULT
             ).unwrap();
             return;
-        }
+        }*/
 
         // println!("Processing with baseline");
         baseline_convolution(

@@ -36,6 +36,10 @@ pub mod pattern;
 
 pub mod edge;
 
+pub mod segm;
+
+pub mod quadtree;
+
 /// The most general patch is a set of pixel positions with a homogeneous color
 /// and a scale that was used for extraction. The patch is assumed to be
 /// homonegeneous within a pixel spacing given by the scale field. TODO if the

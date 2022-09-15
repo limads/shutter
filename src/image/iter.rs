@@ -52,7 +52,7 @@ where
     /// Iterate over windows of the given size. This iterator consumes the original window
     /// so that we can implement windows(.) for Image by using move semantics, without
     /// requiring the user to call full_windows(.).
-    pub fn windows<'a>(&'a self, sz : (usize, usize)) -> impl Iterator<Item=Window<'a, P>> {
+    pub fn windows(&self, sz : (usize, usize)) -> impl Iterator<Item=Window<P>> {
         assert_nonzero(sz);
         let (step_v, step_h) = sz;
         if sz.0 >= self.sz.0 || sz.1 >= self.sz.1 {
@@ -62,7 +62,7 @@ where
             panic!("Image size should be a multiple of window size (Required window {:?} over parent window {:?})", sz, self.sz);
         }
         let offset = self.offset;
-        iter::WindowIterator::<'a, P> {
+        iter::WindowIterator::<P> {
             source : self.window((0, 0), self.size()).unwrap(),
             size : sz,
             curr_pos : offset,
@@ -251,14 +251,17 @@ where
     }
     
     // Splits this window into equally-sized subwindows, iterating row-wise over the blocks.
-    /*pub fn equivalent_windows<'a>(
-        self, 
+    // Same as self.windows(.) but here decide on how many windows are desired instead of the
+    // sub window size.
+    pub fn equivalent_windows<'a>(
+        &'a self, 
         num_rows : usize, 
         num_cols : usize
-    ) -> impl Iterator<Item=Window<'a, P>> {
+    ) -> impl Iterator<Item=Window<'a, P>> 
+    {
         assert!(self.height() % num_rows == 0 && self.width() % num_cols == 0);
         self.windows((self.height() / num_rows, self.width() / num_cols))
-    }*/
+    }
 
     pub fn column<'a>(&'a self, ix : usize) -> Option<impl Iterator<Item=P> + 'a > {
         if ix < self.width() {
@@ -450,6 +453,50 @@ where
         self.pixels_mut(1).zip(mask.pixels(1)).for_each(|(d, m)| if *m != 0 { *d = color } );
     }
 
+    
+}
+
+impl<'a, P> Window<'a, P> 
+where
+    &'a [P] : Storage<P>,
+    P : Pixel
+{
+
+    /// Behaves like split_windows, except that it takes the window by value.
+    /// Useful for recursion algorithms, that cannot assume the lifetime of
+    /// 'window is the same as its slice.
+    pub fn split_equivalent_windows(
+        self, 
+        num_rows : usize, 
+        num_cols : usize
+    ) -> impl Iterator<Item=Window<'a, P>> 
+    {
+        assert!(self.height() % num_rows == 0 && self.width() % num_cols == 0);
+        self.clone().split_windows((self.height() / num_rows, self.width() / num_cols))
+    }
+    
+    /// Behaves like windows, except that it takes the window by value.
+    /// Useful for recursion algorithms, that cannot assume the lifetime of
+    /// 'window is the same as its slice.
+    pub fn split_windows(self, sz : (usize, usize)) -> impl Iterator<Item=Window<'a, P>> 
+    {
+        assert_nonzero(sz);
+        let (step_v, step_h) = sz;
+        if sz.0 >= self.sz.0 || sz.1 >= self.sz.1 {
+            panic!("Child window size bigger than parent window size");
+        }
+        if self.height() % sz.0 != 0 || self.width() % sz.1 != 0 {
+            panic!("Image size should be a multiple of window size (Required window {:?} over parent window {:?})", sz, self.sz);
+        }
+        let offset = self.offset;
+        iter::WindowIterator::<P> {
+            source : self,
+            size : sz,
+            curr_pos : offset,
+            step_v,
+            step_h
+        }
+    }
     
 }
 

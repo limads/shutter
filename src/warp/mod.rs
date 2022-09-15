@@ -1,4 +1,4 @@
-use nalgebra::*;
+use nalgebra::{Matrix2x3};
 use std::ptr;
 use crate::image::*;
 use std::iter::FromIterator;
@@ -8,7 +8,9 @@ use std::mem;
 #[cfg(feature="ipp")]
 pub fn affine_to<N>(w : &Window<N>, m : &Matrix2x3<f64>, dst : &mut WindowMut<N>) 
 where
-    N : Scalar + Debug + Copy
+    N : Pixel + Debug + Copy,
+    for<'a> &'a [N] : Storage<N>,
+    for<'a> &'a mut [N] : StorageMut<N>,
 {
     let (src_step, src_roi) = crate::image::ipputils::step_and_size_for_window(w);
     let (dst_step, dst_roi) = crate::image::ipputils::step_and_size_for_window_mut(&*dst);

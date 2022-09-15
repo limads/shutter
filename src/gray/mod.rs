@@ -47,7 +47,7 @@ where
     S : Storage<u8>
 {
 
-    fn threshold_to<T>(&self, fg : Foreground, out : &mut Image<u8, T>) 
+    pub fn threshold_to<T>(&self, fg : Foreground, out : &mut Image<u8, T>) 
     where
         T : StorageMut<u8>
     {
@@ -58,7 +58,7 @@ where
         baseline_threshold(&self.full_window(), fg, &mut out.full_window_mut());
     }
     
-    fn truncate_to<T>(&self, fg : Foreground, out : &mut Image<u8, T>, fg_val : u8) 
+    pub fn truncate_to<T>(&self, fg : Foreground, out : &mut Image<u8, T>, fg_val : u8) 
     where
         T : StorageMut<u8>
     {
@@ -95,13 +95,13 @@ where
     }
     
     // Allocating version of threshold_to
-    fn threshold(&self, fg : Foreground) -> ImageBuf<u8> {
+    pub fn threshold(&self, fg : Foreground) -> ImageBuf<u8> {
         let mut out = unsafe { ImageBuf::<u8>::new_empty(self.height(), self.width()) };
         self.threshold_to(fg, &mut out);
         out
     }
     
-    fn truncate(&self, fg : Foreground, fg_val : u8) -> ImageBuf<u8> {
+    pub fn truncate(&self, fg : Foreground, fg_val : u8) -> ImageBuf<u8> {
         // Image cannot be created as empty here because the truncate operation leaves
         // unmatched pixels untouched, so we must guarantee there is valid data at
         // all pixels.
@@ -111,7 +111,7 @@ where
     }
     
     // Allocating version of adapting_threshold_to
-    fn adaptive_threshold(&self, alg : &mut impl AdadptiveThreshold) -> ImageBuf<u8> {
+    pub fn adaptive_threshold(&self, alg : &mut impl AdadptiveThreshold) -> ImageBuf<u8> {
         let mut out = unsafe { ImageBuf::<u8>::new_empty(self.height(), self.width()) };
         self.adaptive_threshold_to(alg, &mut out);
         out

@@ -19,7 +19,7 @@ pub mod ellipse;
 
 // pub use ellipse::*;
 
-// pub mod hough;
+pub mod hough;
 
 pub fn bounding_rect(pts : &[(usize, usize)]) -> (usize, usize, usize, usize) {
     let (mut min_y, mut max_y) = (usize::MAX, 0);

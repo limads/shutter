@@ -89,6 +89,20 @@ pub mod code;
 
 pub mod graph;
 
+pub mod texture;
+
+pub mod warp;
+
+pub mod optics;
+
+pub mod stereo;
+
+// pub mod motion;
+
+pub mod resample;
+
+pub mod edge;
+
 /// Common optical manipulations (calculation of focal depth, magnification, camera calibration, lens distortion correction),
 // pub mod optics;
 

@@ -338,7 +338,7 @@ struct MorphKernel {
     kernel : core::Mat
 }
 
-#[cfg(feature="opencv")]
+/*#[cfg(feature="opencv")]
 fn build_kernel(sz : usize, iterations : usize, shape : MorphShape) -> MorphKernel {
     let kernel_sz = (2*sz+1) as i32;
     let shape = match shape {
@@ -440,7 +440,7 @@ where
         &self.tgt
     }
 
-}
+}*/
 
 #[derive(Debug, Clone)]
 #[cfg(feature="ipp")]

@@ -2,14 +2,14 @@
 // under tracking::mosseTracker originally licensed under Apache 2.0.
 
 use crate::image::*;
-use nalgebra::*;
-use crate::point::*;
+// use nalgebra::*;
 use ripple::fft::*;
 use std::mem;
 use crate::local::*;
 use std::ops::{AddAssign, MulAssign};
-use crate::convert::*;
-use crate::global::*;
+// use crate::convert::*;
+// use crate::global::*;
+use nalgebra::{Complex, Vector2, Matrix2x3};
 
 const EPS : f64 = 0.00001;
 
@@ -30,68 +30,68 @@ pub struct MosseTracker {
 
     win_sz : (usize, usize),
 
-    han_win : Image<f32>,
+    han_win : ImageBuf<f32>,
 
     // Holds converted subwindow of current image
-    image_sub : Image<f32>,
+    image_sub : ImageBuf<f32>,
 
-    image_sub_new : Image<f32>,
+    image_sub_new : ImageBuf<f32>,
 
     // Holds FFT of subwindow of current image
-    image_sub_freq : Image<Complex<f32>>,
+    image_sub_freq : ImageBuf<Complex<f32>>,
 
-    image_sub_new_freq : Image<Complex<f32>>,
+    image_sub_new_freq : ImageBuf<Complex<f32>>,
 
     // Holds product of current and past FFT in frequency space.
-    response_freq : Image<Complex<f32>>,
+    response_freq : ImageBuf<Complex<f32>>,
 
     // Holds product of current and past FFT in the original space.
-    response_orig : Image<f32>,
+    response_orig : ImageBuf<f32>,
 
     // Holds FFT of previous frame
     // h : Image<f32>,
 
-    a : Image<Complex<f32>>,
+    a : ImageBuf<Complex<f32>>,
 
-    b : Image<Complex<f32>>,
+    b : ImageBuf<Complex<f32>>,
 
-    a_new : Image<Complex<f32>>,
+    a_new : ImageBuf<Complex<f32>>,
 
-    b_new : Image<Complex<f32>>,
+    b_new : ImageBuf<Complex<f32>>,
 
     // Called H in original impl (holds fft of original frame)
-    h_freq : Image<Complex<f32>>,
+    h_freq : ImageBuf<Complex<f32>>,
 
     // goal
-    g_freq : Image<Complex<f32>>,
+    g_freq : ImageBuf<Complex<f32>>,
 
     // state
 
-    re1 : Image<f32>,
+    re1 : ImageBuf<f32>,
 
-    re2 : Image<f32>,
+    re2 : ImageBuf<f32>,
 
-    im1 : Image<f32>,
+    im1 : ImageBuf<f32>,
 
-    im2 : Image<f32>,
+    im2 : ImageBuf<f32>,
 
-    sq_re2 : Image<f32>,
+    sq_re2 : ImageBuf<f32>,
 
-    sq_im2 : Image<f32>,
+    sq_im2 : ImageBuf<f32>,
 
-    sq_im1 : Image<f32>,
+    sq_im1 : ImageBuf<f32>,
 
-    denom : Image<f32>,
+    denom : ImageBuf<f32>,
 
-    prod_re1re2 : Image<f32>,
+    prod_re1re2 : ImageBuf<f32>,
 
-    prod_im1im2 : Image<f32>,
+    prod_im1im2 : ImageBuf<f32>,
 
-    numtr : Image<f32>,
+    numtr : ImageBuf<f32>,
 
-    re_dst : Image<f32>,
+    re_dst : ImageBuf<f32>,
 
-    im_dst : Image<f32>,
+    im_dst : ImageBuf<f32>,
 
 
 }
@@ -135,9 +135,9 @@ impl MosseTracker {
         // (Re2*Re2 + Im2*Im2) = denom
         let (mut sq_re2, mut sq_im2, mut denom) = (mem::take(&mut self.sq_re2), mem::take(&mut self.sq_im2), mem::take(&mut self.denom));
         let mut denom = mem::take(&mut self.denom);
-        mul_to(re2.as_ref(), re2.as_ref(), sq_re2.as_mut());
-        mul_to(im2.as_ref(), im2.as_ref(), sq_im2.as_mut());
-        add_to(sq_re2.as_ref(), sq_im2.as_ref(), denom.as_mut());
+        re2.mul_to(&mut sq_re2);
+        im2.mul_to(&im2, &mut sq_im2);
+        sq_re2.add_to(&sq_im2, &mut denom);
 
         // Note there is an error in the comment of the original impl
         // (it says re1*re2 + im1*im1) at the numerator
@@ -145,19 +145,19 @@ impl MosseTracker {
         // TODO add eps to denom?
         let (mut prod_re1re2, mut prod_im1im2) = (mem::take(&mut self.prod_re1re2), mem::take(&mut self.prod_im1im2));
         let mut numtr = mem::take(&mut self.numtr);
-        mul_to(re1.as_ref(), re2.as_ref(), prod_re1re2.as_mut());
-        mul_to(im1.as_ref(), im2.as_ref(), prod_im1im2.as_mut());
-        add_to(prod_re1re2.as_ref(), prod_im1im2.as_ref(), numtr.as_mut());
-        div_to(numtr.as_ref(), denom.as_ref(), self.re_dst.as_mut());
+        re1.mul_to(&re2, &mut prod_re1re2);
+        im1.mul_to(&im2, &mut prod_im1im2);
+        prod_re1re2.add_to(&prod_im1im2, &mut numtr);
+        numtr.div_to(&denom, &mut self.re_dst);
 
         // (Im1*Re2 - Re1*Im2)/(Re2*Re2 + Im2*Im2) = Im
         let mut prod_im1re2 = prod_re1re2;
         let mut prod_re1im2 = prod_im1im2;
-        mul_to(im1.as_ref(), re2.as_ref(), prod_im1re2.as_mut());
-        mul_to(re1.as_ref(), im2.as_ref(), prod_re1im2.as_mut());
-        add_to(prod_im1re2.as_ref(), prod_re1im2.as_ref(), numtr.as_mut());
-        numtr.full_window_mut().scalar_mul(-1.);
-        div_to(numtr.as_ref(), denom.as_ref(), self.im_dst.as_mut());
+        im1.mul_to(&re2, &mut prod_im1re2);
+        re1.mul_to(&im2, &mut prod_re1im2);
+        prod_im1re2.add_to(&prod_re1im2, &mut numtr);
+        numtr.scalar_mul(-1.);
+        numtr.div_to(&denom, &mut self.im_dst);
 
         // Merge Re and Im back into a complex matrix (stored in the h field)
         cartesian_interleave_mut(self.re_dst.as_slice(), self.im_dst.as_slice(), self.h_freq.as_mut_slice());
@@ -175,7 +175,7 @@ impl MosseTracker {
     }
 
     // Note image is required to be memory-contiguous.
-    fn correlate(&mut self, img_sub : &Image<f32>) -> (Vector2<f32>, f64) {
+    fn correlate(&mut self, img_sub : &ImageBuf<f32>) -> (Vector2<f32>, f64) {
 
         let (mut image_sub_freq, mut response_freq) = (mem::take(&mut self.image_sub_freq), mem::take(&mut self.response_freq));
         let mut response_orig = mem::take(&mut self.response_orig);
@@ -197,7 +197,7 @@ impl MosseTracker {
         delta_xy[1] = max_row as f32 - (self.win_sz.0 / 2) as f32;
 
         // normalize response
-        let (mean, stddev) = crate::global::mean_stddev(response_orig.as_ref());
+        let (mean, stddev) = response_orig.mean_stddev();
 
         self.response_orig = response_orig;
         self.image_sub_freq = image_sub_freq;
@@ -223,8 +223,8 @@ impl MosseTracker {
         // This is originally a gaussian blur with standard deviation parameter 2.0.
         let mut g = Image::<f32>::new_constant(size.0, size.1, 0.);
         g[(size.0/2, size.1/2)] = 1.0;
-        g.clone().full_window().convolve_mut(&blur::GAUSS, Convolution::Linear, g.as_mut());
-        let max_val = max_f32(g.as_ref());
+        g.clone().convolve_mut(&blur::GAUSS, &mut g);
+        let max_val = g.max();
         g.full_window_mut().scalar_mul(1. / max_val);
         let mut g_freq = unsafe { Image::<Complex<f32>>::new_empty(size.0, size.1) };
         fft.forward_mut(g.as_slice(), g_freq.as_mut_slice());
@@ -372,7 +372,7 @@ fn random_bounded() -> f64 {
     -bound + 2.*bound*u
 }
 
-fn hanning_window(height : usize, width : usize) -> Image<f32> {
+fn hanning_window(height : usize, width : usize) -> ImageBuf<f32> {
     let mut dst = unsafe { Image::new_empty(height, width) };
     let coeff0 = 2.0 * std::f32::consts::PI / (width - 1) as f32;
     let coeff1 = 2.0 * std::f32::consts::PI / (height - 1) as f32;
