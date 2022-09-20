@@ -524,15 +524,21 @@ impl IppiMorph {
         }
     }
 
-    pub fn apply(&mut self, src : &Window<'_, u8>, dst : &mut WindowMut<'_, u8>) {
+    pub fn apply<S, T>(&mut self, src : &Image<u8, S>, dst : &mut Image<u8, T>) 
+    where
+        S : Storage<u8>,
+        T : StorageMut<u8>
+    {
 
         assert!(src.shape() == dst.shape());
 
         unsafe {
-            let (src_step, src_sz) = crate::image::ipputils::step_and_size_for_window(src);
-            let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_window_mut(&dst);
-
-            let src_roi = crate::foreign::ipp::ippcv::IppiSizeL { width : src.width() as i64, height : src.height() as i64 };
+            let (src_step, src_sz) = crate::image::ipputils::step_and_size_for_image(src);
+            let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_image(&dst);
+            let src_roi = crate::foreign::ipp::ippcv::IppiSizeL { 
+                width : src.width() as i64, 
+                height : src.height() as i64 
+            };
             let border_const_val = &0u8 as *const _;
             unsafe {
                 let ans = if self.is_dilate {
@@ -558,6 +564,97 @@ impl IppiMorph {
                         border_const_val,
                         std::mem::transmute(self.spec.as_ptr()),
                         self.buf.as_mut_ptr()
+                    )
+                };
+                assert!(ans == 0);
+            }
+        }
+    }
+
+}
+
+#[derive(Debug, Clone)]
+#[cfg(feature="ipp")]
+pub struct IppiGrayMorph {
+    buf : Vec<u8>,
+    kernel : ImageBuf<i32>,
+    is_dilate : bool
+}
+
+#[cfg(feature="ipp")]
+impl IppiGrayMorph {
+
+    pub fn new(kernel : ImageBuf<i32>, img_sz : (usize, usize), is_dilate : bool) -> Self {
+        assert!(kernel.height() % 2 == 1 && kernel.width() % 2 == 1);
+        unsafe {
+            let kernel_sz = kernel.full_window().shape();
+            let img_roi_sz = crate::foreign::ipp::ippcv::IppiSize { 
+                width : img_sz.1 as i32, 
+                height : img_sz.0 as i32 
+            };
+            let kernel_roi_sz = crate::foreign::ipp::ippcv::IppiSize { 
+                width : kernel_sz.1 as i32, 
+                height : kernel_sz.0 as i32 
+            };
+            let mut spec_sz = 0i32;
+            let ans = crate::foreign::ipp::ippcv::ippiMorphGrayGetSize_8u_C1R(
+                img_roi_sz, 
+                kernel.as_ptr(), 
+                kernel_roi_sz, 
+                &mut spec_sz
+            );
+            assert!(ans == 0);
+            let mut buf : Vec<u8> = (0..(spec_sz as usize)).map(|_| 0u8 ).collect();
+            let center_anchor = crate::foreign::ipp::ippcv::IppiPoint { 
+                x : kernel.width() as i32 / 2 + 1,
+                y : kernel.height() as i32 / 2 + 1
+            };
+            let ans = crate::foreign::ipp::ippcv::ippiMorphGrayInit_8u_C1R(
+                buf.as_mut_ptr() as *mut _, 
+                img_roi_sz,
+                kernel.as_ptr(), 
+                kernel_roi_sz, 
+                center_anchor
+            );
+            assert!(ans == 0);
+            Self { buf, kernel, is_dilate }
+        }
+    }
+
+    pub fn apply<S, T>(&mut self, src : &Image<u8, S>, dst : &mut Image<u8, T>) 
+    where
+        S : Storage<u8>,
+        T : StorageMut<u8>
+    {
+        assert!(src.shape() == dst.shape());
+        unsafe {
+            let (src_step, src_sz) = crate::image::ipputils::step_and_size_for_image(src);
+            let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_image(&dst);
+            let src_roi = crate::foreign::ipp::ippcv::IppiSize { 
+                width : src.width() as i32, 
+                height : src.height() as i32 
+            };
+            let border_const_val = &0u8 as *const _;
+            unsafe {
+                let ans = if self.is_dilate {
+                    crate::foreign::ipp::ippcv::ippiGrayDilateBorder_8u_C1R(
+                        src.as_ptr(),
+                        src_step as i32,
+                        dst.as_mut_ptr(),
+                        dst_step as i32,
+                        src_roi,
+                        crate::foreign::ipp::ippcv::_IppiBorderType_ippBorderRepl,
+                        self.buf.as_mut_ptr() as *mut _
+                    )
+                } else {
+                    crate::foreign::ipp::ippcv::ippiGrayErodeBorder_8u_C1R(
+                        src.as_ptr(),
+                        src_step as i32,
+                        dst.as_mut_ptr(),
+                        dst_step as i32,
+                        src_roi,
+                        crate::foreign::ipp::ippcv::_IppiBorderType_ippBorderRepl,
+                        self.buf.as_mut_ptr() as *mut _
                     )
                 };
                 assert!(ans == 0);

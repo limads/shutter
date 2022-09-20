@@ -1945,7 +1945,7 @@ pub fn adjusted_color_momentum(
     }
 }
 
-#[test]
+/*#[test]
 fn momentum() {
     let mut img = Image::new_constant(24, 24, 0);
     for r in 8..16 {
@@ -1974,7 +1974,7 @@ fn patch_growth() {
     img[(7,8)] = 1;*/
 
     // println!("{:?}", Patch::grow(&img.full_window(), (11, 11), 1, ColorMode::Exact(1), ReferenceMode::Constant, None, ExpansionMode::Contour));
-}
+}*/
 
 // Extract a single patch, using the color momentum as seed.
 // pub fn extract_main_patch(win : &Window<'_, u8>, px_spacing : u16, mode : ColorMode) -> Option<Patch> {

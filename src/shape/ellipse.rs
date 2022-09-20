@@ -3,13 +3,14 @@ use std::f32::consts::{SQRT_2, PI};
 use nalgebra_lapack;
 use serde::{Serialize, Deserialize};
 
-/*
-Axis-aligned parametrization of ellipse
-(as function of coord): r = x^2/a^2 + y^2/b^2
-(as function of angle: (x, y) = (a*cos(theta), b*sin(theta))
+/* All ellipsis implement default by returning a unit-radius circle without a translation */ 
 
-Increasing a stretches it along the horizontal axis; increasing b stretches it along the vertical axis.
-If a = b we have the circle of radius r=a=b as a special case. */
+/** Represents a translated and axis-aligned ellipse, i.e. the simple geometric function r = x^2/a^2 + y^2/b^2
+(as a function of cartesian coordinates) or (x, y) = (a*cos(theta), b*sin(theta)) (as a function of polar coordinates).
+(Increasing a stretches the ellipse along the horizontal axis; increasing b stretches it along the vertical axis.
+If a = b we have the circle of radius r=a=b as a special case. 
+The effect is the same as applying a diagonal scale matrix to all points in a circle
+circumference, where [a, b] is the diagonal of the matrix. **/
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlignedEllipse {
     pub center : Vector2<f32>,
@@ -17,26 +18,57 @@ pub struct AlignedEllipse {
     pub minor_scale : f32
 }
 
-/// Represents an ellipse in terms of the lengths of its major and minor axis
-/// and an orientation angle of the major axis.
+impl Default for AlignedEllipse {
+
+    fn default() -> Self {
+        Self { center : Vector2::zeros(), major_scale : 1.0, minor_scale : 1.0 }
+    }
+    
+}
+
+/// Represents a translated ellipse in terms of the lengths of its major and minor axis,
+/// its translation center, and an orientation as the signed angle of the major axis.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrientedEllipse {
 
     pub aligned : AlignedEllipse,
 
-    // Orientation of the major axis around the center, in [-pi, pi]
-    // (Positive angles are counter-clockwise rotations; negative angles are clockwise
-    // rotations). The rotation is defined to always be atan2(major_y, major_x)
+    /** Orientation of the major axis around the center, in [-pi, pi]. If theta=0,
+    this is equivalent to the AlignedEllipse. Positive angles are counter-clockwise rotations; 
+    negative angles are clockwise rotations). The rotation is defined to always be atan2(major_y, major_x) **/
     pub theta : f32
+    
 }
 
-/// Represents an ellipse in terms of its centered axis vectors and its center.
-/// Major and minor are defined in the coordinate system centered at the center vector.
+impl Default for OrientedEllipse {
+
+    fn default() -> Self {
+        Self { aligned : AlignedEllipse::default(), theta : 0.0 }
+    }
+    
+}
+
+/// Represents an oriented and translated ellipse in terms of a triplet of vectors: A pair
+/// of (major, minor) vector and a translation of their common origin (center).
+/// This converts to an Oriented ellipse by first subtracting center from the major and
+/// minor vectors, then by calculating the angle 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ellipse {
     pub center : Vector2<f32>,
     pub major : Vector2<f32>,
     pub minor : Vector2<f32>
+}
+
+impl Default for Ellipse {
+
+    fn default() -> Self {
+        Self { 
+            center : Vector2::zeros(),
+            major : Vector2::new(1.0, 0.0),
+            minor : Vector2::new(0.0, 1.0)
+        }
+    }
+    
 }
 
 impl From<AlignedEllipse> for OrientedEllipse {
@@ -45,6 +77,18 @@ impl From<AlignedEllipse> for OrientedEllipse {
         OrientedEllipse {
             aligned,
             theta : 0.0
+        }
+    }
+
+}
+
+impl From<AlignedEllipse> for Ellipse {
+
+    fn from(aligned : AlignedEllipse) -> Self {
+        Ellipse {
+            center : Vector2::zeros(),
+            major : aligned.major_scale * Vector2::new(1.0, 0.0),
+            minor : aligned.minor_scale * Vector2::new(0.0, 1.0)
         }
     }
 
@@ -65,6 +109,14 @@ impl From<Ellipse> for OrientedEllipse {
 
 }
 
+impl From<OrientedEllipse> for Ellipse {
+
+    fn from(el : OrientedEllipse) -> Self {
+        Ellipse::new(el.aligned.center, el.aligned.major_scale, el.aligned.minor_scale, el.theta)
+    }
+
+}
+
 fn full_angle(a : &Vector2<f32>, b : &Vector2<f32>) -> f32 {
     // let unit_x = Vector2::new(1., 0.);
 
@@ -81,14 +133,6 @@ fn full_angle(a : &Vector2<f32>, b : &Vector2<f32>) -> f32 {
         angle += 2. * PI;
     }
     angle
-}
-
-impl From<OrientedEllipse> for Ellipse {
-
-    fn from(el : OrientedEllipse) -> Self {
-        Ellipse::new(el.aligned.center, el.aligned.major_scale, el.aligned.minor_scale, el.theta)
-    }
-
 }
 
 impl Ellipse {
@@ -202,6 +246,9 @@ impl Ellipse {
 
 }
 
+/* Uses the ellipse (at the cartesian vector space) to index the image (in pixel space).
+This returns a triplet of coordinates: One at the ellipse center, and other two at the
+arrow points of the major and minor axes.  */
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EllipseCoords {
     pub center : (usize, usize),
@@ -635,11 +682,11 @@ pub fn generate_ellipse_points(
     pts
 }
 
-// cargo test --all-features --lib -- fit_ellipse_test --nocapture
+/*// cargo test --all-features --lib -- fit_ellipse_test --nocapture
 #[test]
 fn fit_ellipse_test() {
 
-    use crate::prelude::*;
+    // use crate::prelude::*;
 
     // For any non-zero orientation, the algorithms can return two equally valid orientations.
 
@@ -671,4 +718,4 @@ fn fit_ellipse_test() {
     }
     img.show();
 
-}
+}*/

@@ -1,16 +1,29 @@
 use std::ops::*;
 use crate::image::*;
 use std::mem;
+use num_traits::ToPrimitive;
 
 impl<P, S> Image<P, S>
 where
     S : StorageMut<P>,
-    P : Pixel + MulAssign + DivAssign,
+    P : Pixel + MulAssign + DivAssign + AddAssign + MulAssign,
     //Box<[P]> : StorageMut<P>,
     //for<'a> &'a [P] : Storage<P>,
     //for<'a> &'a mut [P] : StorageMut<P>,
 {
 
+    pub fn invert_mut(&mut self)
+    where
+        P : UnsignedPixel + Sub<Output=P>
+    {
+        let max = P::max_value();
+        for i in 0..self.height() {
+            for j in 0..self.width() {
+                self[(i, j)] = max - self[(i, j)];
+            }
+        }
+    }
+    
     pub fn abs_mut(&mut self) {
 
         if self.pixel_is::<u8>() || self.pixel_is::<u64>() {
@@ -249,6 +262,45 @@ where
     //for<'a> &'a mut [P] : StorageMut<P>,
 {
 
+    pub fn invert_to<T>(&self, dst : &mut Image<P, T>) 
+    where
+        P : UnsignedPixel + Sub<Output=P> + Ord,
+        T : StorageMut<P>,
+        P : ToPrimitive
+    {
+        #[cfg(feature="ipp")]
+        unsafe {
+            if ipp_abs_diff(self, P::max_value(), dst) {
+                return;
+            }
+        }
+        
+        self.scalar_abs_diff_to(P::max_value(), dst);
+    }
+    
+    pub fn scalar_abs_diff_to<T>(&self, by : P, dst : &mut Image<P, T>)
+    where
+        P : Pixel + Sub<Output=P> + Ord,
+        T : StorageMut<P>,
+        P : ToPrimitive
+    {
+
+        assert!(self.shape() == dst.shape());
+
+        #[cfg(feature="ipp")]
+        unsafe {
+            if ipp_abs_diff(self, by, dst) {
+                return;
+            }
+        }
+
+        for i in 0..self.height() {
+            for j in 0..self.width() {
+                dst[(i, j)] = by.max(self[(i, j)]) - by.min(self[(i, j)]);
+            }
+        }
+    }
+    
     pub fn scalar_div_to<T>(&self, by : P, dst : &mut Image<P, T>)
     where
         T : StorageMut<P>
@@ -256,6 +308,33 @@ where
         dst.pixels_mut(1).zip(self.pixels(1)).for_each(|(dst, src)| *dst = *src / by );
     }
 
+}
+
+#[cfg(feature="ipp")]
+unsafe fn ipp_abs_diff<P, S, T>(win : &Image<P, S>, by : P, dst : &mut Image<P, T>) -> bool
+where
+    S : Storage<P>,
+    T : StorageMut<P>,
+    P : Pixel + ToPrimitive
+{
+    if win.pixel_is::<u8>() {
+        let v : i32 = by.to_i32().unwrap();
+        let src_step = crate::image::ipputils::byte_stride_for_image(win);
+        let dst_step = crate::image::ipputils::byte_stride_for_image(dst);
+        let src_sz = crate::image::ipputils::image_size(win);
+        let ans = crate::foreign::ipp::ippcv::ippiAbsDiffC_8u_C1R(
+            mem::transmute(win.as_ptr()),
+            src_step,
+            mem::transmute(dst.as_mut_ptr()),
+            dst_step,
+            std::mem::transmute(src_sz),
+            v
+        );
+        assert_eq!(ans, 0);
+        true
+    } else {
+        false
+    }
 }
 
 /*// Maps the domain of an integer image to u8 domain, setting zero the image minimum

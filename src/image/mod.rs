@@ -2722,14 +2722,14 @@ impl<'a> literate::show::Stack<'a> for Window<'a, u8> {
 
 }*/
 
-#[test]
+/*#[test]
 fn checkerboard() {
     let src : [u8; 4] = [0, 1, 1, 0];
     let mut converted : Image<f32> = ImageBuf::new_constant(4, 4, 0.0);
     let win = Window::from_square_slice(&src);
     //converted.convert_from_window(&win);
     // println!("{}", converted);
-}
+}*/
 
 /*impl<N> AsRef<Vec<N>> for Image<N> 
 where

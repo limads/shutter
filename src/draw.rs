@@ -525,7 +525,7 @@ pub fn draw_line(
     }
 }
 
-#[test]
+/*#[test]
 fn test_line() {
 
     let mut buf : [u8; 100] = [0; 100];
@@ -539,7 +539,7 @@ fn test_line() {
 
     // assert!(buf[3*10 + 3] == 1);
     // assert!(buf[4*10 + 4] == 1);
-}
+}*/
 
 pub struct Digit {
     top_row : bool,

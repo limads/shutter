@@ -13,6 +13,8 @@ use petgraph::visit::*;
 use std::convert::{AsRef, AsMut};
 use std::cmp::Ordering;
 use num_traits::bounds::Bounded;
+use nalgebra::{Point2, Vector2};
+use std::ops::AddAssign;
 
 /* Represents a binary image by a set of foreground pixel coordinates. Useful when
 objects are expected to be speckle-like. For dense objects, consider using RunLengthEncoding
@@ -38,13 +40,14 @@ impl Encoding for PointCode {
     fn encode_from<S>(&mut self, img : &Image<u8, S>) {
         unimplemented!()
     }
-
+    
     // Write the labels back to the image.
     fn decode_distinct_to(labels : &BTreeMap<u8, Self>, img : &dyn AsMut<WindowMut<u8>>) {
         unimplemented!()
     }
 
 }
+
 // Assume pts is sorted by rows and by cols within rows.
 fn rows_for_sorted_points(pts : &[(usize, usize)], rows : &mut Vec<Range<usize>>) {
     rows.clear();
@@ -323,7 +326,7 @@ fn draw_chain_random(chain : &ChainCode, img : &mut WindowMut<u8>) {
     }
 }
 
-// cargo test -- chain --nocapture
+/*// cargo test -- chain --nocapture
 #[test]
 fn chain() {
 
@@ -372,15 +375,56 @@ fn chain() {
     draw_chain_random(&enc, img.as_mut());
     img.show();
     
-}
+}*/
 
 impl ChainCode {
 
-    fn chains<'a>(&'a self) -> ChainIter<'a> {
+    pub fn split(&self) -> BTreeMap<usize, ChainCode> {
+        let unions = self.unions();
+        let mut dst : BTreeMap<usize, ChainCode> = BTreeMap::new();
+        for i in 0..self.len() {
+            let ch = self.get(i).unwrap();
+            let repr = unions.find(i);
+            if let Some(enc) = dst.get_mut(&repr) {
+                enc.starts.push(ch.start);
+                enc.ends.push(ch.end);
+                let n = enc.directions.len();
+                enc.directions.extend(ch.traj.iter().copied());
+                enc.ranges.push(Range { start : n, end : enc.directions.len() });
+            } else {
+                let enc = ChainCode {
+                    starts : vec![ch.start],
+                    ends : vec![ch.end],
+                    directions : ch.traj.iter().copied().collect(),
+                    ranges : vec![Range { start : 0, end : ch.traj.len() }]
+                };
+                dst.insert(repr, enc);
+            }
+        }
+        dst
+    }
+    
+    /* Can also build an undirected graph using link as edges */
+    pub fn unions(&self) -> UnionFind<usize> {
+        let mut uf = UnionFind::new(self.starts.len());
+        for (i, c1) in self.chains().enumerate() {
+            for (j, c2) in self.chains().enumerate() {
+                if i != j && c1.link(&c2).is_some() {
+                    uf.union(i, j);
+                }
+            }
+        }
+        uf
+    }
+    
+    pub fn chains<'a>(&'a self) -> ChainIter<'a> {
         ChainIter { enc : self, curr : 0 }
     }
     
-    fn encode(bin_img : &Window<u8>) -> ChainCode {
+    pub fn encode<S>(bin_img : &Image<u8, S>) -> ChainCode 
+    where
+        S : Storage<u8>
+    {
 
         use bumpalo::Bump;
     
@@ -554,6 +598,29 @@ impl ChainCode {
 
 }
 
+impl Encoding for ChainCode {
+
+    fn points<'a>(&'a self) -> PointIter<'a> {
+        PointIter(Box::new(
+            self.chains().map(|chain| chain.trajectory() ).flatten()
+        ))
+    }
+
+    fn encode_distinct<S>(img : &Image<u8, S>) -> BTreeMap<u8, Self> {
+        unimplemented!()
+    }
+
+    fn encode_from<S>(&mut self, img : &Image<u8, S>) {
+        unimplemented!()
+    }
+    
+    // Write the labels back to the image.
+    fn decode_distinct_to(labels : &BTreeMap<u8, Self>, img : &dyn AsMut<WindowMut<u8>>) {
+        unimplemented!()
+    }
+
+}
+
 /// Wraps any iterator over (usize, usize)
 pub struct PointIter<'a>(Box<dyn Iterator<Item=(usize, usize)> + 'a>);
 
@@ -574,6 +641,11 @@ where
 
     fn points<'a>(&'a self) -> PointIter<'a>;
 
+    fn cartesian_points<'a>(&'a self, img_size : Size) -> Box<dyn Iterator<Item=Vector2<f32>> + 'a> {
+        let h = img_size.0 as f32;
+        Box::new(self.points().map(move |pt| Vector2::new(pt.1 as f32, h - pt.0 as f32) ))
+    }
+    
     // If the argument is a labeled image, where distinct matched labels are values greater than or
     // equal to 1, and unmatched pixels are represented by zero, then encode_distinct
     // should return a set of distinct encodings that map to each label, as if each labeled
@@ -630,7 +702,7 @@ But for edge images, representing the (start, end) pair and a set of directions 
 efficient, since each pixel is represented by a single byte tagging the direction of change,
 instead of a full usize pair. The points can be recovered from any resolution desired by
 calling trajectory(.) and sparse_trajectory(.). */
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ChainCode {
     starts : Vec<(usize, usize)>,
     ends : Vec<(usize, usize)>,
@@ -645,6 +717,17 @@ pub struct ChainIter<'a> {
 
 impl ChainCode {
 
+    pub fn len(&self) -> usize {
+        self.starts.len()
+    }
+    
+    pub fn get(&self, ix : usize) -> Option<Chain> {
+        let start = self.starts.get(ix)?;
+        let end = self.ends.get(ix)?;
+        let traj = &self.directions[self.ranges.get(ix)?.clone()];
+        Some(Chain { start : *start, end : *end, traj })
+    }
+    
     pub fn iter(&self) -> ChainIter {
         ChainIter {
             enc : self,
@@ -659,11 +742,9 @@ impl<'a> Iterator for ChainIter<'a> {
     type Item = Chain<'a>;
 
     fn next(&mut self) -> Option<Chain<'a>> {
-        let start = self.enc.starts.get(self.curr)?;
-        let end = self.enc.ends.get(self.curr)?;
-        let traj = &self.enc.directions[self.enc.ranges.get(self.curr)?.clone()];
+        let ch = self.enc.get(self.curr)?;
         self.curr += 1;
-        Some(Chain { start : *start, end : *end, traj })
+        Some(ch)
     }
 
 }
@@ -677,17 +758,60 @@ pub struct Chain<'a> {
     pub traj : &'a [Direction]
 }
 
+fn update_vec(pt : &mut Point2<f32>, d : Direction) {
+    // *pt += &d.offset_vec();
+}
+
 fn update_point(pt : &mut (usize, usize), d : Direction) {
     let off = d.offset();
     pt.0 = (pt.0 as i32 + off.0) as usize;
     pt.1 = (pt.1 as i32 + off.1) as usize;
 }
 
+#[derive(Debug, Clone, Copy)]
+#[repr(u8)]
+pub enum Link {
+    StartToStart,
+    StartToEnd,
+    EndToStart,
+    EndToEnd,
+    Ambiguous,
+    Closed,
+}
+
+fn is_point_close(a : (usize, usize), b: (usize, usize)) -> bool {
+    a.0.abs_diff(b.0) <= 1 && a.1.abs_diff(b.1) <= 1
+}
+
 impl<'a> Chain<'a> {
 
+    pub fn link(&self, other : &Self) -> Option<Link> {
+        let start_start = is_point_close(self.start, other.start);
+        let start_end = is_point_close(self.start, other.end);
+        let end_start = is_point_close(self.end, other.start);
+        let end_end = is_point_close(self.end, other.end);
+        if (start_start && end_end) || (start_end && end_start) {
+            Some(Link::Closed)
+        } else {
+            if start_start && (!start_end && !end_start && !end_end) {
+                Some(Link::StartToStart)
+            } else if start_end && (!start_start && !end_start && !end_end) {
+                Some(Link::StartToEnd)
+            } else if end_start && (!start_start && !start_end && !end_end) {
+                Some(Link::EndToStart)
+            } else if end_end && (!start_start && !start_end && !end_start) {
+                Some(Link::EndToEnd)
+            } else if start_start || start_end || end_start || end_end {
+                Some(Link::Ambiguous)
+            } else {
+                None
+            }
+        }
+    }
+    
     /* Returns the full set of points this chain represents. The method is lightweight and
     does not allocate. */
-    pub fn trajectory(&'a self) -> impl Iterator<Item=(usize, usize)> + 'a {
+    pub fn trajectory(&self) -> impl Iterator<Item=(usize, usize)> + 'a {
         std::iter::once(self.start)
             .chain(self.traj.iter().scan(self.start, move |pt, d| {
                 update_point(pt, *d);
@@ -792,6 +916,19 @@ impl Direction {
             Direction::SouthWest => (1, -1),
             Direction::West => (0, -1),
             Direction::NorthWest => (-1, -1)
+        }
+    }
+    
+    pub fn offset_vec(&self) -> Point2<f32> {
+        match self {
+            Direction::North => Point2::new(0., 1.),
+            Direction::NorthEast => Point2::new(1., 1.),
+            Direction::East => Point2::new(1., 0.),
+            Direction::SouthEast => Point2::new(1., -1.),
+            Direction::South => Point2::new(0., -1.),
+            Direction::SouthWest => Point2::new(-1., -1.),
+            Direction::West => Point2::new(-1., 0.),
+            Direction::NorthWest => Point2::new(-1., 1.)
         }
     }
 
@@ -1247,7 +1384,7 @@ fn find_row_rles(
     }
 }
 
-// cargo test --all-features -- accumulated_rle --nocapture
+/*// cargo test --all-features -- accumulated_rle --nocapture
 #[test]
 fn accumulated_rle() {
     let mut img = Image::new_checkerboard(100, 10);
@@ -1271,7 +1408,7 @@ fn accumulated_rle() {
     // println!("{:?}", iw.row(1));
     let rle = RunLengthEncoding::calculate_from_accumulated(&acc, None, None);
     // println!("{:?}", rle);
-}
+}*/
 
 pub const MIN_VALID_INTEGRAL_COL_RANGE : usize = 8;
 
@@ -2050,7 +2187,7 @@ fn grow_top(
     r.2 += 1;
 }
 
-// cargo test --all-features --lib -- inner_rects --nocapture
+/*// cargo test --all-features --lib -- inner_rects --nocapture
 #[test]
 fn inner_rects() {
     use crate::draw::*;
@@ -2066,7 +2203,7 @@ fn inner_rects() {
         }
         img.show();
     }
-}
+}*/
 
 pub enum Knot {
 

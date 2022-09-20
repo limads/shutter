@@ -1,0 +1,151 @@
+[
+  { "directory": "/home/diego/Downloads/vlfeat-master",
+    "arguments": ["clang", "-c", "vl/random.c", "-o", "build/random.o"],
+    "file": "vl/random.c" 
+  },
+  
+  { "directory": "/home/diego/Downloads/vlfeat-master",
+    "arguments": ["clang", "-c", "vl/mathop.c", "-o", "build/mathop.o"],
+    "file": "vl/mathop.c" 
+  },
+  
+  { "directory": "/home/diego/Downloads/vlfeat-master",
+    "arguments": ["clang", "-c", "vl/generic.c", "-o", "build/generic.o"],
+    "file": "vl/generic.c" 
+  },
+  
+  { "directory": "/home/diego/Downloads/vlfeat-master",
+    "arguments": ["clang", "-c", "vl/aib.c", "-o", "build/aib.o"],
+    "file": "vl/aib.c" 
+  },
+  
+  { "directory": "/home/diego/Downloads/vlfeat-master",
+    "arguments": ["clang", "-c", "vl/array.c", "-o", "build/array.o"],
+    "file": "vl/array.c" 
+  },
+  
+  { "directory": "/home/diego/Downloads/vlfeat-master",
+    "arguments": ["clang", "-c", "vl/covdet.c", "-o", "build/covdet.o"],
+    "file": "vl/covdet.c" 
+  },
+  
+  { "directory": "/home/diego/Downloads/vlfeat-master",
+    "arguments": ["clang", "-c", "vl/dsift.c", "-o", "build/dsift.o"],
+    "file": "vl/dsift.c" 
+  },
+  
+  { "directory": "/home/diego/Downloads/vlfeat-master",
+    "arguments": ["clang", "-c", "vl/fisher.c", "-o", "build/fisher.o"],
+    "file": "vl/fisher.c" 
+  },
+  
+  { "directory": "/home/diego/Downloads/vlfeat-master",
+    "arguments": ["clang", "-c", "vl/getopt_long.c", "-o", "build/getopt_long.o"],
+    "file": "vl/getopt_long.c" 
+  },
+  
+  { "directory": "/home/diego/Downloads/vlfeat-master",
+    "arguments": ["clang", "-c", "vl/gmm.c", "-o", "build/gmm.o"],
+    "file": "vl/gmm.c" 
+  },
+  
+  { "directory": "/home/diego/Downloads/vlfeat-master",
+    "arguments": ["clang", "-c", "vl/hikmeans.c", "-o", "build/hikmeans.o"],
+    "file": "vl/hikmeans.c" 
+  },
+  
+  { "directory": "/home/diego/Downloads/vlfeat-master",
+    "arguments": ["clang", "-c", "vl/homkermap.c", "-o", "build/homkermap.o"],
+    "file": "vl/homkermap.c" 
+  },
+  
+  { "directory": "/home/diego/Downloads/vlfeat-master",
+    "arguments": ["clang", "-c", "vl/host.c", "-o", "build/host.o"],
+    "file": "vl/host.c" 
+  },
+  
+  { "directory": "/home/diego/Downloads/vlfeat-master",
+    "arguments": ["clang", "-c", "vl/ikmeans.c", "-o", "build/ikmeans.o"],
+    "file": "vl/ikmeans.c" 
+  },
+  
+  { "directory": "/home/diego/Downloads/vlfeat-master",
+    "arguments": ["clang", "-c", "vl/imopv.c", "-o", "build/imopv.o"],
+    "file": "vl/imopv.c" 
+  },
+  
+  { "directory": "/home/diego/Downloads/vlfeat-master",
+    "arguments": ["clang", "-c", "vl/kdtree.c", "-o", "build/kdtree.o"],
+    "file": "vl/kdtree.c" 
+  },
+  
+  { "directory": "/home/diego/Downloads/vlfeat-master",
+    "arguments": ["clang", "-c", "vl/kmeans.c", "-o", "build/kmeans.o"],
+    "file": "vl/kmeans.c" 
+  },
+  
+  { "directory": "/home/diego/Downloads/vlfeat-master",
+    "arguments": ["clang", "-c", "vl/lbp.c", "-o", "build/lbp.o"],
+    "file": "vl/lbp.c" 
+  },
+  
+  { "directory": "/home/diego/Downloads/vlfeat-master",
+    "arguments": ["clang", "-c", "vl/liop.c", "-o", "build/liop.o"],
+    "file": "vl/liop.c" 
+  },
+  
+  { "directory": "/home/diego/Downloads/vlfeat-master",
+    "arguments": ["clang", "-c", "vl/mser.c", "-o", "build/mser.o"],
+    "file": "vl/mser.c" 
+  },
+  
+  { "directory": "/home/diego/Downloads/vlfeat-master",
+    "arguments": ["clang", "-c", "vl/pgm.c", "-o", "build/pgm.o"],
+    "file": "vl/pgm.c" 
+  },
+  
+  { "directory": "/home/diego/Downloads/vlfeat-master",
+    "arguments": ["clang", "-c", "vl/quickshift.c", "-o", "build/quickshift.o"],
+    "file": "vl/quickshift.c" 
+  },
+  
+  { "directory": "/home/diego/Downloads/vlfeat-master",
+    "arguments": ["clang", "-c", "vl/rodrigues.c", "-o", "build/rodrigues.o"],
+    "file": "vl/rodrigues.c" 
+  },
+  
+  { "directory": "/home/diego/Downloads/vlfeat-master",
+    "arguments": ["clang", "-c", "vl/scalespace.c", "-o", "build/scalespace.o"],
+    "file": "vl/scalespace.c" 
+  },
+  
+  { "directory": "/home/diego/Downloads/vlfeat-master",
+    "arguments": ["clang", "-c", "vl/sift.c", "-o", "build/sift.o"],
+    "file": "vl/sift.c" 
+  },
+  
+  { "directory": "/home/diego/Downloads/vlfeat-master",
+    "arguments": ["clang", "-c", "vl/slic.c", "-o", "build/slic.o"],
+    "file": "vl/slic.c" 
+  },
+  
+  { "directory": "/home/diego/Downloads/vlfeat-master",
+    "arguments": ["clang", "-c", "vl/stringop.c", "-o", "build/stringop.o"],
+    "file": "vl/stringop.c" 
+  },
+  
+  { "directory": "/home/diego/Downloads/vlfeat-master",
+    "arguments": ["clang", "-c", "vl/svm.c", "-o", "build/svm.o"],
+    "file": "vl/svm.c" 
+  },
+  
+  { "directory": "/home/diego/Downloads/vlfeat-master",
+    "arguments": ["clang", "-c", "vl/svmdataset.c", "-o", "build/svmdataset.o"],
+    "file": "vl/svmdataset.c" 
+  },
+  
+  { "directory": "/home/diego/Downloads/vlfeat-master",
+    "arguments": ["clang", "-c", "vl/vlad.c", "-o", "build/vlad.o"],
+    "file": "vl/vlad.c" 
+  }
+]

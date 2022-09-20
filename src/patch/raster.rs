@@ -628,7 +628,7 @@ fn merge_left_to_top_patch(patches : &mut Vec<Patch>, search : &mut PatchSearch,
     *n_patches -= 1;
 }
 
-#[test]
+/*#[test]
 fn test_patches() {
     let check = Image::<u8>::new_checkerboard(16, 4);
     println!("{}", check);
@@ -636,7 +636,7 @@ fn test_patches() {
         println!("{:?}", patch);
         // println!("{:?}", patch.polygon());
     }
-}
+}*/
 
 /*#[test]
 fn test_raster() {

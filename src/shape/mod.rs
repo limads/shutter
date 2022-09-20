@@ -8,6 +8,8 @@ use std::ops::Add;
 use nalgebra;
 use std::mem;
 use crate::image::*;
+use itertools::Itertools;
+use std::collections::BTreeMap;
 
 pub mod point;
 
@@ -20,6 +22,73 @@ pub mod ellipse;
 // pub use ellipse::*;
 
 pub mod hough;
+
+// cargo test -- registration_test --nocapture
+#[test]
+fn registration_test() {
+
+    let a = vec![(0, 10), (10, 10), (10, 0)];
+    
+    // Just scaled (perserve order)
+    let b = vec![(0, 20), (20, 20), (20, 0)];
+    
+    // Scaled and permuted (0,1)
+    let c = vec![(20, 20), (0, 20), (20, 0)];
+    
+    // Scaled and permuted (0,3), (1,2)
+    let d = vec![(20, 20), (20, 0), (0, 20)];
+    
+    println!("{:?}", registration(&a, &b));
+    println!("{:?}", registration(&a, &c));
+    println!("{:?}", registration(&a, &d));
+    
+}
+
+/* Given two equal length slices carryinig coordinates, permute elements at the second slice until
+all elements within the second slice satisfy the same comparison relations with each other as the elements 
+within the first slice. All elements at both slices are assumed distinct.
+If this condition can be satisfied, return Some(col), else None. 
+This is useful as a first approximation to
+registration problems, since each index of current will be equivalent to the
+same index at past. Returns None if slices are of different lengths or 
+elements are not distinct. Corresponding points map exactly if they 
+are scaled along the orthogonal coordinate axis, or if they are translated
+to polar coordinates and suffer arbitrary scaling and rotations around the same axis.*/
+pub fn registration(
+    past : &[(usize, usize)], 
+    current : &[(usize, usize)]
+) -> Option<Vec<(usize, usize)>> {
+    let n = past.len();
+    if current.len() != n {
+        return None;
+    }
+    let mut past_comp = BTreeMap::new();
+    for i in 0..n {
+        for j in (i+1)..n {
+            if past[i] == past[j] {
+                return None;
+            }
+            past_comp.insert((i, j), (past[i].0 > past[j].0, past[i].1 > past[j].1 ));
+        }
+    }
+    'outer : for ixs in (0..n).permutations(n) {
+        for i in 0..n {
+            for j in (i+1)..n {
+                let past = past_comp[&(i,j)];
+                if ( (current[ixs[i]].0 > current[ixs[j]].0) != past.0 ) || 
+                   ( (current[ixs[i]].1 > current[ixs[j]].1) != past.1 )
+                {
+                    continue 'outer;
+                }
+            }
+        }
+        
+        // Exit the inner loops only if all comparisons are equivalent.
+        let permuted : Vec<_> = (0..n).map(|i| current[ixs[i]] ).collect();
+        return Some(permuted);
+    }
+    None
+}
 
 pub fn bounding_rect(pts : &[(usize, usize)]) -> (usize, usize, usize, usize) {
     let (mut min_y, mut max_y) = (usize::MAX, 0);
@@ -130,17 +199,13 @@ mod rdp {
     }
 }
 
-// convex hull implementation, based on
-// https://rosettacode.org/wiki/Convex_hull
+/*/// Convex hull implementation, based on
+/// https://rosettacode.org/wiki/Convex_hull
 mod convex {
 
-    #[derive(Debug, Clone)]
-    struct Point {
-        x: f32,
-        y: f32
-    }
-
-    fn calculate_convex_hull(points: &Vec<Point>) -> Vec<Point> {
+    use nalgebra::Point2;
+    
+    pub fn convex_hull(points: &Vec<Point2<F>>) -> Vec<Point> {
         //There must be at least 3 points
         if points.len() < 3 { return points.clone(); }
 
@@ -176,11 +241,7 @@ mod convex {
 
         return hull;
     }
-
-    //Calculate orientation for 3 points
-    //0 -> Straight line
-    //1 -> Clockwise
-    //2 -> Counterclockwise
+    
     fn orientation(p: &Point, q: &Point, r: &Point) -> usize {
         let val = (q.y - p.y) * (r.x - q.x) -
             (q.x - p.x) * (r.y - q.y);
@@ -189,7 +250,7 @@ mod convex {
         if val > 0. { return 1; } else { return 2; }
     }
 
-}
+}*/
 
 /*
 // Based on https://rosettacode.org/wiki/Find_the_intersection_of_two_lines

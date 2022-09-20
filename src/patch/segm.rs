@@ -476,7 +476,7 @@ pub fn breadth_flood_fill(mut win : WindowMut<'_, u8>, seed : (usize, usize), co
     }
 }
 
-#[test]
+/*#[test]
 fn homogeneous_regions() {
 
     use crate::prelude::*;
@@ -506,7 +506,7 @@ fn homogeneous_regions() {
     // }
 
     // out.show();
-}
+}*/
 
 pub struct PointExtractor {
     pts : Vec<(usize, usize)>

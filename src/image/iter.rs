@@ -595,7 +595,7 @@ where
 
 }
 
-#[test]
+/*#[test]
 fn diag() {
     use crate::image::Image;
     let mut img = Image::new_constant(10, 10, 1);
@@ -613,7 +613,7 @@ fn diag() {
     println!("Diagonal left:");
     diagonal_left_row_iterator(img.full_window().rows(), 2, (0, 9))
         .for_each(|(ix, px)| println!("{:?} : {:?}", ix, px) );
-}
+}*/
 
 pub fn iterate_row_wise<N>(
     src : &[N],

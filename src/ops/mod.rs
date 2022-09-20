@@ -809,6 +809,28 @@ where
     S : StorageMut<u8>
 {
 
+    pub fn xor_assign<T>(&mut self, other : &Image<u8, T>) 
+    where
+        T : Storage<u8>,
+    {
+
+        #[cfg(feature="ipp")]
+        unsafe {
+            let (this_stride, this_roi) = crate::image::ipputils::step_and_size_for_image(self);
+            let (other_stride, other_roi) = crate::image::ipputils::step_and_size_for_image(other);
+            let ans = crate::foreign::ipp::ippi::ippiXor_8u_C1IR(
+                other.as_ptr(),
+                other_stride,
+                self.as_mut_ptr(),
+                this_stride,
+                this_roi
+            );
+            assert!(ans == 0);
+            return;
+        }
+        unimplemented!();
+    }
+    
     // The not op is analogous to the gray::invert and float::invert ops.
     pub fn not_mut(&mut self) {
 
