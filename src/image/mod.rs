@@ -2403,6 +2403,13 @@ where
     S : StorageMut<P>,
 {
 
+    // Fills all nonzero bytes of self with the given intensity value, leaving
+    // zeroed values untouched.
+    pub fn fill_nonzero(&mut self, color : P) {
+        let zero = P::zero();
+        self.pixels_mut(1).for_each(|px| if *px != zero { *px = color });
+    }
+    
     pub fn fill(&mut self, color : P) {
 
         // TODO use std::intrinsic::write_bytes?

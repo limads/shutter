@@ -336,14 +336,14 @@ where
     }
 }
 
-impl<P, S, T> AddAssign<Image<P, T>> for Image<P, S> 
+impl<P, S, T> AddAssign<&Image<P, T>> for Image<P, S> 
 where
     P : Pixel + AddAssign,
     S : StorageMut<P>,
     T : Storage<P>
 
 {
-    fn add_assign(&mut self, rhs: Image<P, T>) {
+    fn add_assign(&mut self, rhs: &Image<P, T>) {
 
         assert!(self.shape() == rhs.shape());
 
@@ -390,24 +390,32 @@ where
 
 }
 
-impl<P, S, T> SubAssign<Image<P, T>> for Image<P, S> 
+#[test]
+fn sub_assign() {
+    let mut a = ImageBuf::<u8>::new_constant(10, 10, 2);
+    let mut b = ImageBuf::<u8>::new_constant(10, 10, 1);
+    a -= &b;
+    println!("{:?}", a[(0usize,0usize)]);
+}
+
+impl<P, S, T> SubAssign<&Image<P, T>> for Image<P, S> 
 where
     P : Pixel + SubAssign,
     S : StorageMut<P>,
     T : Storage<P>,
 {
 
-    fn sub_assign(&mut self, rhs: Image<P, T>) {
+    fn sub_assign(&mut self, rhs: &Image<P, T>) {
 
         assert!(self.shape() == rhs.shape());
 
-        /*#[cfg(feature="ipp")]
+        #[cfg(feature="ipp")]
         unsafe {
 
             let (src_dst_byte_stride, roi) = crate::image::ipputils::step_and_size_for_image(self);
             let rhs_byte_stride = crate::image::ipputils::byte_stride_for_image(&rhs);
 
-            let scale_factor = 1;
+            let scale_factor = 0;
             if self.pixel_is::<u8>() {
                 let ans = crate::foreign::ipp::ippi::ippiSub_8u_C1IRSfs(
                     mem::transmute(rhs.as_ptr()),
@@ -432,7 +440,7 @@ where
                 assert!(ans == 0);
                 return;
             }
-        }*/
+        }
 
         for (out, input) in self.pixels_mut(1).zip(rhs.pixels(1)) {
             *out -= *input;
@@ -442,13 +450,13 @@ where
 
 }
 
-impl<P, S, T> MulAssign<Image<P, T>> for Image<P, S> 
+impl<P, S, T> MulAssign<&Image<P, T>> for Image<P, S> 
 where
     P : Pixel + MulAssign,
     S : StorageMut<P>,
     T : Storage<P>,
 {
-    fn mul_assign(&mut self, rhs: Image<P, T>) {
+    fn mul_assign(&mut self, rhs: &Image<P, T>) {
         assert!(self.shape() == rhs.shape());
         #[cfg(feature="ipp")]
         unsafe {
@@ -488,13 +496,13 @@ where
 
 }
 
-impl<P, S, T> DivAssign<Image<P, T>> for Image<P, S> 
+impl<P, S, T> DivAssign<&Image<P, T>> for Image<P, S> 
 where
     P : Pixel + DivAssign,
     S : StorageMut<P>,
     T : Storage<P>,
 {
-    fn div_assign(&mut self, rhs: Image<P, T>) {
+    fn div_assign(&mut self, rhs: &Image<P, T>) {
         assert!(self.shape() == rhs.shape());
         #[cfg(feature="ipp")]
         unsafe {

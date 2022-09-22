@@ -1122,6 +1122,16 @@ pub fn vertically_aligned(r1 : &(usize, usize, usize, usize), r2 : &(usize, usiz
     (tl_1.1 >= tl_2.1 && tl_1.1 <= br_2.1) || (tl_2.1 >= tl_1.1 && tl_1.1 <= br_1.1)
 }
 
+pub fn rect_enclosing_pair(
+    r1 : &(usize, usize, usize, usize), 
+    r2 : &(usize, usize, usize, usize)
+) -> (usize, usize, usize, usize) {
+    let tl = (r1.0.min(r2.0), r1.1.min(r2.1));
+    let br = ((tl.0 + r1.2).max(tl.0 + r2.2), (tl.1 + r1.3).max(tl.1 + r2.3));
+    (tl.0, tl.1, br.0 - tl.0, br.1 - tl.1)
+}
+
+// This might be wrong?
 pub fn rect_contacts(r1 : &(usize, usize, usize, usize), r2 : &(usize, usize, usize, usize)) -> bool {
 
     // if rect_overlaps(r1, r2) {

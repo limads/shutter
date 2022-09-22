@@ -1,4 +1,5 @@
 use super::*;
+use tuples::TupleTranspose;
 
 impl<P, S> Image<P, S>
 where
@@ -394,6 +395,53 @@ where
                 // Skip first element of each iterator because it is already contained in the last one.
                 top_iter.chain(right_iter.skip(1)).chain(bottom_iter.skip(1)).chain(left_iter.skip(1))
         }).flatten()
+    }
+    
+    // Returns an iterator over (radius, pixel value) that approximates a circle of max_radius
+    // using the 8 cardinal directions (45 degrees apart). Returns (radius, pixel). Panics if
+    // center is outside the admissible area.
+    pub fn simplified_radial_pixels<'a>(
+        &'a self, 
+        center : (usize, usize),
+        step : usize,
+        max_radius : usize
+    ) -> impl Iterator<Item=(usize, &'a P)> + 'a {
+    
+        let center_iter = std::iter::once((0, &self[center]));
+        let radial_iter = (step..(max_radius+1))
+            .step_by(step)
+            .map(move |rad| {
+                
+                let opt_l = center.1.checked_sub(rad);
+                let opt_t = center.0.checked_sub(rad);
+                let cand_b = center.0 + rad;
+                let cand_r = center.1 + rad;
+                let opt_b = (cand_b < self.height()).then_some(cand_b);
+                let opt_r = (cand_r < self.width()).then_some(cand_r);
+                let t = (opt_t, Some(center.1)).transpose();
+                let r = (Some(center.0), opt_r).transpose();
+                let b = (opt_b, Some(center.1)).transpose();
+                let l = (Some(center.0), opt_l).transpose();
+                
+                // cos(pi/4) = sin(pi/4) ~ 0.7, so the diagonal (x, y) increment should be ~70% of axial lines
+                // to preserve the radius.
+                let rad_diag = (rad as f32 * 0.707107) as usize;
+                let opt_diag_t = center.0.checked_sub(rad_diag);
+                let opt_diag_l = center.1.checked_sub(rad_diag);
+                let cand_diag_b = center.0 + rad_diag;
+                let cand_diag_r = center.1 + rad_diag;
+                let opt_diag_b = (cand_diag_b < self.height()).then_some(cand_diag_b);
+                let opt_diag_r = (cand_diag_r < self.width()).then_some(cand_diag_r);
+                let tl = (opt_diag_t, opt_diag_l).transpose();
+                let tr = (opt_diag_t, opt_diag_r).transpose();
+                let br = (opt_diag_b, opt_diag_r).transpose();
+                let bl = (opt_diag_b, opt_diag_l).transpose();
+                
+                tl.into_iter().chain(t.into_iter()).chain(tr.into_iter()).chain(r.into_iter())
+                    .chain(br.into_iter()).chain(b.into_iter()).chain(bl.into_iter()).chain(l.into_iter())
+                    .map(move |c| (rad, &self[c]) ) 
+           }).flatten();
+       center_iter.chain(radial_iter)
     }
 
     // Returns the most representative k-colors of the image using K-means
