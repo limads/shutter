@@ -1020,6 +1020,32 @@ pub fn point_distances(pts : &[(usize, usize)]) -> Vec<((usize, usize), (usize, 
     dists
 }
 
+pub fn outer_rect(pts : &[(usize, usize)]) -> (usize, usize, usize, usize) {
+
+    let mut min_r = usize::MAX;
+    let mut max_r = 0;
+    let mut min_c = usize::MAX;
+    let mut max_c = 0;
+    
+    for pt in pts {
+        if pt.0 < min_r {
+            min_r = pt.0;
+        }
+        if pt.1 < min_c {
+            min_c = pt.1;
+        }
+        if pt.0 > max_r {
+            max_r = pt.0;
+        }
+        if pt.1 > max_c {
+            max_c = pt.1;
+        }
+    }
+    
+    (min_r, min_c, (max_r - min_r), (max_c - min_c))
+    
+}
+
 /// Returns the outer circle that encloses a set of points (smallest circle with center at the shape
 /// sutch that the shape is circumscribed in the circle).
 pub fn outer_circle(pts : &[(usize, usize)]) -> ((usize, usize), f32) {
@@ -1598,6 +1624,13 @@ pub fn line_intersection_usize(
 /// to the geometric plane.
 fn slope(pt1 : (usize, usize), pt2 : (usize, usize)) -> f64 {
     (pt1.0 as f64 * -1. - pt2.0 as f64 * -1.) / (pt1.1 as f64 - pt2.1 as f64)
+}
+
+/// Iterate over inner and border pixels.
+pub fn rect_dense_iter(rect : (usize, usize, usize, usize)) -> impl Iterator<Item=(usize, usize)> + Clone {
+    (0..=rect.2)
+        .map(move |r| (0..=rect.3).map(move |c| (rect.0 + r, rect.1+c) ) )
+        .flatten() 
 }
 
 /// Approximate an ellipse by taking two pairs of points with the largest vertical

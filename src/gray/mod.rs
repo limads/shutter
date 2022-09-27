@@ -42,11 +42,69 @@ impl AdaptiveForeground {
 
 }
 
+#[cfg(feature="ipp")]
+#[derive(Debug, Clone)]
+pub struct HysteresisOutput
+{
+    low : ImageBuf<u8>,
+    out : ImageBuf<u8>,
+    high : ImageBuf<u8>,
+    morph : crate::morph::IppiMorph
+}
+
+#[cfg(feature="ipp")]
+impl HysteresisOutput {
+
+    pub fn output(&self) -> &ImageBuf<u8> {
+        &self.out
+    }
+    
+    pub fn output_mut(&mut self) -> &mut ImageBuf<u8> {
+        &mut self.out
+    }
+    
+    pub fn new<S>(height : usize, width : usize, se : &Image<u8, S>) -> Self 
+    where
+        S : Storage<u8>
+    {
+        let low = ImageBuf::<u8>::new_constant(height, width, 0);
+        let out = low.clone();
+        let high = low.clone();
+        let morph = crate::morph::IppiMorph::new(se.clone_owned(), (height, width), true);
+        Self { low, out, high, morph }
+    }
+    
+}
+
+impl<S> Image<u8, S> 
+where
+    S : StorageMut<u8>
+{
+
+    pub fn truncate_inplace(&mut self, fg : Foreground, fg_val : u8) 
+    {        
+        #[cfg(feature="ipp")]
+        unsafe { return ippi_truncate(fg, None, &mut self.full_window_mut(), fg_val) };
+        
+        unimplemented!()
+    }
+    
+}
+
 impl<S> Image<u8, S> 
 where
     S : Storage<u8>
 {
 
+    #[cfg(feature="ipp")]
+    pub fn hysteresis_threshold_to(&self, fg_low : Foreground, fg_high : Foreground, out : &mut HysteresisOutput) 
+    {
+        self.threshold_to(fg_low, &mut out.low);
+        self.threshold_to(fg_high, &mut out.high);
+        out.morph.apply(&out.low, &mut out.out);
+        out.out.and_assign(&out.high);
+    }
+    
     /* Binarizes a bit image, setting all unmatched pixels to zero, and matched pixels
     to a foreground value. */
     pub fn threshold_to<T>(&self, fg : Foreground, out : &mut Image<u8, T>) 
@@ -76,7 +134,7 @@ where
         assert!(self.shape() == out.shape());
         
         #[cfg(feature="ipp")]
-        unsafe { return ippi_truncate(fg, &self.full_window(), &mut out.full_window_mut(), fg_val) };
+        unsafe { return ippi_truncate(fg, Some(&self.full_window()), &mut out.full_window_mut(), fg_val) };
         
         baseline_truncate(&self.full_window(), fg, &mut out.full_window_mut(), fg_val);
     }
@@ -535,58 +593,96 @@ impl Truncate for Image<u8> {
 
 }*/
 
+// If desired operation is inplace, pass None to source and Some(w) to src/dst.
+// Else pass Some(src) and the destination.
 #[cfg(feature="ipp")]
 unsafe fn ippi_truncate(
     fg : Foreground,
-    src : &Window<u8>,
+    src : Option<&Window<u8>>,
     out : &mut WindowMut<u8>,
     fg_val : u8
 ) {
-    let (src_byte_stride, roi) = crate::image::ipputils::step_and_size_for_window(src);
+    let (src_byte_stride, roi) = if let Some(src) = src {
+        crate::image::ipputils::step_and_size_for_window(src)
+    } else {
+        crate::image::ipputils::step_and_size_for_window_mut(&out)
+    };
     let dst_byte_stride = crate::image::ipputils::byte_stride_for_window_mut(&out);
     match fg {
         Foreground::Exactly(v) => {
-            baseline_truncate(src, fg, out, fg_val);
+            baseline_truncate(src.unwrap(), fg, out, fg_val);
         },
         Foreground::Below(v) => {
-            let ans = crate::foreign::ipp::ippi::ippiThreshold_LTVal_8u_C1R(
-                src.as_ptr(),
-                src_byte_stride,
-                out.as_mut_ptr(),
-                dst_byte_stride,
-                roi,
-                v.saturating_add(1),
-                fg_val,
-            );
+            let ans = if let Some(src) = src {
+                crate::foreign::ipp::ippi::ippiThreshold_LTVal_8u_C1R(
+                    src.as_ptr(),
+                    src_byte_stride,
+                    out.as_mut_ptr(),
+                    dst_byte_stride,
+                    roi,
+                    v.saturating_add(1),
+                    fg_val,
+                )
+            } else {
+                crate::foreign::ipp::ippi::ippiThreshold_LTVal_8u_C1IR(
+                    out.as_mut_ptr(),
+                    dst_byte_stride,
+                    roi,
+                    v.saturating_add(1),
+                    fg_val,
+                )
+            };
             assert!(ans == 0);
         },
         Foreground::Above(v) => {
-            let ans = crate::foreign::ipp::ippi::ippiThreshold_GTVal_8u_C1R(
-                src.as_ptr(),
-                src_byte_stride,
-                out.as_mut_ptr(),
-                dst_byte_stride,
-                roi,
-                v.saturating_sub(1),
-                fg_val
-            );
+            let ans = if let Some(src) = src {
+                crate::foreign::ipp::ippi::ippiThreshold_GTVal_8u_C1R(
+                    src.as_ptr(),
+                    src_byte_stride,
+                    out.as_mut_ptr(),
+                    dst_byte_stride,
+                    roi,
+                    v.saturating_sub(1),
+                    fg_val
+                )
+            } else {
+                crate::foreign::ipp::ippi::ippiThreshold_GTVal_8u_C1IR(
+                    out.as_mut_ptr(),
+                    dst_byte_stride,    
+                    roi,
+                    v.saturating_sub(1),
+                    fg_val
+                )
+            };
             assert!(ans == 0);
         },
         Foreground::Inside(a, b) => {
-            baseline_truncate(src, fg, out, fg_val);
+            baseline_truncate(src.unwrap(), fg, out, fg_val);
         },
         Foreground::Outside(a, b) => {
-            let ans = crate::foreign::ipp::ippi::ippiThreshold_LTValGTVal_8u_C1R(
-                src.as_ptr(),
-                src_byte_stride,
-                out.as_mut_ptr(),
-                dst_byte_stride,
-                roi,
-                a,
-                fg_val,
-                b,
-                fg_val,
-            );
+            let ans = if let Some(src) = src {
+                crate::foreign::ipp::ippi::ippiThreshold_LTValGTVal_8u_C1R(
+                    src.as_ptr(),
+                    src_byte_stride,
+                    out.as_mut_ptr(),
+                    dst_byte_stride,
+                    roi,
+                    a,
+                    fg_val,
+                    b,
+                    fg_val,
+                )
+            } else {
+                crate::foreign::ipp::ippi::ippiThreshold_LTValGTVal_8u_C1IR(
+                    out.as_mut_ptr(),
+                    dst_byte_stride,
+                    roi,
+                    a,
+                    fg_val,
+                    b,
+                    fg_val,
+                )
+            };
             assert!(ans == 0);
         }
     }

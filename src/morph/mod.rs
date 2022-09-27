@@ -222,25 +222,25 @@ pub const NEG_HBAR_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&n
 pub const HBAR_5_KERNEL : Window<'static, u8> = Window::from_static::<25, 5>(&[
     0, 0, 0, 0, 0,
     0, 0, 0, 0, 0,
-    1, 1, 1, 1, 1,
+    255, 255, 255, 255, 255,
     0, 0, 0, 0, 0,
     0, 0, 0, 0, 0,
 ]);
 
 pub const VBAR_5_KERNEL : Window<'static, u8> = Window::from_static::<25, 5>(&[
-    0, 0, 1, 0, 0,
-    0, 0, 1, 0, 0,
-    0, 0, 1, 0, 0,
-    0, 0, 1, 0, 0,
-    0, 0, 1, 0, 0,
+    0, 0, 255, 0, 0,
+    0, 0, 255, 0, 0,
+    0, 0, 255, 0, 0,
+    0, 0, 255, 0, 0,
+    0, 0, 255, 0, 0,
 ]);
 
 const CROSS_5_ARR : [u8; 25] = [
-    0, 0, 1, 0, 0,
-    0, 0, 1, 0, 0,
-    1, 1, 1, 1, 1,
-    0, 0, 1, 0, 0,
-    0, 0, 1, 0, 0,
+    0, 0, 255, 0, 0,
+    0, 0, 255, 0, 0,
+    255, 255, 255, 255, 255,
+    0, 0, 255, 0, 0,
+    0, 0, 255, 0, 0,
 ];
 
 pub const CROSS_5_KERNEL : Window<'static, u8> = Window::from_static::<25, 5>(&CROSS_5_ARR);
@@ -264,11 +264,11 @@ const CROSS_ARR : [u8; 9] = [
 ];
 
 const DIAMOND_ARR : [u8; 25] = [
-    0, 0, 1, 0, 0,
-    0, 1, 1, 1, 0,
-    1, 1, 1, 1, 1,
-    0, 1, 1, 1, 0,
-    0, 0, 1, 0, 0,
+    0, 0, 255, 0, 0,
+    0, 255, 255, 255, 0,
+    255, 255, 255, 255, 255,
+    0, 255, 255, 255, 0,
+    0, 0, 255, 0, 0,
 ];
 
 pub const DIAMOND_KERNEL : Window<'static, u8> = Window::from_static::<25, 5>(&DIAMOND_ARR);

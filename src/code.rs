@@ -379,8 +379,7 @@ fn chain() {
 
 impl ChainCode {
 
-    pub fn split(&self) -> BTreeMap<usize, ChainCode> {
-        let unions = self.unions();
+    fn chain_union_to_btree(&self, unions : UnionFind<usize>) -> BTreeMap<usize, ChainCode> {
         let mut dst : BTreeMap<usize, ChainCode> = BTreeMap::new();
         for i in 0..self.len() {
             let ch = self.get(i).unwrap();
@@ -402,6 +401,28 @@ impl ChainCode {
             }
         }
         dst
+    }
+
+    pub fn split_by_proximity(&self, by : usize) -> BTreeMap<usize, ChainCode> {
+        let unions = self.proximity_unions(by);
+        self.chain_union_to_btree(unions)
+    }
+    
+    pub fn split(&self) -> BTreeMap<usize, ChainCode> {
+        let unions = self.unions();
+        self.chain_union_to_btree(unions)
+    }
+    
+    pub fn proximity_unions(&self, dist : usize) -> UnionFind<usize> {
+        let mut uf = UnionFind::new(self.starts.len());
+        for (i, c1) in self.chains().enumerate() {
+            for (j, c2) in self.chains().enumerate() {
+                if i != j && c1.close_to(&c2, dist).is_some() {
+                    uf.union(i, j);
+                }
+            }
+        }
+        uf
     }
     
     /* Can also build an undirected graph using link as edges */
@@ -779,17 +800,17 @@ pub enum Link {
     Closed,
 }
 
-fn is_point_close(a : (usize, usize), b: (usize, usize)) -> bool {
-    a.0.abs_diff(b.0) <= 1 && a.1.abs_diff(b.1) <= 1
+fn is_point_close(a : (usize, usize), b: (usize, usize), by : usize) -> bool {
+    a.0.abs_diff(b.0) <= by && a.1.abs_diff(b.1) <= by
 }
 
 impl<'a> Chain<'a> {
 
-    pub fn link(&self, other : &Self) -> Option<Link> {
-        let start_start = is_point_close(self.start, other.start);
-        let start_end = is_point_close(self.start, other.end);
-        let end_start = is_point_close(self.end, other.start);
-        let end_end = is_point_close(self.end, other.end);
+    pub fn close_to(&self, other : &Self, by : usize) -> Option<Link> {
+        let start_start = is_point_close(self.start, other.start, by);
+        let start_end = is_point_close(self.start, other.end, by);
+        let end_start = is_point_close(self.end, other.start, by);
+        let end_end = is_point_close(self.end, other.end, by);
         if (start_start && end_end) || (start_end && end_start) {
             Some(Link::Closed)
         } else {
@@ -807,6 +828,10 @@ impl<'a> Chain<'a> {
                 None
             }
         }
+    }
+    
+    pub fn link(&self, other : &Self) -> Option<Link> {
+        self.close_to(other, 1)
     }
     
     /* Returns the full set of points this chain represents. The method is lightweight and

@@ -1180,7 +1180,8 @@ where
     type Output = P;
 
     fn index(&self, index: (usize, usize)) -> &Self::Output {
-        unsafe { self.slice.as_ref().get_unchecked(index::linear_index(index, self.width)) }
+        let local_ix = (index.0 + self.offset.0, index.1 + self.offset.1);
+        unsafe { self.slice.as_ref().get_unchecked(index::linear_index(local_ix, self.width)) }
     }
 }
 
@@ -1192,7 +1193,8 @@ where
 {
     
     fn index_mut(&mut self, index: (usize, usize)) -> &mut Self::Output {
-        unsafe { self.slice.as_mut().get_unchecked_mut(index::linear_index(index, self.width)) }
+        let local_ix = (index.0 + self.offset.0, index.1 + self.offset.1);
+        unsafe { self.slice.as_mut().get_unchecked_mut(index::linear_index(local_ix, self.width)) }
     }
     
 }

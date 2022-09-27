@@ -1,4 +1,4 @@
-use std::cmp::{Ord, PartialOrd, Eq};
+use std::cmp::{Ord, PartialOrd, Eq, PartialEq};
 use std::ops::*;
 use crate::image::*;
 use crate::stat;
@@ -732,6 +732,14 @@ where
     S : Storage<u8>
 {
 
+    // Equality is different in that we do not want to allocate a new buffer to accumulate individual pixel differences / compare tags.
+    pub fn eq<T>(&self, other : &Image<u8, T>) -> bool
+    where
+        T : Storage<u8>
+    {
+        self.pixels(1).zip(other.pixels(1)).all(|(a, b)| *a == *b )
+    }
+
     pub fn and_to<T, U>(&self, other : &Image<u8, T>, dst : &mut Image<u8, U>) 
     where
         T : Storage<u8>,
@@ -817,6 +825,28 @@ where
     S : StorageMut<u8>
 {
 
+    pub fn and_assign<T>(&mut self, other : &Image<u8, T>) 
+    where
+        T : Storage<u8>,
+    {
+
+        #[cfg(feature="ipp")]
+        unsafe {
+            let (this_stride, this_roi) = crate::image::ipputils::step_and_size_for_image(self);
+            let (other_stride, other_roi) = crate::image::ipputils::step_and_size_for_image(other);
+            let ans = crate::foreign::ipp::ippi::ippiAnd_8u_C1IR(
+                other.as_ptr(),
+                other_stride,
+                self.as_mut_ptr(),
+                this_stride,
+                this_roi
+            );
+            assert!(ans == 0);
+            return;
+        }
+        unimplemented!();
+    }
+    
     pub fn xor_assign<T>(&mut self, other : &Image<u8, T>) 
     where
         T : Storage<u8>,
