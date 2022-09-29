@@ -1403,6 +1403,17 @@ where
 
 impl<'a, P> ImageRef<'a, P> {
 
+    pub unsafe fn from_ptr(
+        ptr : *const P, 
+        len : usize, 
+        full_ncols : usize, 
+        offset : (usize, usize), 
+        sz : (usize, usize)
+    ) -> Option<Self> {
+        let s = std::slice::from_raw_parts(ptr, len);
+        Self::sub_from_slice(s, full_ncols, offset, sz)
+    }
+    
     pub fn sub_from_slice(
         src : &'a [P],
         original_width : usize,
@@ -1935,7 +1946,7 @@ where
     /// invalidated by the borrow checker when we have the child.
     // pub fn sub_window_mut(&'a mut self, offset : (usize, usize), dims : (usize, usize)) -> Option<WindowMut<'a, N>> {
     
-    
+    // Require pointer to parent slice, NOT top-left offset element.
     pub unsafe fn from_ptr(
         ptr : *mut P, 
         len : usize, 
@@ -2012,12 +2023,42 @@ where
         self.window_mut((0, 0), shape).unwrap()
     }
    
-    pub fn sub_window_mut(
+   pub fn sub_window_mut(
         &mut self, 
         offset : (usize, usize), 
         sz : (usize, usize)
     ) -> Option<WindowMut<P>> {
         self.window_mut(offset, sz)
+    }
+    
+    // If any of the rects overlap, the returned vector is empty.
+    // This cannot possibly return mutable windows because the
+    // undarlying buffer mihght overlap.
+    pub fn disjoint_windows(
+        &self,
+        offsets : &[(usize, usize)],
+        sizes : &[(usize, usize)]
+    ) -> Vec<ImageRef<P>> {
+        assert!(offsets.len() == sizes.len());
+        for i in 0..offsets.len() {
+            for j in (i+1)..offsets.len() {
+                let r1 = (offsets[i].0, offsets[i].1, sizes[i].0, sizes[i].1);
+                let r2 = (offsets[j].0, offsets[j].1, sizes[j].0, sizes[j].1);
+                // if crate::shape::rect_overlaps(&r1, &r2) {
+                //    return Vec::new();
+                // }
+            }
+        }
+        let mut wins = Vec::new();
+        let ptr = self.slice.as_ref().as_ptr();
+        let len = self.slice.as_ref().len();
+        unsafe {
+            for (off, sz) in offsets.iter().zip(sizes.iter()) {
+                let mut sub = ImageRef::from_ptr(ptr, len, self.width, *off, *sz).unwrap();
+                wins.push(sub);
+            }
+        }
+        wins
     }
     
     pub fn window_mut(

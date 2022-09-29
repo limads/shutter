@@ -40,6 +40,15 @@ pub struct OrientedEllipse {
     
 }
 
+impl OrientedEllipse {
+
+    pub fn coords(&self, img_height : usize) -> Option<EllipseCoords> {
+        let el : Ellipse = self.clone().into();
+        el.coords(img_height)
+    }
+    
+}
+
 impl Default for OrientedEllipse {
 
     fn default() -> Self {
