@@ -280,7 +280,7 @@ impl PointGraph {
             let min_x = pts.iter().min_by(|a, b| a.1.cmp(&b.1) ).copied().unwrap().1;
             let max_y = pts.iter().max_by(|a, b| a.0.cmp(&b.0) ).copied().unwrap().0;
             let max_x = pts.iter().max_by(|a, b| a.1.cmp(&b.1) ).copied().unwrap().1;
-            rects.insert(ix, (min_y, min_x, max_y - min_y, max_x - min_x));
+            rects.insert(ix, (min_y, min_x, (max_y - min_y)+1, (max_x - min_x)+1));
         }
         rects
     }
@@ -315,7 +315,22 @@ fn is_close(a : (usize, usize), b : (usize, usize)) -> bool {
     a.1.abs_diff(b.1) <= 1 && a.0.abs_diff(b.0) <= 1
 }
 
-fn draw_chain_random(chain : &ChainCode, img : &mut WindowMut<u8>) {
+pub fn draw_connected_chain_random(chain : &ChainCode, img : &mut WindowMut<u8>) {
+    img.fill(0);
+    let codes = chain.split_by_proximity(1);
+    for (_, code) in codes {
+        let r : f64 = rand::random();
+        for ch in code.chains() {
+            let color = (10.0 + r * 245.0) as u8;
+            for pt in ch.trajectory() {
+                img[pt] = color;
+            }
+        }
+    }
+}
+
+
+pub fn draw_chain_random(chain : &ChainCode, img : &mut WindowMut<u8>) {
     img.fill(0);
     for ch in chain.chains() {
         let r : f64 = rand::random();
@@ -378,7 +393,7 @@ fn chain() {
 }*/
 
 impl ChainCode {
-
+    
     fn chain_union_to_btree(&self, unions : UnionFind<usize>) -> BTreeMap<usize, ChainCode> {
         let mut dst : BTreeMap<usize, ChainCode> = BTreeMap::new();
         for i in 0..self.len() {
@@ -737,7 +752,11 @@ pub struct ChainIter<'a> {
 }
 
 impl ChainCode {
-
+    
+    pub fn count_points(&self) -> usize {
+        self.chains().fold(0, |count, chain| count + chain.len() )
+    }
+    
     pub fn len(&self) -> usize {
         self.starts.len()
     }
@@ -805,6 +824,27 @@ fn is_point_close(a : (usize, usize), b: (usize, usize), by : usize) -> bool {
 }
 
 impl<'a> Chain<'a> {
+
+    pub fn len(&self) -> usize {
+        // Sum 1 to count the start coordinate.
+        self.traj.len() + 1
+    }
+    
+    // Given a contiguous sequence of indices, split this chain in two by 
+    // removing the directions at those indices.
+    pub fn split(&self, range : Range<usize>) -> Option<(Chain, Chain)> {
+        let mut traj = self.trajectory();
+        let n_end_fst = range.start.checked_sub(1)?;
+        let end_fst = traj.nth(n_end_fst)?;
+        for _ in range.clone() {
+            let _ = traj.next();
+        }
+        let start_snd = traj.next()?;
+        Some((
+            Chain { start : self.start, end : end_fst, traj : &self.traj[..=n_end_fst] },
+            Chain { start : start_snd, end : self.end, traj : &self.traj[range.end..] }
+        ))
+    }
 
     pub fn close_to(&self, other : &Self, by : usize) -> Option<Link> {
         let start_start = is_point_close(self.start, other.start, by);

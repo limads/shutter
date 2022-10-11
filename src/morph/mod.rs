@@ -285,6 +285,14 @@ pub const BLOCK_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&[
     255, 255, 255
 ]);
 
+pub const BLOCK_5_KERNEL : Window<'static, u8> = Window::from_static::<25, 5>(&[
+    255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255,
+]);
+
 pub const BOX_KERNEL : Window<'static, u8> = Window::from_static::<9, 3>(&[
     255, 255, 255,
     255, 0, 255,

@@ -2,8 +2,21 @@ use nalgebra::*;
 use std::f32::consts::{SQRT_2, PI};
 use nalgebra_lapack;
 use serde::{Serialize, Deserialize};
+use std::mem;
 
-/* All ellipsis implement default by returning a unit-radius circle without a translation */ 
+pub trait Ellipsoid {
+
+    fn elongation(&self) -> f32;
+    
+    fn orientation(&self) -> f32;
+    
+    fn orientation_along_largest(&self) -> f32;
+    
+    fn coords(&self, img_height : usize) -> Option<EllipseCoords>;
+    
+}
+
+/* All ellipsis implement default by returning a unit-radius circle without a translation */
 
 /** Represents a translated and axis-aligned ellipse, i.e. the simple geometric function r = x^2/a^2 + y^2/b^2
 (as a function of cartesian coordinates) or (x, y) = (a*cos(theta), b*sin(theta)) (as a function of polar coordinates).
@@ -16,6 +29,35 @@ pub struct AlignedEllipse {
     pub center : Vector2<f32>,
     pub major_scale : f32,
     pub minor_scale : f32
+}
+
+impl AlignedEllipse {
+
+    pub fn elongation(&self) -> f32 {
+        if self.major_scale >= self.minor_scale {
+            self.major_scale / self.minor_scale
+        } else {
+            self.minor_scale / self.major_scale
+        }
+    }
+    
+    pub fn orientation(&self) -> f32 {
+        0.0
+    }
+    
+    pub fn orientation_along_largest(&self) -> f32 {
+        if self.major_scale >= self.minor_scale {
+            0.0
+        } else {
+            std::f32::consts::PI / 2.0
+        }
+    }
+    
+    pub fn coords(&self, img_height : usize) -> Option<EllipseCoords> {
+        let el : OrientedEllipse = self.clone().into();
+        el.coords(img_height)
+    }
+    
 }
 
 impl Default for AlignedEllipse {
@@ -42,6 +84,19 @@ pub struct OrientedEllipse {
 
 impl OrientedEllipse {
 
+    pub fn elongation(&self) -> f32 {
+        self.aligned.elongation()
+    }
+    
+    pub fn orientation(&self) -> f32 {
+        self.theta
+    }
+    
+    pub fn orientation_along_largest(&self) -> f32 {
+        let el : Ellipse = self.clone().into();
+        el.orientation_along_largest()
+    }
+    
     pub fn coords(&self, img_height : usize) -> Option<EllipseCoords> {
         let el : Ellipse = self.clone().into();
         el.coords(img_height)
@@ -60,7 +115,10 @@ impl Default for OrientedEllipse {
 /// Represents an oriented and translated ellipse in terms of a triplet of vectors: A pair
 /// of (major, minor) vector and a translation of their common origin (center).
 /// This converts to an Oriented ellipse by first subtracting center from the major and
-/// minor vectors, then by calculating the angle 
+/// minor vectors, then by calculating the angle. Notice the "major" and "minor" denomination
+/// do not mean one is larger than the other, but rather that the "major" is the axis that
+/// should be aligned to the x-axis in the corresponding OrientedEllipse repr; and the "minor"
+/// is the axis that should be aligned to the y-axis in the corresponding OrientedEllipse repr.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ellipse {
     pub center : Vector2<f32>,
@@ -144,20 +202,89 @@ fn full_angle(a : &Vector2<f32>, b : &Vector2<f32>) -> f32 {
     angle
 }
 
+#[derive(Clone, Debug)]
+pub struct EllipseEstimator {
+    pts : Vec<Vector2<f32>>,
+    A : DMatrix<f32>,
+    b : DVector<f32>,
+    A3 : DMatrix<f32>,
+    b3 : DVector<f32>
+}
+
+fn vector_orientation(v : &Vector2<f32>) -> f32 {
+    let normed = v.normalize();
+    normed[1].atan2(normed[0])
+}
+
+impl EllipseEstimator {
+
+    pub fn new() -> Self {
+        Self {
+            pts : Vec::new(),
+            A : DMatrix::zeros(24, 5),
+            b : DVector::zeros(24),
+            A3 : DMatrix::zeros(24, 3),
+            b3 : DVector::zeros(24)
+        }
+    }
+    
+    pub fn estimate_from_coords(&mut self, coords : &[(usize, usize)], shape : (usize, usize)) -> Result<Ellipse, &'static str> {
+        let mut pts = mem::take(&mut self.pts);
+        pts.clear();
+        for c in coords {
+            let pt = super::coord::coord_to_vec(*c, shape).ok_or("Unable to convert coord")?;
+            pts.push(pt);
+        }
+        let ans = self.estimate(&mut pts[..]);
+        self.pts = pts;
+        ans
+    }
+    
+    pub fn estimate(&mut self, pts : &mut [Vector2<f32>]) -> Result<Ellipse, &'static str> {
+        fit_ellipse_no_direct(pts, &mut self.A, &mut self.b, &mut self.A3, &mut self.b3)
+    }
+    
+}
+
 impl Ellipse {
 
+    // Ratio of the largest to smallest axis (favovring either major or minor axis).
+    pub fn elongation(&self) -> f32 {
+        let major = self.major_scale();
+        let minor = self.minor_scale();
+        major.max(minor) / (major.min(minor) + std::f32::EPSILON)
+    }
+    
+    /*pub fn estimate_iter_from_coords(coords : &[(usize, usize)], shape : (usize, usize), niter : usize, err_thr : f32) -> Result<Self, &'static str> {
+        let mut coords = coords.to_vec();
+        let mut el = Ellipse::default();
+        for i in 0..niter {
+            el = Self::estimate_from_coords(&coords, shape)?;
+            let n_before = coords.len();
+            for i in (0..n_before).rev() {
+                if let Some(e) = circumference_coord_error(&el, coords[i], shape) {
+                    println!("{}", e);
+                    if e > err_thr {
+                        coords.remove(i);
+                    }
+                }
+            }
+            if coords.len() == n_before {
+                return Ok(el);
+            }
+        }
+        Ok(el)
+    }*/
+    
     pub fn estimate_from_coords(coords : &[(usize, usize)], shape : (usize, usize)) -> Result<Self, &'static str> {
-        let pts : Result<Vec<_>, _> = coords.iter()
-            .map(|pt| super::coord::coord_to_vec(*pt, shape).ok_or("Unable to convert coord") )
-            .collect();
-        Self::estimate(&pts?[..])
+        EllipseEstimator::new().estimate_from_coords(coords, shape)
     }
 
     // This was based on the Opencv "direct" ellipse fitting implementation
     // available at modules/imgproc/src/shapedescr.cpp
-    pub fn estimate(pts : &[Vector2<f32>]) -> Result<Self, &'static str> {
+    pub fn estimate(pts : &mut [Vector2<f32>]) -> Result<Self, &'static str> {
         // fit_ellipse_direct(pts)
-        fit_ellipse_no_direct(pts)
+        EllipseEstimator::new().estimate(pts)
     }
 
     /*// Returns the angle of the major axis on the right quadrant
@@ -191,25 +318,18 @@ impl Ellipse {
     // fn sin_orientation()
 
     /// Returns the orientation of the major axis of the ellipse around its center in [-pi, pi].
+    /// The major axis is the one corresponding to the x-axis in the orientedellipse representation.
     pub fn orientation(&self) -> f32 {
-        // actually pi - this_result
-
-        /*If this is the angle resulting from no_direct:
-        CV_SWAP( box.size.width, box.size.height, tmp );
-        box.angle = (float)(90 + rp[4]*180/CV_PI);
+        vector_orientation(&self.major)
+    }
+    
+    /// Returns the orientation of the axis with the largest length in [-pi, pi].
+    pub fn orientation_along_largest(&self) -> f32 {
+        if self.major_scale() >= self.minor_scale() {
+            vector_orientation(&self.major)
+        } else {
+            vector_orientation(&self.minor)
         }
-        if( box.angle < -180 )
-            box.angle += 360;
-        if( box.angle > 360 )
-            box.angle -= 360;*/
-
-        let norm_major = self.major.normalize();
-        let mut angle = norm_major[1].atan2(norm_major[0]);
-        //if angle < 0. {
-        //    angle += 2.*PI;
-        //}
-        angle
-        // self.major.clone().angle(&Vector2::new(1., 0.))
     }
 
     // Lenght of the major axis. This equals the 'a' parameter for an axis-aligned ellipse.
@@ -223,19 +343,26 @@ impl Ellipse {
     }
 
     // Builds an ellipse from scales applied over the major and minor axes and
-    // angle of the major axis.
+    // signed angle of the major axis (i.e. angle as returned by atan2).
     pub fn new(center : Vector2<f32>, a : f32, b : f32, mut theta : f32) -> Ellipse {
         // Transform [0,2*pi] to atan2-like coordinates (-pi, pi); clockwise rotations are negative.
         if theta > PI {
             theta = 2.*PI - theta;
         }
         let rot_major = Rotation2::new(theta);
-        let rot_minor = if theta >= 0.0 {
-            Rotation2::new(theta + PI / 2.)
-        } else {
-            Rotation2::new(theta - PI / 2.)
-        };
         let major = a * (rot_major * Vector2::new(1., 0.));
+        
+        let rot_minor = if theta >= 0.0 {
+        
+            // If angle is in the positive half of the circle, set minor at + 90º quadrature
+            Rotation2::new(theta + PI / 2.)
+            
+        } else {
+        
+            // If angle is in the negative half of the circle, set minor at -90º quadrature
+            Rotation2::new(theta - PI / 2.)
+            
+        };
         let minor = b * (rot_minor * Vector2::new(1., 0.));
         Ellipse { center, major, minor }
     }
@@ -255,6 +382,11 @@ impl Ellipse {
 
 }
 
+// Represents a triplet of pixel buffer coordinates (center, arrow point of major axis
+// and arrow point of minor axis) that are close to an ellipse representation in the cartesian plane.
+// To build this object, an image dimension must be informed. The EllipseCoord is only retrieved
+// when the cartesian plane superimposed in the pixel buffer has valid 2D index bounds. y-coordinates
+// are inverted to 2D coordinate relative to top-left representation.
 /* Uses the ellipse (at the cartesian vector space) to index the image (in pixel space).
 This returns a triplet of coordinates: One at the ellipse center, and other two at the
 arrow points of the major and minor axes.  */
@@ -277,7 +409,7 @@ fn sum_abs_diff(pts : &[Vector2<f32>], c : &Vector2<f32>) -> f32 {
 	s
 }
 
-// Credit goes to the OpenCV implementation (imgproc::shapedescr) licensed under BSD.
+/*// Credit goes to the OpenCV implementation (imgproc::shapedescr) licensed under BSD.
 fn fit_ellipse_direct(points : &[Vector2<f32>]) -> Result<Ellipse, &'static str> {
 
     let n = points.len();
@@ -463,12 +595,18 @@ fn fit_ellipse_direct(points : &[Vector2<f32>]) -> Result<Ellipse, &'static str>
 
     let center = Vector2::new(x0, y0);
     Ok(Ellipse::new(center, length_major, length_minor, angle))
-}
+}*/
 
-fn populate_points(A : &mut DMatrix<f32>, b : &mut DVector<f32>, points_copy : &[Vector2<f32>], c : &Vector2<f32>, scale : f32) {
-	let n = points_copy.len();
+fn populate_points(
+    A : &mut DMatrixSliceMut<f32>, 
+    b : &mut DVectorSliceMut<f32>, 
+    points : &[Vector2<f32>], 
+    c : &Vector2<f32>, 
+    scale : f32
+) {
+	let n = points.len();
     for i in 0..n {
-        let mut p = points_copy[i].clone();
+        let mut p = points[i].clone();
         p -= c;
         let px = p[0]*scale;
         let py = p[1]*scale;
@@ -484,16 +622,27 @@ fn populate_points(A : &mut DMatrix<f32>, b : &mut DVector<f32>, points_copy : &
 // use crate::prelude::Image;
 // use crate::draw::*;
 
+// Was 1e-8
+const SVD_TOL : f32 = 1.0e-4;
+
 // Credit goes to the OpenCV implementation (imgproc::shapedescr) licensed under BSD.
-fn fit_ellipse_no_direct(points : &[Vector2<f32>]) -> Result<Ellipse, &'static str> {
+fn fit_ellipse_no_direct(
+    points : &mut [Vector2<f32>], 
+    A : &mut DMatrix<f32>, 
+    b : &mut DVector<f32>, 
+    A3 : &mut DMatrix<f32>, 
+    b3 : &mut DVector<f32>
+) -> Result<Ellipse, &'static str> {
 	let n = points.len();
 
 	if n < 5 {
 		return Err("Too few points");
 	}
-
+    
     // TODO rename to centered_points
-    let mut points_copy : Vec<_> = points.iter().cloned().collect();
+    // let mut points_copy : Vec<_> = points.iter().cloned().collect();
+    
+    // Center all points
     let mut c = Vector2::new(0., 0.);
     for pt in points.iter() {
     	c += pt;
@@ -507,32 +656,41 @@ fn fit_ellipse_no_direct(points : &[Vector2<f32>]) -> Result<Ellipse, &'static s
     	pt -= c;
     	s += pt[0].abs() + pt[1].abs();
     }*/
-    let s = sum_abs_diff(points, &c);
+    let s = sum_abs_diff(&points, &c);
 	let scale = 100. / s.max(std::f32::EPSILON);
 
 	// W holds the singular values; u the left singular vectors; vt the right singular vectors.
     // SVDecomp(A, w, u, vt);
 
-    let mut A = DMatrix::zeros(n, 5);
-    let mut b = DVector::zeros(n);
-    populate_points(&mut A, &mut b, &points_copy, &c, scale);
-    let mut svd = linalg::SVD::new(A.clone(), true, true);
+    assert!(A.nrows() == b.nrows());
+    if n > A.nrows() {
+        A.resize_vertically_mut(n, 0.0);
+        b.resize_vertically_mut(n, 0.0);
+    }
+    let mut A = A.rows_mut(0, n);
+    let mut b = b.rows_mut(0, n);
+    
+    // let mut A = DMatrix::zeros(n, 5);
+    // let mut b = DVector::zeros(n);
+    populate_points(&mut A, &mut b, &points, &c, scale);
+    
+    let mut A_svd = linalg::SVD::new(A.clone_owned(), true, true);
 
-    if(svd.singular_values[0]*std::f32::EPSILON > svd.singular_values[4]) {
+    if(A_svd.singular_values[0]*std::f32::EPSILON > A_svd.singular_values[4]) {
         let eps = ( s / (n as f32 * 2.) * 1.0e-3);
         for i in 0..n {
-            let p = points_copy[i] + get_ofs(i as i32, eps);
-            points_copy[i] = p;
+            let p = points[i] + get_ofs(i as i32, eps);
+            points[i] = p;
         }
-        populate_points(&mut A, &mut b, &points_copy, &c, scale);
-    	svd = linalg::SVD::new(A, true, true);
+        populate_points(&mut A, &mut b, &points, &c, scale);
+    	A_svd = linalg::SVD::new(A.clone_owned(), true, true);
     }
 
     // SVBackSubst(w, u, vt, b, x);
     // SVBackSubst either solves the system if it has exactly one solution OR gives the least squares
     // best solution if it has many solutions, so it is not strictly equivalent to solve.
     // The x vector (backed by gfp array) is written with the result of SVBackSubst (5x1)
-    let gfp = svd.solve(&b, 10.0e-8).unwrap();
+    let gfp = A_svd.solve(&b, SVD_TOL).or(Err("SVD for A Failed"))?;
 
     // now use general-form parameters A - E to find the ellipse center:
     // differentiate general form wrt x/y to get two equations for cx and cy
@@ -544,14 +702,19 @@ fn fit_ellipse_no_direct(points : &[Vector2<f32>]) -> Result<Ellipse, &'static s
     A2[(1, 1)] = 2. * gfp[1];
     b2[0] = gfp[3];
     b2[1] = gfp[4];
-    let rp = linalg::SVD::new(A2, true, true).solve(&b2, 1.0e-8).unwrap();
+    let A2_svd = linalg::SVD::new_unordered(A2, true, true);
+    let rp = A2_svd.solve(&b2, SVD_TOL).or(Err("SVD for A2 Failed"))?;
 
     // re-fit for parameters A - C with those center coordinates
-    let mut A3 = DMatrix::<f32>::zeros(n, 3);
-    let mut b3 = DVector::<f32>::zeros(n);
+    if n > A3.nrows() {
+        A3.resize_vertically_mut(n, 0.0);
+        b3.resize_vertically_mut(n, 0.0);
+    }
+    let mut A3 = A3.rows_mut(0, n);
+    let mut b3 = b3.rows_mut(0, n);
 
     for i in 0..n {
-        let mut p = points_copy[i].clone();
+        let mut p = points[i].clone();
         p -= c;
         let px = p[0]*scale;
         let py = p[1]*scale;
@@ -562,7 +725,7 @@ fn fit_ellipse_no_direct(points : &[Vector2<f32>]) -> Result<Ellipse, &'static s
     }
 
     // The old gfp buffer (nx1) was re-used here, but now only the first 3 entries.
-    let x3 = linalg::SVD::new(A3, true, true).solve(&b3, 1.0e-8).unwrap();
+    let x3 = linalg::SVD::new_unordered(A3.clone_owned(), true, true).solve(&b3, SVD_TOL).or(Err("SVD for A3 Failed"))?;
 
     // Original impl stored angle in rp[4] because it was unused.
     let angle = -0.5 * x3[2].atan2(x3[1] - x3[0]); // convert from APP angle usage
@@ -596,7 +759,6 @@ fn fit_ellipse_no_direct(points : &[Vector2<f32>]) -> Result<Ellipse, &'static s
     let center = Vector2::new(x0, y0);
     Ok(Ellipse::new(center, length_major, length_minor, angle))
 }
-
 
 /*// This is calculated via the cosine rule: (a.b)/(|a||b|)
 // let angle_pt = (pt.clone() - &el.center ).angle(&el.major);
@@ -689,6 +851,15 @@ pub fn generate_ellipse_points(
         pts.push(pt);
     }
     pts
+}
+
+pub fn generate_ellipse_coords(
+    el : &OrientedEllipse,
+    n : usize,
+    shape : (usize, usize)
+) -> Vec<(usize, usize)> {
+    let mut pts = crate::shape::ellipse::generate_ellipse_points(el, n);
+    pts.iter().filter_map(move |pt| crate::shape::coord::point_to_coord(pt, shape) ).collect()
 }
 
 /*// cargo test --all-features --lib -- fit_ellipse_test --nocapture

@@ -443,6 +443,10 @@ impl Quadrilateral for Rect {
 
 }
 
+pub fn point_manhattan_distance(a : &(usize, usize), b : &(usize, usize)) -> usize {
+    a.0.abs_diff(b.0) + a.1.abs_diff(b.1)
+}
+
 pub fn pair_distance(a : (usize, usize), b : (usize, usize)) -> (i16, i16) {
     ((a.0 as i16 - b.0 as i16).abs(), (a.1 as i16 - b.1 as i16).abs())
 }
@@ -1153,8 +1157,26 @@ pub fn rect_enclosing_pair(
     r2 : &(usize, usize, usize, usize)
 ) -> (usize, usize, usize, usize) {
     let tl = (r1.0.min(r2.0), r1.1.min(r2.1));
-    let br = ((tl.0 + r1.2).max(tl.0 + r2.2), (tl.1 + r1.3).max(tl.1 + r2.3));
+    let br = ((r1.0 + r1.2).max(r2.0 + r2.2), (r1.1 + r1.3).max(r2.1 + r2.3));
     (tl.0, tl.1, br.0 - tl.0, br.1 - tl.1)
+}
+
+// This might be wrong?
+pub fn rect_contacts2(r1 : &(usize, usize, usize, usize), r2 : &(usize, usize, usize, usize)) -> bool {
+
+    // if rect_overlaps(r1, r2) {
+    //    return false;
+    // }
+
+    let tl_1 = top_left_coordinate(r1);
+    let tl_2 = top_left_coordinate(r2);
+    let br_1 = bottom_right_coordinate(r1);
+    let br_2 = bottom_right_coordinate(r2);
+
+    ((br_1.0 as i32 - br_2.0 as i32 <= 1) && vertically_aligned(r1, r2)) ||
+    ((br_1.1 as i32 - tl_2.1 as i32 <= 1) && horizontally_aligned(r1, r2)) ||
+    ((tl_1.0 as i32 - br_2.0 as i32 <= 1) && vertically_aligned(r1, r2)) ||
+    ((tl_1.1 as i32 - br_2.1 as i32 <= 1) && horizontally_aligned(r1, r2))
 }
 
 // This might be wrong?
@@ -2245,14 +2267,14 @@ pub mod cvellipse {
 // }
 
 pub struct CircleFit {
-    pub center : Vector2<f64>,
-    pub radius : f64
+    pub center : Vector2<f32>,
+    pub radius : f32
 }
 
 impl CircleFit {
 
-    pub fn calculate_from_points(ptsf : &[Vector2<f64>]) -> Option<Self> {
-        let n = ptsf.len() as f64;
+    pub fn calculate_from_points(ptsf : &[Vector2<f32>]) -> Option<Self> {
+        let n = ptsf.len() as f32;
         let (mut center_x, mut center_y) = ptsf.iter().fold((0.0, 0.0), |acc, pt| (acc.0 + pt[0], acc.1 + pt[1]) );
         center_x /= n;
         center_y /= n;
@@ -2275,23 +2297,27 @@ impl CircleFit {
         Some(Self { center, radius })
     }
 
-    pub fn calculate(pts : &[(u16, u16)], img_height : u16) -> Option<Self> {
-        let ptsf : Vec<Vector2<f64>> = pts.iter().map(|pt| Vector2::new(pt.1 as f64, (img_height - pt.0) as f64) ).collect();
+    pub fn calculate(
+        pts : &[(usize, usize)], 
+        img_height : usize
+    ) -> Option<Self> {
+        let ptsf : Vec<Vector2<f32>> = pts.iter()
+            .map(|pt| Vector2::new(pt.1 as f32, (img_height - pt.0) as f32) ).collect();
         Self::calculate_from_points(&ptsf[..])
     }
 
-    pub fn center_coord(&self, img_height : u16) -> Option<(u16, u16)> {
-        if (self.center[0] > 0. && self.center[1] > 0.) && (self.center[1] as u16) < img_height {
-            Some((img_height - self.center[1] as u16, self.center[0] as u16))
+    pub fn center_coord(&self, img_height : usize) -> Option<(usize, usize)> {
+        if (self.center[0] > 0. && self.center[1] > 0.) && (self.center[1] as usize) < img_height {
+            Some((img_height - self.center[1] as usize, self.center[0] as usize))
         } else {
             None
         }
     }
 
     // variance of the random variable (dist(pt, center) - radius), which is a measure of fit quality.
-    pub fn radius_variance(&self, pts : &[(u16, u16)], img_height : u16) -> f64 {
-        let ptsf : Vec<Vector2<f64>> = pts.iter().map(|pt| Vector2::new(pt.1 as f64, (img_height - pt.0) as f64) ).collect();
-        let n = ptsf.len() as f64;
+    pub fn radius_variance(&self, pts : &[(u16, u16)], img_height : u16) -> f32 {
+        let ptsf : Vec<Vector2<f32>> = pts.iter().map(|pt| Vector2::new(pt.1 as f32, (img_height - pt.0) as f32) ).collect();
+        let n = ptsf.len() as f32;
         ptsf.iter().fold(0.0, |acc, pt| acc + ((pt - &self.center).magnitude() - self.radius).powf(2.)  ) / n
     }
 
