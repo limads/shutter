@@ -33,6 +33,14 @@ pub struct AlignedEllipse {
 
 impl AlignedEllipse {
 
+    pub fn major_scale(&self) -> f32 {
+        self.major_scale
+    }
+    
+    pub fn minor_scale(&self) -> f32 {
+        self.minor_scale
+    }
+    
     pub fn elongation(&self) -> f32 {
         if self.major_scale >= self.minor_scale {
             self.major_scale / self.minor_scale
@@ -84,6 +92,14 @@ pub struct OrientedEllipse {
 
 impl OrientedEllipse {
 
+    pub fn major_scale(&self) -> f32 {
+        self.aligned.major_scale
+    }
+    
+    pub fn minor_scale(&self) -> f32 {
+        self.aligned.minor_scale
+    }
+    
     pub fn elongation(&self) -> f32 {
         self.aligned.elongation()
     }
