@@ -29,6 +29,7 @@ use std::any::{TypeId};
 use std::marker::PhantomData;
 use nalgebra::Vector2;
 use nalgebra::Complex;
+use std::borrow::ToOwned;
 
 #[cfg(feature="opencv")]
 use nalgebra::{Matrix3, Vector3};
@@ -36,7 +37,7 @@ use nalgebra::{Matrix3, Vector3};
 // use crate::io;
 
 #[cfg(feature="ipp")]
-pub(crate) mod ipputils;
+pub mod ipputils;
 
 #[cfg(feature="opencv")]
 pub mod cvutils;
@@ -434,6 +435,86 @@ where
     }
     
 }
+
+/*impl<N, S> Borrow<ImageRef<N>> for Image<S>
+where
+    S : Storage<N>
+{
+
+    fn borrow(&self) -> &Borrowed {
+    
+    }
+    
+}*/
+
+use either::Either;
+
+pub enum MutableImage<'a, N> {
+    Borrowed(ImageMut<'a, N>),
+    Owned(ImageBuf<N>)
+}
+
+impl<'a, N> MutableImage<'a, N> 
+where
+    N : Pixel
+{
+
+    pub fn from_like<S, T>(mut dst : Option<&'a mut Image<N, T>>, s : &Image<N, S>) -> Self 
+    where
+        S : Storage<N>,
+        T : StorageMut<N> + 'a 
+    {
+        match dst {
+            Some(mut d) => MutableImage::from(Either::Left(d.full_window_mut())),
+            None => MutableImage::from(Either::Right(s.shape()))
+        }
+    }
+    
+    pub fn from(mut img_or_size : Either<ImageMut<'a, N>, Size>) -> Self
+    {
+        match img_or_size {
+            Either::Left(mut img) => MutableImage::Borrowed(img),
+            Either::Right(shape) => MutableImage::Owned(unsafe { Image::new_empty(shape.0, shape.1) })
+        }
+    }
+    
+    pub fn full_window_mut(&'a mut self) -> ImageMut<'a, N> {
+        match self {
+            MutableImage::Borrowed(m) => m.full_window_mut(),
+            MutableImage::Owned(buf) => buf.full_window_mut()
+        }
+    }
+    
+    pub fn window_mut(&'a mut self, off : Offset, sz : Size) -> Option<ImageMut<'a, N>> {
+        match self {
+            MutableImage::Borrowed(m) => m.window_mut(off, sz),
+            MutableImage::Owned(buf) => buf.window_mut(off, sz)
+        }
+    }
+    
+}
+
+pub enum ImmutableImage<'a, N> {
+    Borrowed(ImageRef<'a, N>),
+    Owned(ImageBuf<N>)
+}
+
+/*impl<N, S> ToOwned for Image<N, S>
+where
+    S : Storage<N>
+{
+
+    type Owned = ImageBuf<N>;
+
+    fn to_owned(&self) -> ImageBuf<N> {
+        self.clone_owned()
+    }
+
+    fn clone_into(&self, target: &mut Self::Owned) { 
+        unimplemented!()
+    }
+    
+}*/
 
 impl<P, S> Image<P, S> 
 where
@@ -960,6 +1041,16 @@ where
         }
     }
 
+    pub fn new_unallocated() -> Self {
+        Self { 
+            slice : Vec::new().into_boxed_slice(), 
+            width : 0, 
+            offset : (0, 0), 
+            sz : (0, 0),
+            _px : PhantomData
+        }
+    }
+    
     pub fn from_rows<const R : usize, const C : usize>(pxs : [[N; C]; R]) -> Self {
         let mut slice : Vec<N> = Vec::with_capacity(R*C);
         for r in pxs {
@@ -1568,7 +1659,7 @@ impl<'a> Window<'a, u8> {
     }
 
     pub fn nonzero_pixels(&'a self, px_spacing : usize) -> impl Iterator<Item=&'a u8> +'a + Clone {
-        self.pixels(px_spacing).filter(|px| **px > 0 )
+        self.pixels(px_spacing).filter(|px| **px != 0 )
     }
 
     pub fn masked_pixels(&'a self, mask : &'a Window<'_, u8>) -> impl Iterator<Item=&'a u8> +'a + Clone {

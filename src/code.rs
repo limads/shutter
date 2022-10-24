@@ -15,6 +15,7 @@ use std::cmp::Ordering;
 use num_traits::bounds::Bounded;
 use nalgebra::{Point2, Vector2};
 use std::ops::AddAssign;
+use crate::gray::Foreground;
 
 /* Represents a binary image by a set of foreground pixel coordinates. Useful when
 objects are expected to be speckle-like. For dense objects, consider using RunLengthEncoding
@@ -263,6 +264,7 @@ impl PointCode {
 }
 
 // Establish edges between points that are close together.
+#[derive(Debug, Clone)]
 pub struct PointGraph {
 
     pub graph : UnGraph<(usize, usize), ()>,
@@ -273,6 +275,13 @@ pub struct PointGraph {
 
 impl PointGraph {
 
+    pub fn new() -> Self {
+        Self {
+            graph : UnGraph::new_undirected(),
+            uf : UnionFind::new(0)
+        }
+    }
+    
     pub fn enclosing_rects(&self) -> BTreeMap<NodeIndex<u32>, (usize, usize, usize, usize)> {
         let mut rects = BTreeMap::new();
         for (ix, pts) in self.groups() {
@@ -1429,6 +1438,51 @@ fn find_at_row_segment(rles : &mut Vec<RunLength>, w : &Window<i32>, r : usize, 
     }
 }
 
+#[test]
+fn rle_distinct() {
+
+    use crate::draw::*;
+    use crate::gray::MedianCutQuantization;
+    use crate::gray::Quantization;
+    
+    let mut buf = crate::io::decode_from_file("/home/diego/Downloads/pinpoint.png").unwrap();
+    let mut qt = MedianCutQuantization::new(4, None);
+    qt.quantize_to(&buf.clone(), &mut buf);
+    let rles = RunLengthCode::encode_distinct(&buf, None);
+    
+    let keys : Vec<u8> = rles.keys().cloned().collect();
+    let mut rects_b = BTreeMap::new();
+    for key in &keys {
+        let graph = rles[key].graph();
+        let rects : Vec<_> = graph.outer_rects(None).values().cloned().collect();
+        rects_b.insert(key.clone(), rects);
+    }
+    
+    /*for k1 in &keys {
+        for k2 in &keys {
+            if k1 == k2 {
+                continue;
+            }
+            for i in 0..rects_b[k1].len() {
+                for j in (0..rects_b[k2].len()).rev() {
+                    if crate::shape::rect_contacts3(&rects_b[k1][i], &rects_b[k2][j]) && k1.abs_diff(*k2) <= 8 {
+                        rects_b.get_mut(k1).unwrap()[i] = crate::shape::rect_enclosing_pair(&rects_b[k1][i], &rects_b[k2][j]);
+                        rects_b.get_mut(&k2).unwrap().remove(j);
+                    }
+                }
+            }
+        }
+    }*/
+    
+    for (_, rects) in rects_b.iter() {
+        let mut buf = buf.clone();
+        for r in rects {
+            buf.draw(Mark::Rect((r.0, r.1), (r.2, r.3)), 255);
+        }
+        buf.show();
+    }
+}
+
 fn find_row_rles(
     valid_col_ranges : &mut Vec<Range<usize>>,
     rles : &mut Vec<RunLength>,
@@ -1646,6 +1700,60 @@ impl RunLengthCode {
         let mut r = 0;
     }
 
+    /* pixel values 255 and 0 cannot be used as a labels. This algorithm first calculates a binary
+    image with continuities in labels set to 255 and discontinuities between labels set to zero.
+    It verifies the actual color labels only once per RLE. It does not represent the discontinuities
+    between label patches, nor does it represents RLEs with size smaller than 3. Optionally receive
+    an shif_diff buff of the same size as labels to save up on an extra image allocation. */
+    pub fn encode_distinct<S>(
+        labels : &Image<u8, S>, 
+        shift_diff : Option<&mut ImageMut<u8>>
+    ) -> BTreeMap<u8, RunLengthCode>
+    where
+        S : Storage<u8>
+    {
+        let sz_reduced = (labels.height(), labels.width()-1);
+        let mut shift_diff_m = MutableImage::from_like(shift_diff, labels);
+        let mut shift_diff = shift_diff_m.window_mut((0, 0), sz_reduced).unwrap();
+        
+        let left_labels = labels.window((0, 0), sz_reduced).unwrap();
+        let right_labels = labels.window((0, 1), sz_reduced).unwrap();
+        shift_diff.copy_from(&left_labels);
+        shift_diff.abs_diff_assign(&right_labels);
+        shift_diff.truncate_inplace(Foreground::Exactly(0), 255);
+        shift_diff.truncate_inplace(Foreground::Below(255), 0);
+        let mut global_rle = RunLengthCode::calculate(&shift_diff);
+        let mut color_rles : BTreeMap<u8, RunLengthCode> = BTreeMap::new();
+        
+        for rl in global_rle.rles.drain(..) {
+            if rl.length < 3 {
+                continue;
+            }
+            let color = labels[rl.middle_point()];
+            assert!(color != 0);
+            assert!(color != 255);
+            if let Some(code) = color_rles.get_mut(&color) {
+                code.rles.push(rl.clone());
+            } else {
+                let mut rles = vec![rl];
+                color_rles.insert(color, RunLengthCode { rles, rows : Vec::new() });
+            }
+        }
+        
+        for (_, rle) in color_rles.iter_mut() {
+            let mut n = 0;
+            let mut rows = Vec::new();
+            for row_group in &rle.rles.iter().group_by(|r| r.start.0 ) {
+                let end = n + row_group.1.count();
+                rows.push(Range { start : n, end });
+                n = end;
+            }
+            rle.rows = rows;
+        }
+        
+        color_rles
+    }
+    
     // Find RLEs by bisecting over running sum over rows only (each new row
     // start at zero, and goess up to 256 at the final column if we are at a u8 image).
     // Although slower than bisecting over a full accumulated image, since there is still
@@ -1709,7 +1817,10 @@ impl RunLengthCode {
         verify_rle_state(&self);
     }
 
-    pub fn calculate(w : &Window<u8>) -> Self {
+    pub fn calculate<S>(w : &Image<u8, S>) -> Self 
+    where
+        S : Storage<u8>
+    {
         let mut rle = Self::default();
         rle.update(w);
         rle
@@ -1724,7 +1835,10 @@ impl RunLengthCode {
     rows into 4 images with dimensions n/4 x m, running it separately on the images,
     then polling the results back together.
     */
-    pub fn update(&mut self, w : &Window<u8>) {
+    pub fn update<S>(&mut self, w : &Image<u8, S>) 
+    where
+        S : Storage<u8>
+    {
         self.rles.clear();
         self.rows.clear();
         let mut last_rle : Option<RunLength> = None;
@@ -1732,7 +1846,7 @@ impl RunLengthCode {
 
             let mut curr_range = Range { start : self.rles.len(), end : self.rles.len() };
 
-            update_range(w, r, 0..w.width(), &mut last_rle, &mut curr_range, &mut self.rles);
+            update_range(&w.full_window(), r, 0..w.width(), &mut last_rle, &mut curr_range, &mut self.rles);
 
             // Push any remaining RunLenghts that haven't ended before the last column.
             if let Some(rle) = last_rle.take() {

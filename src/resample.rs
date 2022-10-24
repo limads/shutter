@@ -19,6 +19,7 @@ use crate::image::*;
 pub use ripple::resample::*;
 use std::fmt::Debug;
 use std::any::Any;
+use crate::image::ipputils::Resize;
 
 impl<N, S, T> Resample<ImageBuf<N>, Image<N, T>> for Image<N, S>
 where
@@ -46,7 +47,7 @@ where
 
         #[cfg(feature="ipp")]
         unsafe {
-            crate::image::ipputils::resize(&self.full_window(), &mut out.full_window_mut());
+            crate::image::ipputils::resize(&self.full_window(), &mut out.full_window_mut(), Resize::Nearest);
             return;
         }
 
@@ -57,7 +58,7 @@ where
 
         #[cfg(feature="ipp")]
         unsafe {
-            crate::image::ipputils::resize(&self.full_window(), &mut out.full_window_mut());
+            crate::image::ipputils::resize(&self.full_window(), &mut out.full_window_mut(), Resize::Nearest);
             return;
         }
 

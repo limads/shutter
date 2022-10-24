@@ -1161,6 +1161,37 @@ pub fn rect_enclosing_pair(
     (tl.0, tl.1, br.0 - tl.0, br.1 - tl.1)
 }
 
+#[test]
+fn rect_contact() {
+    assert!([
+        rect_contacts3(&(0,0,10,10), &(10,10,10,10)),
+        rect_contacts3(&(10,10,10,10), &(0,0,10,10)),
+        rect_contacts3(&(11,11,10,10), &(0,0,10,10)),
+        rect_contacts3(&(0,0,10,10), &(11,11,10,10)),
+    ] == [true, true, false, false]);
+}
+
+pub fn rect_contacts3(
+    r1 : &(usize, usize, usize, usize), 
+    r2 : &(usize, usize, usize, usize)
+) -> bool {
+
+    let tl_1 = top_left_coordinate(r1);
+    let tl_2 = top_left_coordinate(r2);
+    let br_1 = bottom_right_coordinate(r1);
+    let br_2 = bottom_right_coordinate(r2);
+    
+	if tl_1.1 > br_2.1 || tl_2.1 > br_1.1 {
+	    return false;
+	}
+
+	if tl_1.0 > br_2.0 || tl_2.0 > br_1.0 {
+	    return false;
+	}
+
+	true
+}
+
 // This might be wrong?
 pub fn rect_contacts2(r1 : &(usize, usize, usize, usize), r2 : &(usize, usize, usize, usize)) -> bool {
 
@@ -2010,6 +2041,15 @@ pub fn circumference_iter(circ : ((usize, usize), f32), step_rad : f32) -> impl 
     })
 }
 
+/*pub fn rect_to_polygon(r : (usize, usize, usize, usize)) -> parry2d::ConvexPolygon {
+    parry2d::ConvexPolygon::from_convex_hull(&[
+        Point2::new(r.1 as f32, r.0 as f32),
+        Point2::new(r.1 as f32 + r.3 as f32, r.0 as f32),
+        Point2::new(r.1 as f32 + r.3 as f32, r.0 as f32 + r.2 as f32),
+        Point2::new(r.1 as f32, r.0 as f32 + r.2 as f32)
+    ]).unwrap()
+}*/
+
 /*
 Explores the projection matrix that explains the best projective transform between two planes.
 See https://docs.opencv.org/3.4/d9/dab/tutorial_homography.html
@@ -2269,6 +2309,17 @@ pub mod cvellipse {
 pub struct CircleFit {
     pub center : Vector2<f32>,
     pub radius : f32
+}
+
+pub fn rect_area(a : &(usize, usize, usize, usize)) -> usize {
+    a.2 * a.3
+}
+
+pub fn rect_intersection(a : &(usize, usize, usize, usize), b : &(usize, usize, usize, usize)) -> Option<(usize, usize, usize, usize)> {
+    use parry2d::utils::Interval;
+    let vint = Interval(a.0, a.0 + a.2).intersect(Interval(b.0, b.0 + b.2))?;
+    let hint = Interval(a.1, a.1 + a.3).intersect(Interval(b.1, b.1 + b.3))?;
+    Some((vint.0, hint.0, vint.1 - vint.0, hint.1 - hint.0))
 }
 
 impl CircleFit {

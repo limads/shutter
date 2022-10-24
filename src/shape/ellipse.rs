@@ -3,6 +3,7 @@ use std::f32::consts::{SQRT_2, PI};
 use nalgebra_lapack;
 use serde::{Serialize, Deserialize};
 use std::mem;
+use nalgebra::linalg::SVD;
 
 pub trait Ellipsoid {
 
@@ -12,7 +13,7 @@ pub trait Ellipsoid {
     
     fn orientation_along_largest(&self) -> f32;
     
-    fn coords(&self, img_height : usize) -> Option<EllipseCoords>;
+    fn coords(&self, size : (usize, usize)) -> Option<EllipseCoords>;
     
 }
 
@@ -61,9 +62,9 @@ impl AlignedEllipse {
         }
     }
     
-    pub fn coords(&self, img_height : usize) -> Option<EllipseCoords> {
+    pub fn coords(&self, size : (usize, usize)) -> Option<EllipseCoords> {
         let el : OrientedEllipse = self.clone().into();
-        el.coords(img_height)
+        el.coords(size)
     }
     
 }
@@ -113,9 +114,9 @@ impl OrientedEllipse {
         el.orientation_along_largest()
     }
     
-    pub fn coords(&self, img_height : usize) -> Option<EllipseCoords> {
+    pub fn coords(&self, size : (usize, usize)) -> Option<EllipseCoords> {
         let el : Ellipse = self.clone().into();
-        el.coords(img_height)
+        el.coords(size)
     }
     
 }
@@ -240,7 +241,7 @@ impl EllipseEstimator {
             A : DMatrix::zeros(24, 5),
             b : DVector::zeros(24),
             A3 : DMatrix::zeros(24, 3),
-            b3 : DVector::zeros(24)
+            b3 : DVector::from_element(24, 1.0)
         }
     }
     
@@ -263,6 +264,17 @@ impl EllipseEstimator {
 }
 
 impl Ellipse {
+
+    pub fn rotate(&self, angle : f32) -> Self {
+        let r = Rotation2::new(angle);
+        let major = r.clone() * &self.major;
+        let minor = r * &self.minor;
+        Self {
+            major,
+            minor,
+            center : self.center
+        }
+    }
 
     // Ratio of the largest to smallest axis (favovring either major or minor axis).
     pub fn elongation(&self) -> f32 {
@@ -383,14 +395,28 @@ impl Ellipse {
         Ellipse { center, major, minor }
     }
 
-    pub fn coords(&self, img_height : usize) -> Option<EllipseCoords> {
-        let c = ((img_height as f32 - self.center[1]) as usize, self.center[0] as usize);
+    pub fn coords(&self, size: (usize, usize)) -> Option<EllipseCoords> {
+    
+        let major_t = Vector2::new(self.center[0] + self.major[0], self.center[1] + self.major[1]);
+        let minor_t = Vector2::new(self.center[0] + self.minor[0], self.center[1] + self.minor[1]);
+        
+        if major_t[0] < 0.0 || major_t[0] > size.1 as f32 || major_t[1] < 0.0 || major_t[1] > size.0 as f32 {
+            println!("major = {:?}", major_t);
+            return None;
+        }
+        
+        if minor_t[0] < 0.0 || minor_t[0] > size.1 as f32 || minor_t[1] < 0.0 || minor_t[1] > size.0 as f32 {
+            println!("minor = {:?}", minor_t);
+            return None;
+        }
+        
+        let c = ((size.0 as f32 - self.center[1]) as usize, self.center[0] as usize);
         let dst_major = (
-            (img_height as f32 - (c.0 as f32 + self.major[1])) as usize,
+            (size.0 as f32 - (c.0 as f32 + self.major[1])) as usize,
             (c.1 as f32 + self.major[0]) as usize
         );
         let dst_minor = (
-            (img_height as f32 - (c.0 as f32 + self.minor[1])) as usize,
+            (size.0 as f32 - (c.0 as f32 + self.minor[1])) as usize,
             (c.1 as f32 + self.minor[0]) as usize
         );
         Some(EllipseCoords { center : c, major : dst_major, minor : dst_minor })
@@ -641,6 +667,31 @@ fn populate_points(
 // Was 1e-8
 const SVD_TOL : f32 = 1.0e-4;
 
+// This was taken from the plain SVD::solve from nalgebra, since the lapack
+// version does not have the solve method.
+fn solve_lapack_svd<S>(
+    svd : &nalgebra_lapack::SVD<f32, Dynamic, Dynamic>, 
+    b : &Matrix<f32, Dynamic, U1, S>,
+    eps : f32
+) -> DVector<f32> 
+where
+    S : Storage<f32, Dynamic, U1>
+{
+    let mut ut_b = svd.u.ad_mul(b);
+    for j in 0..ut_b.ncols() {
+        let mut col = ut_b.column_mut(j);
+        for i in 0..svd.singular_values.len() {
+            let val = svd.singular_values[i].clone();
+            if val > eps {
+                col[i] = col[i].clone().unscale(val);
+            } else {
+                col[i] = 0.0;
+            }
+        }
+    }
+    svd.vt.ad_mul(&ut_b)
+}
+
 // Credit goes to the OpenCV implementation (imgproc::shapedescr) licensed under BSD.
 fn fit_ellipse_no_direct(
     points : &mut [Vector2<f32>], 
@@ -655,9 +706,6 @@ fn fit_ellipse_no_direct(
 		return Err("Too few points");
 	}
     
-    // TODO rename to centered_points
-    // let mut points_copy : Vec<_> = points.iter().cloned().collect();
-    
     // Center all points
     let mut c = Vector2::new(0., 0.);
     for pt in points.iter() {
@@ -666,17 +714,8 @@ fn fit_ellipse_no_direct(
     c.scale_mut(1. / n as f32);
 
     // This is the same step as the direct method. Write a dedicated method for it.
-    /*let mut s = 0.;
-    for p in points_copy.iter() {
-    	let mut pt = p.clone();
-    	pt -= c;
-    	s += pt[0].abs() + pt[1].abs();
-    }*/
     let s = sum_abs_diff(&points, &c);
 	let scale = 100. / s.max(std::f32::EPSILON);
-
-	// W holds the singular values; u the left singular vectors; vt the right singular vectors.
-    // SVDecomp(A, w, u, vt);
 
     assert!(A.nrows() == b.nrows());
     if n > A.nrows() {
@@ -691,6 +730,7 @@ fn fit_ellipse_no_direct(
     populate_points(&mut A, &mut b, &points, &c, scale);
     
     let mut A_svd = linalg::SVD::new(A.clone_owned(), true, true);
+    // let mut A_svd = nalgebra_lapack::SVD::new(A.clone_owned()).ok_or("SVD failed")?;
 
     if(A_svd.singular_values[0]*std::f32::EPSILON > A_svd.singular_values[4]) {
         let eps = ( s / (n as f32 * 2.) * 1.0e-3);
@@ -699,14 +739,13 @@ fn fit_ellipse_no_direct(
             points[i] = p;
         }
         populate_points(&mut A, &mut b, &points, &c, scale);
+        
     	A_svd = linalg::SVD::new(A.clone_owned(), true, true);
+    	// A_svd = nalgebra_lapack::SVD::new(A.clone_owned()).ok_or("SVD failed")?;
     }
 
-    // SVBackSubst(w, u, vt, b, x);
-    // SVBackSubst either solves the system if it has exactly one solution OR gives the least squares
-    // best solution if it has many solutions, so it is not strictly equivalent to solve.
-    // The x vector (backed by gfp array) is written with the result of SVBackSubst (5x1)
     let gfp = A_svd.solve(&b, SVD_TOL).or(Err("SVD for A Failed"))?;
+    // let gfp = solve_lapack_svd(&A_svd, &b, SVD_TOL);
 
     // now use general-form parameters A - E to find the ellipse center:
     // differentiate general form wrt x/y to get two equations for cx and cy
@@ -718,13 +757,14 @@ fn fit_ellipse_no_direct(
     A2[(1, 1)] = 2. * gfp[1];
     b2[0] = gfp[3];
     b2[1] = gfp[4];
+    
     let A2_svd = linalg::SVD::new_unordered(A2, true, true);
     let rp = A2_svd.solve(&b2, SVD_TOL).or(Err("SVD for A2 Failed"))?;
 
     // re-fit for parameters A - C with those center coordinates
     if n > A3.nrows() {
         A3.resize_vertically_mut(n, 0.0);
-        b3.resize_vertically_mut(n, 0.0);
+        b3.resize_vertically_mut(n, 1.0);
     }
     let mut A3 = A3.rows_mut(0, n);
     let mut b3 = b3.rows_mut(0, n);
@@ -734,7 +774,7 @@ fn fit_ellipse_no_direct(
         p -= c;
         let px = p[0]*scale;
         let py = p[1]*scale;
-        b3[i] = 1.0;
+        // b3[i] = 1.0;
         A3[(i, 0)] = (px - rp[0]) * (px - rp[0]);
         A3[(i, 1)] = (py - rp[1]) * (py - rp[1]);
         A3[(i, 2)] = (px - rp[0]) * (py - rp[1]);
@@ -742,6 +782,7 @@ fn fit_ellipse_no_direct(
 
     // The old gfp buffer (nx1) was re-used here, but now only the first 3 entries.
     let x3 = linalg::SVD::new_unordered(A3.clone_owned(), true, true).solve(&b3, SVD_TOL).or(Err("SVD for A3 Failed"))?;
+    // let x3 = solve_lapack_svd(&nalgebra_lapack::SVD::new(A3.clone_owned()).ok_or("SVD for A3 Failed")?, &b3, SVD_TOL);
 
     // Original impl stored angle in rp[4] because it was unused.
     let angle = -0.5 * x3[2].atan2(x3[1] - x3[0]); // convert from APP angle usage
@@ -868,6 +909,16 @@ pub fn generate_ellipse_points(
     }
     pts
 }
+
+pub fn generate_ellipse_opt_coords(
+    el : &OrientedEllipse,
+    n : usize,
+    shape : (usize, usize)
+) -> Vec<Option<(usize, usize)>> {
+    let mut pts = crate::shape::ellipse::generate_ellipse_points(el, n);
+    pts.iter().map(move |pt| crate::shape::coord::point_to_coord(pt, shape) ).collect()
+}
+
 
 pub fn generate_ellipse_coords(
     el : &OrientedEllipse,

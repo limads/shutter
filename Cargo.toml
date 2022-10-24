@@ -29,6 +29,7 @@ bumpalo = { version = "3.10.0", features=["collections"] }
 # packed_simd = { version = "0.3.8", package = "packed_simd_2" }
 wide = "0.7.4"
 tuples = "1.6.0"
+either="1.0"
 # gstreamer-app = { version = "0.17.0" }
 # rustdct = "0.7.0"
 # rustfft = "0.7.0"

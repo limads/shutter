@@ -171,11 +171,11 @@ where
     
     pub fn scalar_div_mut(&mut self, by : P) {
 
-        /*#[cfg(feature="ipp")]
+        #[cfg(feature="ipp")]
         unsafe {
 
             let (byte_stride, roi) = crate::image::ipputils::step_and_size_for_image(&self);
-            let scale_factor = 1;
+            let scale_factor = -2;
 
             if self.pixel_is::<u8>() {
                 let ans = crate::foreign::ipp::ippi::ippiDivC_8u_C1IRSfs(
@@ -212,9 +212,10 @@ where
                 assert!(ans == 0);
                 return;
             }
-        }*/
+        }
 
         self.pixels_mut(1).for_each(|p| *p /= by );
+        // unimplemented!()
     }
 
     /*fn truncate_mut(&mut self, above : bool, val : N) {

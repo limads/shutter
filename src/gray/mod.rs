@@ -7,6 +7,12 @@ use std::collections::BTreeMap;
 use std::ops::Sub;
 use crate::hist::{GrayHistogram, GridHistogram, ColorProfile};
 
+// Alt name to truncate towards extremes: clipping (but really to max and min). This
+// might be a special case of conditional_fill (but take as argument a scalar foreground
+// instead of a binary image). 
+// Alt name to invert: negative.
+// 
+
 #[derive(Debug, Clone, Copy)]
 pub enum Foreground {
 
@@ -96,6 +102,26 @@ where
     S : Storage<u8>
 {
 
+    pub fn iter_foreground<'a>(&'a self, fg : Foreground) -> Box<(dyn Iterator<Item=&'a u8> + 'a)> {
+        match fg {
+            Foreground::Exactly(px) => {
+                Box::new(self.pixels(1).filter(move |p| **p == px ))
+            },
+            Foreground::Below(px) => {
+                Box::new(self.pixels(1).filter(move |p| **p <= px ))
+            },
+            Foreground::Above(px) => {
+                Box::new(self.pixels(1).filter(move |p| **p >= px ))
+            },
+            Foreground::Inside(a, b) => {
+                Box::new(self.pixels(1).filter(move |p| **p >= a && **p <= b ))
+            },
+            Foreground::Outside(a, b) => {
+                Box::new(self.pixels(1).filter(move |p| **p < a && **p > b ))
+            }
+        }
+    }
+    
     #[cfg(feature="ipp")]
     pub fn hysteresis_threshold_to(&self, fg_low : Foreground, fg_high : Foreground, out : &mut HysteresisOutput) 
     {
@@ -280,39 +306,6 @@ impl AdadptiveThreshold for MedianThreshold {
     }
 
 }
-
-/*
-IppStatus ippiThresholdAdaptiveBoxGetBufferSize(IppiSize roiSize, IppiSize maskSize,
-IppDataType dataType, int numChannels, int* pBufferSize);
-
-IppStatus ippiThresholdAdaptiveBox_8u_C1R(const Ipp8u* pSrc, int srcStep, Ipp8u* pDst,
-int dstStep, IppiSize roiSize, IppiSize maskSize, Ipp32f delta, Ipp8u valGT, Ipp8u
-valLE, IppiBorderType borderType, Ipp8u borderValue, Ipp8u* pBuffer);
-
-IppStatus ippiThresholdAdaptiveGaussInit(IppiSize roiSize, IppiSize maskSize,
-IppDataType dataType, int numChannels, Ipp32f sigma, IppiThresholdAdaptiveSpec* pSpec);
-
-IppStatus ippiThresholdAdaptiveGauss_8u_C1R(const Ipp8u* pSrc, int srcStep, Ipp8u*
-pDst, int dstStep, IppiSize roiSize, Ipp32f delta, Ipp8u valGT, Ipp8u valLE,
-IppiBorderType borderType, Ipp8u borderValue, IppiThresholdAdaptiveSpec* pSpec, Ipp8u*
-pBuffer);
-*/
-
-/*
-
-IppStatus ippiReduceBitsGetBufferSize(IppChannels ippChan, IppiSize roiSize, int noise,
-IppiDitherType dtype, int* pBufferSize);
-
-IppStatus ippiReduceBits_8u_C1R(const Ipp<datatype>* pSrc, int srcStep, Ipp<datatype>*
-pDst, int dstStep, IppiSize roiSize, int noise, IppiDitherType dtype, int levels,
-Ipp8u* pBuffer);
-
-IppStatus ippiLUT_8u_C1R(const Ipp<datatype>* pSrc, int srcStep, Ipp<datatype>* pDst,
-int dstStep, IppiSize roiSize, IppiLUT_Spec* pSpec);
-
-IppStatus ippiToneMapLinear_32f8u_C1R(const Ipp32f* pSrc, int srcStep, Ipp8u* pDst, int
-dstStep, IppiSize roiSize);
-*/
 
 /*
 If pixel >= upper, set bin_dst to 1. If pixel <= lower, set bin_dst to 0. If pixel
@@ -518,9 +511,6 @@ where
 }*/
 
 /*impl<'a> Threshold for Window<'a, u8> {
-
-    
-
 }*/
 
 fn baseline_threshold(src : &Window<u8>, fg : Foreground, out : &mut WindowMut<u8>) {
@@ -548,27 +538,47 @@ fn baseline_threshold(src : &Window<u8>, fg : Foreground, out : &mut WindowMut<u
     }
 }
 
+fn baseline_truncate_inplace(fg : Foreground, out : &mut WindowMut<u8>, fg_val : u8) {
+    match fg {
+        Foreground::Exactly(v) => {
+            out.pixels_mut(1).for_each(|px_out| if *px_out == v { *px_out = fg_val } );
+        },
+        Foreground::Below(v) => {
+            out.pixels_mut(1).for_each(|px_out| if *px_out <= v { *px_out = fg_val } );
+        },
+        Foreground::Above(v) => {
+            out.pixels_mut(1).for_each(|px_out| if *px_out >= v { *px_out = fg_val } );
+        },
+        Foreground::Inside(a, b) => {
+            out.pixels_mut(1).for_each(|px_out| if *px_out >= a && *px_out <= b { *px_out = fg_val } );
+        },
+        Foreground::Outside(a, b) => {
+            out.pixels_mut(1).for_each(|px_out| if *px_out < a && *px_out > b { *px_out = fg_val } );
+        }
+    }
+}
+
 fn baseline_truncate(src : &Window<u8>, fg : Foreground, out : &mut WindowMut<u8>, fg_val : u8) {
     match fg {
         Foreground::Exactly(v) => {
             out.pixels_mut(1).zip(src.pixels(1))
-                .for_each(|(px_out, px_in)| if *px_in == v { *px_out = 255 } else { *px_out = *px_in });
+                .for_each(|(px_out, px_in)| if *px_in == v { *px_out = fg_val } else { *px_out = *px_in });
         },
         Foreground::Below(v) => {
             out.pixels_mut(1).zip(src.pixels(1))
-                .for_each(|(px_out, px_in)| if *px_in <= v { *px_out = 255 } else { *px_out = *px_in });
+                .for_each(|(px_out, px_in)| if *px_in <= v { *px_out = fg_val } else { *px_out = *px_in });
         },
         Foreground::Above(v) => {
             out.pixels_mut(1).zip(src.pixels(1))
-                .for_each(|(px_out, px_in)| if *px_in >= v { *px_out = 255 } else { *px_out = *px_in });
+                .for_each(|(px_out, px_in)| if *px_in >= v { *px_out = fg_val } else { *px_out = *px_in });
         },
         Foreground::Inside(a, b) => {
             out.pixels_mut(1).zip(src.pixels(1))
-                .for_each(|(px_out, px_in)| if *px_in >= a && *px_in <= b { *px_out = 255 } else { *px_out = *px_in });
+                .for_each(|(px_out, px_in)| if *px_in >= a && *px_in <= b { *px_out = fg_val } else { *px_out = *px_in });
         },
         Foreground::Outside(a, b) => {
             out.pixels_mut(1).zip(src.pixels(1))
-                .for_each(|(px_out, px_in)| if *px_in < a && *px_in > b { *px_out = 255 } else { *px_out = *px_in });
+                .for_each(|(px_out, px_in)| if *px_in < a && *px_in > b { *px_out = fg_val } else { *px_out = *px_in });
         }
     }
 }
@@ -610,7 +620,11 @@ unsafe fn ippi_truncate(
     let dst_byte_stride = crate::image::ipputils::byte_stride_for_window_mut(&out);
     match fg {
         Foreground::Exactly(v) => {
-            baseline_truncate(src.unwrap(), fg, out, fg_val);
+            if src.is_some() {
+                baseline_truncate(src.unwrap(), fg, out, fg_val);
+            } else {
+                baseline_truncate_inplace(fg, out, fg_val);
+            }
         },
         Foreground::Below(v) => {
             let ans = if let Some(src) = src {
@@ -657,7 +671,11 @@ unsafe fn ippi_truncate(
             assert!(ans == 0);
         },
         Foreground::Inside(a, b) => {
-            baseline_truncate(src.unwrap(), fg, out, fg_val);
+            if src.is_some() {
+                baseline_truncate(src.unwrap(), fg, out, fg_val);
+            } else {
+                baseline_truncate_inplace(fg, out, fg_val);
+            }
         },
         Foreground::Outside(a, b) => {
             let ans = if let Some(src) = src {
@@ -1334,5 +1352,295 @@ fn opencv_global_threshold(src : &Window<u8>, mut dst : WindowMut<'_, u8>, thres
     ).unwrap();
 }
 
+use std::ops::Range;
 
+#[derive(Debug, Clone)]
+pub struct MedianPartition {
+    pub medians : Vec<usize>,
+    pub bins : Vec<Range<usize>>
+}
+
+fn median_for_bin(acc : &[u32], bin : &Range<usize>) -> usize {
+    let (bin_start, bin_end) = (bin.start, bin.end);
+    let half_total = (acc[bin.end-1] - acc[bin.start]) / 2;
+    let mut median = acc[bin.clone()].partition_point(|b| (b - acc[bin.start]) < half_total );
+    median += bin_start;
+    median
+}
+
+/// Recursively partition the image histogram by re-calculating the median values within bins.
+/// Each resulting range is a valid color partition in [0,256] that is useful to quantize the color.
+/// The median cut will distribute large intervals for sparsely-populated image regions; and short intervals
+/// for densely-populated image regions. The result will have 2^n_partitions bins.
+fn median_partitions<S>(w : &Image<u8, S>, n_partitions : usize, merge_diff : Option<usize>) -> MedianPartition 
+where
+    S : Storage<u8>
+{
+    
+    let gh = GrayHistogram::calculate(&w.full_window());
+    let acc = gh.accumulate();
+    
+    let mut bins = vec![Range { start : 0, end : 256 }];
+    let mut medians = Vec::new();
+    for _ in 0..n_partitions {
+        medians.clear();
+        for i in 0..bins.len() {
+            let median = median_for_bin(acc.as_slice(), &bins[i]);
+            let bin_end = bins[i].end;
+            
+            // Re-write first half at the same index.
+            bins[i] = Range { start : bins[i].start, end : median };
+            
+            // Push second half to a new index.
+            bins.push(Range { start : median, end : bin_end });
+            
+            medians.push(median);
+        }
+    }
+    
+    bins.sort_by(|a, b| a.start.cmp(&b.start) );
+    medians.clear();
+    for bin in &bins {
+        medians.push(median_for_bin(acc.as_slice(), &bin));
+    }
+    
+    if let Some(diff) = merge_diff {
+        for i in (0..medians.len()-1).rev() {
+            if medians[i].abs_diff(medians[i+1]) <= diff {
+                let n1 = acc[bins[i].end-1] - acc[bins[i].start]; 
+                let n2 = acc[bins[i+1].end-1] - acc[bins[i+1].start];
+                let w1 = n1 as f32 / (n1+n2) as f32;
+                let w2 = n2 as f32 / (n1+n2) as f32;
+                medians[i] = (w1 * medians[i] as f32 + w2 * medians[i+1] as f32) as usize;
+                bins[i].end = bins[i+1].end;
+                bins.remove(i+1);
+                medians.remove(i+1);
+            }
+        }
+    }
+    
+    MedianPartition { bins, medians }
+    
+}
+
+use itertools::Itertools;
+
+pub trait Quantization {
+
+    fn quantize_to<S, T>(&mut self, img : &Image<u8, S>, dst : &mut Image<u8, T>)
+    where
+        S : Storage<u8>,
+        T : StorageMut<u8>;
+        
+}
+
+pub struct MedianCutQuantization {
+    n_parts : usize,
+    merge_diff : Option<usize>
+}
+
+impl MedianCutQuantization {
+
+    pub fn new(n_parts : usize, merge_diff : Option<usize>) -> Self {
+        Self { n_parts, merge_diff }
+    }
+    
+}
+
+/*
+IppStatus ippiThresholdAdaptiveBoxGetBufferSize(IppiSize roiSize, IppiSize maskSize,
+IppDataType dataType, int numChannels, int* pBufferSize);
+
+IppStatus ippiThresholdAdaptiveBox_8u_C1R(const Ipp8u* pSrc, int srcStep, Ipp8u* pDst,
+int dstStep, IppiSize roiSize, IppiSize maskSize, Ipp32f delta, Ipp8u valGT, Ipp8u
+valLE, IppiBorderType borderType, Ipp8u borderValue, Ipp8u* pBuffer);
+
+IppStatus ippiThresholdAdaptiveGaussInit(IppiSize roiSize, IppiSize maskSize,
+IppDataType dataType, int numChannels, Ipp32f sigma, IppiThresholdAdaptiveSpec* pSpec);
+
+IppStatus ippiThresholdAdaptiveGauss_8u_C1R(const Ipp8u* pSrc, int srcStep, Ipp8u*
+pDst, int dstStep, IppiSize roiSize, Ipp32f delta, Ipp8u valGT, Ipp8u valLE,
+IppiBorderType borderType, Ipp8u borderValue, IppiThresholdAdaptiveSpec* pSpec, Ipp8u*
+pBuffer);
+*/
+
+/*
+IppStatus ippiReduceBitsGetBufferSize(IppChannels ippChan, IppiSize roiSize, int noise,
+IppiDitherType dtype, int* pBufferSize);
+
+IppStatus ippiReduceBits_8u_C1R(const Ipp<datatype>* pSrc, int srcStep, Ipp<datatype>*
+pDst, int dstStep, IppiSize roiSize, int noise, IppiDitherType dtype, int levels,
+Ipp8u* pBuffer);
+
+IppStatus ippiToneMapLinear_32f8u_C1R(const Ipp32f* pSrc, int srcStep, Ipp8u* pDst, int
+dstStep, IppiSize roiSize);
+*/
+
+/*#[cfg(feature="ipp")]
+pub struct IppiLUT {
+
+}
+
+#[cfg(feature="ipp")]
+impl IppiLUT {
+
+    pub fn new(sz : (usize, usize)) -> Self {
+    
+        let ans = ippiLUT_GetSize(IppiInterpolationType interpolation, IppDataType dataType,
+IppChannels channels, IppiSize roiSize, const int nLevels[], int* pSpecSize);
+        
+        assert!(ans == 0);
+        let ans = ippiLUT_Init_8u(
+            IppiInterpolationType interpolation, IppChannels channels,
+IppiSize roiSize, const Ipp32s* pValues[], const Ipp32s* pLevels[], int nLevels[],
+IppiLUT_Spec* pSpec);
+        assert!(ans == 0);
+        Self { }
+    }
+    
+    pub fn lookup<S, T>(&mut self, src : &Image<u8, S>, dst : &Image<u8, T>)
+    where
+        S : Storage<u8>,
+        T : StorageMut<u8>
+    {
+        let ans = ippiLUT_8u_C1R(const Ipp<datatype>* pSrc, int srcStep, Ipp<datatype>* pDst,
+        int dstStep, IppiSize roiSize, IppiLUT_Spec* pSpec);
+        assert!(ans == 0);
+    }
+    
+}*/
+
+#[cfg(feature="ipp")]
+unsafe fn ipp_lut_palette<S, T>(src : &Image<u8, S>, dst : &mut Image<u8, T>, table : &[u8]) 
+where
+    S : Storage<u8>,
+    T : StorageMut<u8>
+{
+    let (src_step, sz) = crate::image::ipputils::step_and_size_for_image(src);
+    let (dst_step, _) = crate::image::ipputils::step_and_size_for_image(dst);
+    let bit_sz = 8;
+    let ans = crate::foreign::ipp::ippi::ippiLUTPalette_8u_C1R(
+        src.as_ptr(), 
+        src_step,
+        dst.as_mut_ptr(), 
+        dst_step, 
+        sz, 
+        table.as_ptr(),
+        bit_sz
+    );
+    assert!(ans == 0);
+}
+
+/// Represents a lookup index. Colors in a test image should be used as indices to the colors 
+/// contained in the array.
+#[derive(Debug, Clone)]
+pub struct Lookup([u8; 256]);
+
+impl Lookup {
+
+    pub fn from_slice(s : &[u8]) -> Self {
+        let mut arr : [u8; 256] = [0; 256];
+        arr.copy_from_slice(s);
+        Self(arr)
+    }
+    
+    // ranges must be mutually exclusive and sorted. Each range will receive
+    // the corresponding entry at value.
+    pub fn from_ranges(ranges : &[Range<usize>], values : &[u8]) -> Self {
+    
+        println!("{:?}", (&ranges, &values));
+        assert!(ranges.len() == values.len());
+        assert!(ranges[0].start == 0);
+        assert!(ranges.last().unwrap().end == 256);
+        for i in 1..ranges.len() {
+            assert!(ranges[i].start == ranges[i-1].end);
+        }
+        
+        let mut dst : [u8; 256] = [0; 256];
+        let mut curr_range = 0;
+        for i in 0..256 {
+            if i >= ranges[curr_range].end {
+                curr_range += 1;
+            }
+            dst[i] = values[curr_range];            
+        }
+        Self(dst)
+    }
+    
+    pub fn lookup_inplace<T>(&self, img : &mut Image<u8, T>) 
+    where
+        T : StorageMut<u8>
+    {
+        for i in 0..img.height() {
+            for j in 0..img.width() {
+                img[(i, j)] = self[img[(i, j)]];
+            }
+        }
+    }
+    
+    pub fn lookup_to<S, T>(&self, src : &Image<u8, S>, dst : &mut Image<u8, T>)
+    where
+        S : Storage<u8>,
+        T : StorageMut<u8>
+    {
+    
+        #[cfg(feature="ipp")]
+        unsafe {
+            return ipp_lut_palette(src, dst, &self.0[..]);
+        }
+        assert!(src.shape() == dst.shape());
+        for i in 0..src.height() {
+            for j in 0..src.width() {
+                dst[(i, j)] = self[src[(i, j)]];
+            }
+        }
+    }
+    
+}
+
+use std::ops::Index;
+
+impl Index<u8> for Lookup {
+
+    type Output = u8;
+    
+    fn index(&self, ix : u8) -> &u8 {
+        &self.0[ix as usize]
+    }
+
+}
+
+impl Quantization for MedianCutQuantization {
+
+    fn quantize_to<S, T>(&mut self, img : &Image<u8, S>, dst : &mut Image<u8, T>)
+    where
+        S : Storage<u8>,
+        T : StorageMut<u8>
+    {
+        let MedianPartition { bins, mut medians } = median_partitions(img, self.n_parts, self.merge_diff);
+        
+        let mut median_bytes = Vec::new();
+        for m in medians.drain(..) {
+            median_bytes.push(m as u8);
+        }
+        let lookup = Lookup::from_ranges(&bins[..], &median_bytes[..]);
+        assert!(img.shape() == dst.shape());
+        lookup.lookup_to(img, dst);
+    }
+    
+}
+
+#[test]
+fn test_median_cut() {
+    let mut buf = crate::io::decode_from_file("/home/diego/Downloads/pinpoint.png").unwrap();
+    let mut qt = MedianCutQuantization::new(4, None);
+    qt.quantize_to(&buf.clone(), &mut buf);
+    buf.show();
+}
+
+/// Represents an partition of the intensity space without any content-based criteria.
+/// Bins are spaced uniformly at either a linear or log(intensity) scale.
+pub struct UniformQuantization {
+    log : bool
+}
 

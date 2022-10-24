@@ -442,9 +442,10 @@ where
             }
         }
 
-        for (out, input) in self.pixels_mut(1).zip(rhs.pixels(1)) {
-            *out -= *input;
-        }
+        //for (out, input) in self.pixels_mut(1).zip(rhs.pixels(1)) {
+        //    *out -= *input;
+        //}
+        unimplemented!()
 
     }
 
@@ -792,7 +793,7 @@ where
         unimplemented!();
     }
 
-    fn xor_to<T, U>(&self, other : &Image<u8, T>, dst : &mut Image<u8, U>) 
+    pub fn xor_to<T, U>(&self, other : &Image<u8, T>, dst : &mut Image<u8, U>) 
     where
         T : Storage<u8>,
         U : StorageMut<u8>

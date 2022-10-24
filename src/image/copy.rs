@@ -315,7 +315,7 @@ where
     // Copies entries from true_other into self only where pixels at the mask are nonzero,
     // and from false_other into self when mask is zero.
     // self[px] = mask[px] == 0 ? false_other else true_other[px].
-    pub fn conditional_alt_copy_from<T, U>(
+    pub fn alternated_copy_from<T, U>(
         &mut self, 
         mask : &Window<'_, u8>, 
         true_alt : &Image<P, T>, 
@@ -330,11 +330,12 @@ where
 
     // Copies entries from other into self only where pixels at the mask are nonzero.
     // self[px] = mask[px] == 0 ? nothing else other[px]
-    pub fn conditional_copy_from<T>(
+    pub fn conditional_copy_from<R, T>(
         &mut self, 
-        mask : &Window<'_, u8>, 
+        mask : &Image<u8, R>, 
         other : &Image<P, T>
     ) where
+        R : Storage<u8>,
         T : Storage<P>,
     {
         // TODO Assert pixel depth is same.
@@ -345,7 +346,7 @@ where
         unsafe {
             let (src_step, src_sz) = crate::image::ipputils::step_and_size_for_image(other);
             let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_image(self);
-            let (mask_step, mask_sz) = crate::image::ipputils::step_and_size_for_window(mask);
+            let (mask_step, mask_sz) = crate::image::ipputils::step_and_size_for_image(mask);
 
             if self.pixel_is::<u8>() {
                 let ans = crate::foreign::ipp::ippi::ippiCopy_8u_C1MR(
@@ -454,13 +455,13 @@ where
     }
 
     // If true, copy from self. If not, copy from other.
-    pub fn conditional_alt_copy(
+    pub fn alternated_copy(
         &self, 
         mask : &Window<'_, u8>, 
         alternative : &Window<'a, P>
     ) -> ImageBuf<P> {
         let mut new = unsafe { ImageBuf::<P>::new_empty_like(self) };
-        new.conditional_alt_copy_from(mask, self, alternative);
+        new.alternated_copy_from(mask, self, alternative);
         new
     }
 

@@ -212,6 +212,16 @@ where
     }
 }
 
+#[test]
+fn local_sum_test() {
+    let mut img = ImageBuf::<u8>::new_constant(32, 32, 1);
+    let mut dst = ImageBuf::<i32>::new_constant(4, 4, 0);
+    local_sum(&img.full_window(), &mut dst.full_window_mut());
+    println!("{:?}", dst[(2usize,2usize)]);
+    dst.scalar_div_mut(4);
+    println!("{:?}", dst[(2usize,2usize)]);
+}
+
 pub fn local_sum(src : &Window<'_, u8>, dst : &mut WindowMut<'_, i32>) {
 
     assert!(src.height() % dst.height() == 0);
@@ -219,7 +229,7 @@ pub fn local_sum(src : &Window<'_, u8>, dst : &mut WindowMut<'_, i32>) {
 
     let local_win_sz = (src.height() / dst.height(), src.width() / dst.width());
 
-    /*#[cfg(feature="ipp")]
+    #[cfg(feature="ipp")]
     unsafe {
         let (src_step, src_sz) = crate::image::ipputils::step_and_size_for_window(src);
         let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_window_mut(&dst);
@@ -253,13 +263,16 @@ pub fn local_sum(src : &Window<'_, u8>, dst : &mut WindowMut<'_, i32>) {
         );
         assert!(ans == 0);
         return;
-    }*/
-    for i in 0..dst.height() {
+    }
+    
+    
+    /*for i in 0..dst.height() {
         for j in 0..dst.width() {
             let off = (i*local_win_sz.0, j*local_win_sz.1);
             dst[(i, j)] = src.sub_window(off, local_win_sz).unwrap().sum::<f32>(1) as i32;
         }
-    }
+    }*/
+    unimplemented!()
 
 }
 

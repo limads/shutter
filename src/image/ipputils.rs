@@ -151,6 +151,12 @@ pub struct IppiResize {
     work_buf_bytes : Vec<u8>
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum Resize {
+    Linear,
+    Nearest
+}
+
 impl IppiResize {
 
     unsafe fn spec_ptr(&self) -> *mut IppiResizeSpec_32f {
@@ -161,7 +167,7 @@ impl IppiResize {
         self.work_buf_bytes.as_mut_ptr()
     }
 
-    unsafe fn new<T>(src_size : IppiSize, dst_size : IppiSize) -> Self
+    unsafe fn new<T>(src_size : IppiSize, dst_size : IppiSize, res : Resize) -> Self
     where
         T : Scalar + Default
     {
@@ -177,7 +183,10 @@ impl IppiResize {
         let t : T = Default::default();
         let is_u8 = (&t as &dyn Any).is::<u8>();
         let is_f32 = (&t as &dyn Any).is::<f32>();
-        let interp_ty = IppiInterpolationType_ippNearest;
+        let interp_ty = match res {
+            Resize::Nearest => IppiInterpolationType_ippNearest,
+            Resize::Linear => IppiInterpolationType_ippLinear
+        };
         if is_u8 {
             let status_code = ippiResizeGetSize_8u(
                 src_size,
@@ -220,11 +229,17 @@ impl IppiResize {
         // mem::forget(init_buf_bytes);
 
         if is_u8 {
-            let status_code = ippiResizeNearestInit_8u(src_size, dst_size, spec);
+            let status_code = match res {
+                Resize::Nearest => ippiResizeNearestInit_8u(src_size, dst_size, spec),
+                Resize::Linear => ippiResizeLinearInit_8u(src_size, dst_size, spec)
+            };
             check_status("Resize init", status_code);
             status_init = Some(status_code);
         } else if is_f32 {
-            let status_code = ippiResizeNearestInit_32f(src_size, dst_size, spec);
+            let status_code = match res {
+                Resize::Nearest => ippiResizeNearestInit_32f(src_size, dst_size, spec),
+                Resize::Linear => ippiResizeLinearInit_32f(src_size, dst_size, spec)
+            };
             check_status("Resize init", status_code);
             status_init = Some(status_code);
         } else {
@@ -259,7 +274,7 @@ impl IppiResize {
 
 }
 
-pub unsafe fn resize<'a, T>(src : &'a Window<'a, T>, dst : &'a mut WindowMut<'a, T>)
+pub unsafe fn resize<'a, T>(src : &'a Window<'a, T>, dst : &'a mut WindowMut<'a, T>, res : Resize)
 where
     &'a [T] : Storage<T>,
     &'a mut [T] : StorageMut<T>,
@@ -277,30 +292,68 @@ where
     let (is_u8, is_f32) = (src.pixel_is::<u8>(), src.pixel_is::<f32>());
     let pt = IppiPoint{ x : 0, y : 0 };
     if is_u8 {
-        let mut resize = IppiResize::new::<u8>(src_size, dst_size);
-        let status_code = ippiResizeNearest_8u_C1R(
-            src_ptr as *const u8,
-            src_step,
-            dst_ptr as *mut u8,
-            dst_step,
-            pt,
-            dst_size,
-            resize.spec_ptr(),
-            resize.buf_ptr()
-        );
+        let mut resize = IppiResize::new::<u8>(src_size, dst_size, res);
+        let border_val : u8 = 0;
+        let status_code = match res {
+            Resize::Nearest => {
+                ippiResizeNearest_8u_C1R(
+                    src_ptr as *const u8,
+                    src_step,
+                    dst_ptr as *mut u8,
+                    dst_step,
+                    pt,
+                    dst_size,
+                    resize.spec_ptr(),
+                    resize.buf_ptr()
+                )
+            },
+            Resize::Linear => {
+                ippiResizeLinear_8u_C1R(
+                    src_ptr as *const u8,
+                    src_step,
+                    dst_ptr as *mut u8,
+                    dst_step,
+                    pt,
+                    dst_size,
+                    crate::foreign::ipp::ippi::_IppiBorderType_ippBorderRepl,
+                    &border_val as *const _,
+                    resize.spec_ptr(),
+                    resize.buf_ptr()
+                )
+            }
+        };
         status = Some(status_code);
     } else if is_f32 {
-        let mut resize = IppiResize::new::<f32>(src_size, dst_size);
-        let status_code = crate::foreign::ipp::ippi::ippiResizeNearest_32f_C1R(
-            src_ptr as *const f32,
-            src_step,
-            dst_ptr as *mut f32,
-            dst_step,
-            pt,
-            dst_size,
-            resize.spec_ptr(),
-            resize.buf_ptr()
-        );
+        let mut resize = IppiResize::new::<f32>(src_size, dst_size, res);
+        let border_val : f32 = 0.;
+        let status_code = match res {
+            Resize::Nearest => {
+                crate::foreign::ipp::ippi::ippiResizeNearest_32f_C1R(
+                    src_ptr as *const f32,
+                    src_step,
+                    dst_ptr as *mut f32,
+                    dst_step,
+                    pt,
+                    dst_size,
+                    resize.spec_ptr(),
+                    resize.buf_ptr()
+                )
+            },
+            Resize::Linear => {
+                crate::foreign::ipp::ippi::ippiResizeLinear_32f_C1R(
+                    src_ptr as *const f32,
+                    src_step,
+                    dst_ptr as *mut f32,
+                    dst_step,
+                    pt,
+                    dst_size,
+                    crate::foreign::ipp::ippi::_IppiBorderType_ippBorderRepl,
+                    &border_val as *const _,
+                    resize.spec_ptr(),
+                    resize.buf_ptr()
+                )
+            }
+        };
         status = Some(status_code);
     } else {
         panic!("Expected u8 or f32 image for resize op");
