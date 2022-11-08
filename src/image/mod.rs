@@ -1601,8 +1601,8 @@ impl<'a> Window<'a, u8> {
 
     #[cfg(feature="opencv")]
     pub fn resize_mut(&self, other : WindowMut<'_, u8>) {
+        use opencv::prelude::*;
         use opencv::{core, imgproc};
-        use opencv::prelude::MatTraitManual;
         let this_shape = self.shape();
         let other_shape = other.shape();
         let src : core::Mat = self.into();
@@ -1621,7 +1621,7 @@ impl<'a> Window<'a, u8> {
     ) {
 
         use opencv::{core, imgproc};
-
+        use opencv::prelude::*; 
         let ratio_row = (dst_sz.0 / src_sz.0) as f64;
         let ratio_col = (dst_sz.1 / src_sz.1) as f64;
         if let Some(src) = self.sub_window(src, src_sz) {
@@ -1693,6 +1693,7 @@ impl<'a> Window<'a, u8> {
     /// If higher, returns binary image with all pixels > thresh set to 255 and others set to 0;
     /// If !higher, returns binary image with pixels < thresh set to 255 and others set to 0.
     pub fn threshold_mut(&self, dst : &mut ImageBuf<u8>, thresh : u8, higher : bool) {
+        
         assert!(self.shape() == dst.shape());
 
         #[cfg(feature="opencv")]
@@ -1799,6 +1800,7 @@ where
 {
 
     fn input_array(&self) -> opencv::Result<opencv::core::_InputArray> {
+        use opencv::prelude::*;
         let out : opencv::core::Mat = (&*self).into();
         out.input_array()
     }
@@ -1863,8 +1865,7 @@ where
 
     fn from(m : core::Mat) -> ImageBuf<N> {
 
-        use opencv::prelude::MatTraitManual;
-        use opencv::prelude::MatTrait;
+        use opencv::prelude::*;
         // assert!(m.is_contiguous().unwrap());
 
         let sz = m.size().unwrap();
@@ -3241,8 +3242,7 @@ pub fn from_nalgebra3_vec(v : nalgebra::Vector3<f64>) -> opencv::core::Mat {
 pub fn to_nalgebra3_vec(m : opencv::core::Mat) -> nalgebra::Vector3<f64> {
 
     use opencv::core;
-    use opencv::prelude::MatTraitManual;
-    use opencv::prelude::MatTrait;
+    use opencv::prelude::*;
 
     let mut out = Vector3::zeros();
     unsafe {
@@ -3257,8 +3257,7 @@ pub fn to_nalgebra3_vec(m : opencv::core::Mat) -> nalgebra::Vector3<f64> {
 pub fn to_nalgebra3_mat(m : opencv::core::Mat) -> nalgebra::Matrix3<f64> {
 
     use opencv::core;
-    use opencv::prelude::MatTraitManual;
-    use opencv::prelude::MatTrait;
+    use opencv::prelude::*;
 
     let mut out = Matrix3::zeros();
     unsafe {
@@ -3275,8 +3274,7 @@ pub fn to_nalgebra3_mat(m : opencv::core::Mat) -> nalgebra::Matrix3<f64> {
 pub fn from_nalgebra3(m : nalgebra::Matrix3<f64>) -> opencv::core::Mat {
 
     use opencv::core;
-    use opencv::prelude::MatTraitManual;
-    use opencv::prelude::MatTrait;
+    use opencv::prelude::*;
 
     let mut mat = core::Mat::default();
     unsafe {

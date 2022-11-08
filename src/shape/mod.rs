@@ -2058,7 +2058,7 @@ See https://docs.opencv.org/3.4/d9/dab/tutorial_homography.html
 pub fn find_homography(flat : &[(usize, usize)], proj : &[(usize, usize)], img_height : usize) -> Result<nalgebra::Matrix3<f64>, String> {
 
     use opencv::calib3d;
-    use opencv::prelude::MatTrait;
+    use opencv::prelude::*;
 
     // Position y axis on the analytical plane.
     let flat : Vec<_> = flat.iter().map(|pt| (img_height - pt.0, pt.1) ).collect();
@@ -2069,7 +2069,7 @@ pub fn find_homography(flat : &[(usize, usize)], proj : &[(usize, usize)], img_h
     let mat = calib3d::find_homography(
         &flat,
         &proj,
-        &mut opencv::core::no_array().unwrap(),
+        &mut opencv::core::no_array(),
         calib3d::RANSAC,
         1.0
     ).map_err(|e| format!("{}",e ) )?;
@@ -2222,7 +2222,7 @@ pub mod cvellipse {
         }
 
         fn fit_from_current(&mut self, method : Method) -> Result<Ellipse, String> {
-            assert!(self.pt_vec.len() >= 5);
+            /*assert!(self.pt_vec.len() >= 5);
             let rotated_rect = match method {
                 Method::LeastSquares => {
                     imgproc::fit_ellipse(&self.pt_vec)
@@ -2260,7 +2260,8 @@ pub mod cvellipse {
                 large_axis,
                 small_axis,
                 angle : angle as f64
-            })
+            })*/
+            unimplemented!()
         }
 
     }
