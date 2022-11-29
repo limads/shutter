@@ -429,6 +429,19 @@ where
                 return;
             }
 
+            if self.pixel_is::<i16>() {
+                let ans = crate::foreign::ipp::ippi::ippiSub_16s_C1IRSfs(
+                    mem::transmute(rhs.as_ptr()),
+                    rhs_byte_stride,
+                    mem::transmute(self.as_ptr()),
+                    src_dst_byte_stride,
+                    roi,
+                    scale_factor
+                );
+                assert!(ans == 0);
+                return;
+            }
+
             if self.pixel_is::<f32>() {
                 let ans = crate::foreign::ipp::ippi::ippiSub_32f_C1IR(
                     mem::transmute(rhs.as_ptr()),

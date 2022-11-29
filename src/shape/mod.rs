@@ -2307,6 +2307,7 @@ pub mod cvellipse {
 // pub enum EllipseError {
 // }
 
+#[derive(Debug, Clone)]
 pub struct CircleFit {
     pub center : Vector2<f32>,
     pub radius : f32
