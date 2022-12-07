@@ -59,8 +59,9 @@ tempfile = "*"
 petgraph = { version = "0.6.0", default-features = false }
 rand = "0.8.5"
 vlfeat = { path = "deps/vlfeat", optional=true }
+smallvec="1.10.0"
 
-# euclid = "0.22.6"
+# euclid = "0.2.6"
 
 [features]
 default = ["mkl", "ipp"]

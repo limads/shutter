@@ -496,6 +496,14 @@ pub fn draw_line(
 ) {
     let (nrow, ncol) = img_dims;
 
+    if src.0 >= img_dims.0 || dst.0 >= img_dims.0 {
+        panic!("Row is {}, {} but image has {} rows", src.0, dst.0, img_dims.0);
+    }
+
+    if src.1 >= img_dims.1 || dst.1 >= img_dims.1 {
+        panic!("Col is {}, {} but image has {} cols", src.1, dst.1, img_dims.1);
+    }
+
     // Draw straight horizontal line (if applicable)
     if src.0 == dst.0 {
         for c in src.1.min(dst.1)..=(src.1.max(dst.1)) {

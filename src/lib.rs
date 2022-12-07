@@ -103,6 +103,8 @@ pub mod resample;
 
 pub mod edge;
 
+pub mod integral;
+
 /// Common optical manipulations (calculation of focal depth, magnification, camera calibration, lens distortion correction),
 // pub mod optics;
 
@@ -180,7 +182,7 @@ float_depth -> linearize_depth / depth_to_interval / interval_to_depth
 
 // pub(crate) mod foreign;
 
-// pub mod profile;
+pub mod profile;
 
 // Scalar image operations
 // pub mod scalar;
@@ -208,7 +210,7 @@ float_depth -> linearize_depth / depth_to_interval / interval_to_depth
 
 // pub mod corner;
 
-// pub mod integral;
+
 
 // pub mod edge;
 

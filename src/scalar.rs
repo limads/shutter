@@ -175,7 +175,8 @@ where
         unsafe {
 
             let (byte_stride, roi) = crate::image::ipputils::step_and_size_for_image(&self);
-            let scale_factor = -2;
+            // let scale_factor = -2;
+            let scale_factor = 0;
 
             if self.pixel_is::<u8>() {
                 let ans = crate::foreign::ipp::ippi::ippiDivC_8u_C1IRSfs(

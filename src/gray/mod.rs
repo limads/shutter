@@ -82,12 +82,26 @@ impl HysteresisOutput {
     
 }
 
-impl<S> Image<u8, S> 
+impl ImageBuf<u8> {
+
+    // After calling that, the pixels in the image are left
+    // sorted up to i, while remaining pixels are left at an unspecified
+    // order.
+    pub fn nth_pixel_inplace(&mut self, p : f32) -> u8 {
+        assert!(p >= 0. && p <= 1.0);
+        let q = (self.area() as f32 * p) as usize;
+        let (_, v, _) = self.as_mut_slice().select_nth_unstable(q);
+        *v
+    }
+
+}
+
+impl<S> Image<u8, S>
 where
     S : StorageMut<u8>
 {
 
-    pub fn truncate_inplace(&mut self, fg : Foreground, fg_val : u8) 
+    pub fn truncate_inplace(&mut self, fg : Foreground, fg_val : u8)
     {        
         #[cfg(feature="ipp")]
         unsafe { return ippi_truncate(fg, None, &mut self.full_window_mut(), fg_val) };
@@ -141,7 +155,8 @@ where
         #[cfg(feature="ipp")]
         unsafe { return ippi_full_threshold(fg, &self.full_window(), &mut out.full_window_mut()); }
         
-        baseline_threshold(&self.full_window(), fg, &mut out.full_window_mut());
+        // baseline_threshold(&self.full_window(), fg, &mut out.full_window_mut());
+        panic!()
     }
     
     /*

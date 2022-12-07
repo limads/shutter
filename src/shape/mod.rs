@@ -10,6 +10,7 @@ use std::mem;
 use crate::image::*;
 use itertools::Itertools;
 use std::collections::BTreeMap;
+use std::ops::Range;
 
 pub mod point;
 
@@ -603,7 +604,7 @@ impl IppiCentralMoments {
         }
     }
 
-    unsafe fn get_spatial_moment(&self, m : i32, n : i32) -> f32 {
+    unsafe fn get_spatial_moment(&self, m : i32, n : i32) -> Option<f32> {
         let channel = 0;
         let mut val : f64 = 0.;
         let offset = crate::foreign::ipp::ippi::IppiPoint { x : 0, y : 0 };
@@ -615,11 +616,33 @@ impl IppiCentralMoments {
             offset,
             &mut val as *mut _
         );
+        if ans == crate::foreign::ipp::ippi::ippStsMoment00ZeroErr {
+            return None;
+        }
         assert!(ans == 0);
-        val as f32
+        Some(val as f32)
     }
 
-    unsafe fn get_central_moment(&self, m : i32, n : i32) -> f32 {
+    unsafe fn get_normalized_spatial_moment(&self, m : i32, n : i32) -> Option<f32> {
+        let channel = 0;
+        let mut val : f64 = 0.;
+        let offset = crate::foreign::ipp::ippi::IppiPoint { x : 0, y : 0 };
+        let ans = crate::foreign::ipp::ippi::ippiGetNormalizedSpatialMoment_64f(
+            mem::transmute(self.state.as_ptr()),
+            m,
+            n,
+            channel,
+            offset,
+            &mut val as *mut _
+        );
+        if ans == crate::foreign::ipp::ippi::ippStsMoment00ZeroErr {
+            return None;
+        }
+        assert!(ans == 0);
+        Some(val as f32)
+    }
+
+    unsafe fn get_central_moment(&self, m : i32, n : i32) -> Option<f32> {
         let channel = 0;
         let mut val : f64 = 0.;
         let ans = crate::foreign::ipp::ippi::ippiGetCentralMoment_64f(
@@ -629,11 +652,31 @@ impl IppiCentralMoments {
             channel,
             &mut val as *mut _
         );
+        if ans == crate::foreign::ipp::ippi::ippStsMoment00ZeroErr {
+            return None;
+        }
         assert!(ans == 0);
-        val as f32
+        Some(val as f32)
     }
 
-    pub fn calculate(&mut self, win : &Window<u8>) -> CentralMoments {
+    unsafe fn get_normalized_central_moment(&self, m : i32, n : i32) -> Option<f32> {
+        let channel = 0;
+        let mut val : f64 = 0.;
+        let ans = crate::foreign::ipp::ippi::ippiGetNormalizedCentralMoment_64f(
+            mem::transmute(self.state.as_ptr()),
+            m,
+            n,
+            channel,
+            &mut val as *mut _
+        );
+        if ans == crate::foreign::ipp::ippi::ippStsMoment00ZeroErr {
+            return None;
+        }
+        assert!(ans == 0);
+        Some(val as f32)
+    }
+
+    pub fn calculate(&mut self, win : &Window<u8>) -> Option<CentralMoments> {
         unsafe {
             let (step, sz) = crate::image::ipputils::step_and_size_for_window(win);
             let ans = crate::foreign::ipp::ippi::ippiMoments64f_8u_C1R(
@@ -645,19 +688,21 @@ impl IppiCentralMoments {
             assert!(ans == 0);
 
             // 0th moment = area = number of pixels
-            let zero = self.get_spatial_moment(0, 0);
-            let center_x = self.get_spatial_moment(1, 0) / zero;
-            let center_y = self.get_spatial_moment(0, 1) / zero;
+            let zero = self.get_spatial_moment(0, 0)?;
+            let center_x = self.get_spatial_moment(1, 0)? / zero;
+            let center_y = self.get_spatial_moment(0, 1)? / zero;
+            // let center_x = self.get_normalized_central_moment(1, 0)?;
+            // let center_y = self.get_normalized_central_moment(0, 1)?;
 
-            let zero = self.get_central_moment(2, 0);
-            let xx = self.get_central_moment(2, 0);
-            let yy = self.get_central_moment(0, 2);
-            let xy = self.get_central_moment(1, 1);
-            let xxy = self.get_central_moment(2, 1);
-            let yyx = self.get_central_moment(1, 2);
-            let xxx = self.get_central_moment(3, 0);
-            let yyy = self.get_central_moment(0, 3);
-            CentralMoments {
+            let xx = self.get_normalized_central_moment(2, 0)?;
+            let yy = self.get_normalized_central_moment(0, 2)?;
+            let xy = self.get_normalized_central_moment(1, 1)?;
+            let xxy = self.get_normalized_central_moment(2, 1)?;
+            let yyx = self.get_normalized_central_moment(1, 2)?;
+            let xxx = self.get_normalized_central_moment(3, 0)?;
+            let yyy = self.get_normalized_central_moment(0, 3)?;
+
+            Some(CentralMoments {
                 center : (center_y, center_x),
                 zero,
                 xx,
@@ -667,7 +712,7 @@ impl IppiCentralMoments {
                 yyx,
                 xxx,
                 yyy
-            }
+            })
         }
     }
 
@@ -700,6 +745,10 @@ pub struct CentralMoments {
 }
 
 impl CentralMoments {
+
+    pub fn area(&self) -> f32 {
+        self.zero
+    }
 
     // Calculate, with the result in cartesian orientation.
     pub fn calculate_upright(pts : &[(usize, usize)], img_height : usize) -> Self {
@@ -753,7 +802,7 @@ impl CentralMoments {
         //println!("{}", minor);
 
         let (lambda1, lambda2) = self.eigenvalues();
-        assert!(lambda1 >= lambda2);
+        // assert!(lambda1 >= lambda2);
 
         major.scale_mut(2.*(lambda1 / num_pxs).sqrt());
         minor.scale_mut(2.*(lambda2 / num_pxs).sqrt());
@@ -1026,6 +1075,8 @@ pub fn point_distances(pts : &[(usize, usize)]) -> Vec<((usize, usize), (usize, 
 
 pub fn outer_rect(pts : &[(usize, usize)]) -> (usize, usize, usize, usize) {
 
+    assert!(pts.len() >= 1);
+
     let mut min_r = usize::MAX;
     let mut max_r = 0;
     let mut min_c = usize::MAX;
@@ -1120,6 +1171,178 @@ pub fn inner_circle(pts : &[(usize, usize)]) -> Option<((usize, usize), f32)> {
     }
 
     None
+
+}
+
+pub trait HalfOpen {
+
+    fn proximity(&self, other : &Self) -> Proximity;
+
+}
+
+impl HalfOpen for Range<usize> {
+
+    fn proximity(&self, other : &Self) -> Proximity {
+        match (self.start.cmp(&other.end), self.end.cmp(&other.start)) {
+
+            // Contacts from left
+            (Ordering::Equal, Ordering::Greater) => Proximity::Contact,
+
+            // Contacts from right
+            (Ordering::Less, Ordering::Equal) => Proximity::Contact,
+
+            // Exclude
+            (Ordering::Less, Ordering::Less) | (Ordering::Greater, Ordering::Greater) => Proximity::Exclude,
+
+            _ => Proximity::Overlap
+
+        }
+    }
+
+}
+
+pub fn enclosing_rect_for_rects(
+    qs : impl IntoIterator<Item=(usize, usize, usize, usize)>
+) -> Option<(usize, usize, usize, usize)> {
+    let mut qs = qs.into_iter();
+    let fst = qs.next()?;
+    let mut tl = (fst.0, fst.1);
+    let mut bl = (fst.0 + fst.2, fst.1 + fst.3);
+    while let Some(q) = qs.next() {
+        let this_tl = (q.0, q.1);
+        let this_bl = (q.0 + q.2, q.1 + q.3);
+        if this_bl.0 > bl.0 {
+            bl.0 = this_bl.0;
+        }
+        if this_bl.1 > bl.1 {
+            bl.1 = this_bl.1;
+        }
+        if this_tl.0 < tl.0 {
+            tl.0 = this_tl.0;
+        }
+        if this_tl.1 < tl.1 {
+            tl.1 = this_tl.1;
+        }
+    }
+    Some((tl.0, tl.1, bl.0 - tl.0, bl.1 - tl.1))
+}
+
+#[test]
+fn proximity() {
+
+    let regions = [
+
+        // Same region overlaps
+        (
+            Region { h : Range { start : 0, end : 10 }, v : Range { start : 0, end : 10 } },
+            Region { h : Range { start : 0, end : 10 }, v : Range { start : 0, end : 10 } },
+            Proximity::Overlap
+        ),
+
+        // Half width overlap
+        (
+            Region { h : Range { start : 0, end : 10 }, v : Range { start : 0, end : 10 } },
+            Region { h : Range { start : 5, end : 15 }, v : Range { start : 0, end : 10 } },
+            Proximity::Overlap
+        ),
+
+        // Half height overlap
+        (
+            Region { h : Range { start : 0, end : 10 }, v : Range { start : 0, end : 10 } },
+            Region { h : Range { start : 0, end : 10 }, v : Range { start : 5, end : 15 } },
+            Proximity::Overlap
+        ),
+
+        // Horizontal exclude
+        (
+            Region { h : Range { start : 0, end : 10 }, v : Range { start : 0, end : 10 } },
+            Region { h : Range { start : 30, end : 40 }, v : Range { start : 0, end : 10 } },
+            Proximity::Exclude
+        ),
+
+        // Vertical exclude
+        (
+            Region { h : Range { start : 0, end : 10 }, v : Range { start : 0, end : 10 } },
+            Region { h : Range { start : 0, end : 10 }, v : Range { start : 30, end : 40 } },
+            Proximity::Exclude
+        ),
+
+        // Both exclude
+        (
+            Region { h : Range { start : 0, end : 10 }, v : Range { start : 0, end : 10 } },
+            Region { h : Range { start : 30, end : 40 }, v : Range { start : 30, end : 40 } },
+            Proximity::Exclude
+        ),
+
+        // Horizontal contact (other overlap)
+        (
+            Region { h : Range { start : 0, end : 10 }, v : Range { start : 0, end : 10 } },
+            Region { h : Range { start : 10, end : 20 }, v : Range { start : 0, end : 10 } },
+            Proximity::Contact
+        ),
+
+        // Vertical contact (other overlap)
+        (
+            Region { h : Range { start : 0, end : 10 }, v : Range { start : 0, end : 10 } },
+            Region { h : Range { start : 0, end : 10 }, v : Range { start : 10, end : 20 } },
+            Proximity::Contact
+        ),
+
+        // Corner contact
+        (
+            Region { h : Range { start : 0, end : 10 }, v : Range { start : 0, end : 10 } },
+            Region { h : Range { start : 10, end : 20 }, v : Range { start : 10, end : 20 } },
+            Proximity::Contact
+        ),
+
+    ];
+
+    let mut regions_reversed = regions.clone();
+    regions_reversed.iter_mut().for_each(|(r1, r2, _)| std::mem::swap(r1, r2) );
+
+    for (r1, r2, out) in regions {
+        assert!(r1.proximity(&r2) == out, "{:?},{:?}={:?}", r1, r2, out);
+    }
+    for (r1, r2, out) in regions_reversed {
+        assert!(r1.proximity(&r2) == out, "{:?},{:?}={:?}", r1, r2, out);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Proximity {
+    Contact,
+    Overlap,
+    Exclude
+}
+
+#[derive(Debug, Clone)]
+pub struct Region {
+    pub h : Range<usize>,
+    pub v : Range<usize>
+}
+
+impl Region {
+
+    pub fn from_rect_tuple(r : &(usize, usize, usize, usize)) -> Self {
+        Self {
+            h : Range { start : r.1, end : r.1 + r.3 + 1 },
+            v : Range { start : r.0, end : r.0 + r.2 + 1 }
+        }
+    }
+
+}
+
+impl HalfOpen for Region {
+
+    fn proximity(&self, other : &Self) -> Proximity {
+        match (self.h.proximity(&other.h), self.v.proximity(&other.v)) {
+            (Proximity::Exclude, _) | (_, Proximity::Exclude) => Proximity::Exclude,
+            (Proximity::Overlap | Proximity::Contact, Proximity::Contact) => Proximity::Contact,
+            (Proximity::Contact, Proximity::Overlap | Proximity::Contact) => Proximity::Contact,
+            _ => Proximity::Overlap
+        }
+    }
 
 }
 

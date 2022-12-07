@@ -81,7 +81,40 @@ pub trait AddTo { }
 pub trait MulTo { }
 */
 
-impl<P, S> Image<P, S> 
+#[cfg(feature="ipp")]
+unsafe fn ippi_compare_to<P, S, T, U>(
+    a : &Image<P, S>,
+    b : &Image<P, T>,
+    dst : &mut Image<P, U>,
+    op : crate::foreign::ipp::ippi::IppCmpOp
+) -> bool
+where
+    P : Pixel,
+    S : Storage<P>,
+    T : Storage<P>,
+    U : StorageMut<P>
+{
+    if a.pixel_is::<u8>() {
+        let (a_stride, a_roi) = crate::image::ipputils::step_and_size_for_image(a);
+        let (b_stride, b_roi) = crate::image::ipputils::step_and_size_for_image(b);
+        let (dst_stride, dst_roi) = crate::image::ipputils::step_and_size_for_image(dst);
+        let ans = crate::foreign::ipp::ippi::ippiCompare_8u_C1R(
+            mem::transmute(a.as_ptr()),
+            a_stride,
+            mem::transmute(b.as_ptr()),
+            b_stride,
+            mem::transmute(dst.as_mut_ptr()),
+            dst_stride,
+            a_roi,
+            op
+        );
+        assert!(ans == 0);
+        return true;
+    }
+    false
+}
+
+impl<P, S> Image<P, S>
 where
     P : Pixel + PartialOrd,
     S : Storage<P>,
@@ -96,28 +129,23 @@ where
 
         #[cfg(feature="ipp")]
         unsafe {
-            if self.pixel_is::<u8>() {
-                let (a_stride, a_roi) = crate::image::ipputils::step_and_size_for_image(self);
-                let (b_stride, b_roi) = crate::image::ipputils::step_and_size_for_image(b);
-                let (dst_stride, dst_roi) = crate::image::ipputils::step_and_size_for_image(dst);
-                let ans = crate::foreign::ipp::ippi::ippiCompare_8u_C1R(
-                    mem::transmute(self.as_ptr()),
-                    a_stride,
-                    mem::transmute(b.as_ptr()),
-                    b_stride,
-                    mem::transmute(dst.as_mut_ptr()),
-                    dst_stride,
-                    a_roi,
-                    crate::foreign::ipp::ippi::IppCmpOp_ippCmpLess
-                );
-                assert!(ans == 0);
+            if ippi_compare_to(self, b, dst, crate::foreign::ipp::ippi::IppCmpOp_ippCmpLess) {
                 return;
             }
         }
 
         unimplemented!()
     }
-    
+
+    // a > b ? 255 else 0
+    pub fn is_greater_to<T, U>(&self, b : &Image<P, T>, dst : &mut Image<P, U>)
+    where
+        T : Storage<P>,
+        U : StorageMut<P>
+    {
+
+    }
+
     // a > b ? a else b
     pub fn greater_to<T, U>(&self, b : &Image<P, T>, dst : &mut Image<P, U>) 
     where
@@ -203,6 +231,39 @@ where
 
 }
 
+impl<P, S> Image<P, S>
+where
+    P : UnsignedPixel,
+    S : Storage<P>
+{
+
+    pub fn abs_diff_to<T, U>(&self, rhs : &Image<P, T>, dst : &mut Image<P, U>)
+    where
+        T : Storage<P>,
+        U : StorageMut<P>
+    {
+        #[cfg(feature="ipp")]
+        unsafe {
+            let (rhs_step, rhs_roi) = crate::image::ipputils::step_and_size_for_image(&rhs);
+            let (this_step, this_roi) = crate::image::ipputils::step_and_size_for_image(&self);
+            let (dst_step, dst_roi) = crate::image::ipputils::step_and_size_for_image(&dst.full_window());
+            if self.pixel_is::<u8>() {
+                let ans = crate::foreign::ipp::ippcv::ippiAbsDiff_8u_C1R(
+                    mem::transmute(self.as_ptr()),
+                    this_step,
+                    mem::transmute(rhs.as_ptr()),
+                    rhs_step,
+                    mem::transmute(dst.as_mut_ptr()),
+                    dst_step,
+                    mem::transmute(dst_roi)
+                );
+                assert!(ans == 0);
+                return;
+            }
+        }
+        unimplemented!()
+    }
+}
 impl<P, S> Image<P, S> 
 where
     P : Pixel + Add<Output=P> + Sub<Output=P> + Mul<Output=P> + Div<Output=P>,
@@ -353,7 +414,7 @@ where
             let (src_dst_byte_stride, roi) = crate::image::ipputils::step_and_size_for_image(self);
             let rhs_byte_stride = crate::image::ipputils::byte_stride_for_image(&rhs);
 
-            let scale_factor = 1;
+            let scale_factor = 0;
 
             if self.pixel_is::<u8>() {
                 let ans = crate::foreign::ipp::ippi::ippiAdd_8u_C1IRSfs(
@@ -600,27 +661,8 @@ where
     where
         T : Storage<P>
     {
-        #[cfg(feature="ipp")]
-        unsafe {
-            let mut copy = self.clone_owned();
-            let (copy_step, copy_roi) = crate::image::ipputils::step_and_size_for_image(&copy.full_window());
-            let (rhs_step, rhs_roi) = crate::image::ipputils::step_and_size_for_image(&rhs);
-            let (this_step, this_roi) = crate::image::ipputils::step_and_size_for_image(&self);
-            if self.pixel_is::<u8>() {
-                let ans = crate::foreign::ipp::ippcv::ippiAbsDiff_8u_C1R(
-                    mem::transmute(copy.full_window().as_ptr()),
-                    copy_step,
-                    mem::transmute(rhs.as_ptr()),
-                    rhs_step,
-                    mem::transmute(self.as_mut_ptr()),
-                    this_step,
-                    mem::transmute(this_roi)
-                );
-                assert!(ans == 0);
-                return;
-            }
-        }
-        unimplemented!()
+        let copy = self.clone_owned();
+        copy.abs_diff_to(rhs, self);
     }
 
 }
@@ -839,7 +881,29 @@ where
     S : StorageMut<u8>
 {
 
-    pub fn and_assign<T>(&mut self, other : &Image<u8, T>) 
+    pub fn or_assign<T>(&mut self, other : &Image<u8, T>)
+    where
+        T : Storage<u8>,
+    {
+
+        #[cfg(feature="ipp")]
+        unsafe {
+            let (this_stride, this_roi) = crate::image::ipputils::step_and_size_for_image(self);
+            let (other_stride, other_roi) = crate::image::ipputils::step_and_size_for_image(other);
+            let ans = crate::foreign::ipp::ippi::ippiOr_8u_C1IR(
+                other.as_ptr(),
+                other_stride,
+                self.as_mut_ptr(),
+                this_stride,
+                this_roi
+            );
+            assert!(ans == 0);
+            return;
+        }
+        unimplemented!();
+    }
+    
+    pub fn and_assign<T>(&mut self, other : &Image<u8, T>)
     where
         T : Storage<u8>,
     {
@@ -860,8 +924,8 @@ where
         }
         unimplemented!();
     }
-    
-    pub fn xor_assign<T>(&mut self, other : &Image<u8, T>) 
+
+    pub fn xor_assign<T>(&mut self, other : &Image<u8, T>)
     where
         T : Storage<u8>,
     {

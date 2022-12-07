@@ -999,11 +999,12 @@ where
         }*/
 
         // println!("Processing with baseline");
-        baseline_convolution(
+        /*baseline_convolution(
             &self.full_window(), 
             &filter.full_window(), 
             &mut out.full_window_mut()
-        );
+        );*/
+        unimplemented!()
     }
 
     fn convolve(&self, filter : &Self) -> ImageBuf<P> {

@@ -4,6 +4,14 @@ use num_traits::Zero;
 use nalgebra::*;
 use std::mem;
 use std::ops::{Add, Shl};
+use std::ops::Range;
+use petgraph::graph::{DiGraph, NodeIndex};
+use petgraph::Direction;
+use petgraph::visit::DfsEvent;
+use std::collections::{BTreeMap, BTreeSet};
+use petgraph::unionfind::UnionFind;
+use std::cmp::{PartialEq, Eq};
+use smallvec::SmallVec;
 
 #[cfg(feature="ipp")]
 fn ipp_integral(win : &Window<u8>, dst : &mut WindowMut<i32>) {
@@ -29,29 +37,36 @@ fn ipp_integral(win : &Window<u8>, dst : &mut WindowMut<i32>) {
     }
 }
 
-pub struct Integral<T>(Image<T>)
+/// The integral should have nrows+1, ncols+1 relative to the source image.
+pub struct Integral<T>(ImageBuf<T>)
 where
-    T : Scalar + Clone + Copy + Any;
+    T : Pixel + Scalar + Clone + Copy + Any;
 
 impl<T> Integral<T>
 where
-    T : Scalar + Clone + Copy + Any + Zero + From<u8> + Default + std::ops::AddAssign
+    T : Pixel + Scalar + Clone + Copy + Any + Zero + From<u8> + Default + std::ops::AddAssign
 {
+
+    pub fn new_constant(height : usize, width : usize, val : T) -> Self {
+        Integral(ImageBuf::<T>::new_constant(height, width, val))
+    }
 
     /* Integral sums the rectangle (0, 0) (i, j) above the pixel (i, j).*/
     pub fn update(&mut self, win : &Window<'_, u8>) {
+
         #[cfg(feature="ipp")]
         unsafe {
-            if (&T::default() as &dyn Any).is::<i32>() {
+            if self.0.pixel_is::<i32>() {
                 return ipp_integral(win, mem::transmute(&mut self.0.full_window_mut()));
             }
         }
+        panic!();
 
         // TODO  'attempt to add with overflow'
         let mut dst = &mut self.0;
-        dst[(0, 0)] = T::from(win[(0 as usize, 0 as usize)]);
+        dst[(0usize, 0usize)] = T::from(win[(0 as usize, 0 as usize)]);
         unsafe {
-            for ix in 1..dst.len() {
+            for ix in 1..dst.as_slice().len() {
                 let prev = *dst.unchecked_linear_index(ix-1);
                 *dst.unchecked_linear_index_mut(ix) += prev;
             }
@@ -62,25 +77,517 @@ where
         // TODO Make sure IppiIntegral overwrites all pixels.
         // The first pixel of the integral image equals the first pixel of the original
         // image. All other pixels are the sum of the previous pixels up to the current pixel.
-        let mut dst = unsafe { Self(Image::<T>::new_empty(win.height() + 1, win.width() + 1)) };
+        let mut dst = unsafe { Self(ImageBuf::<T>::new_empty(win.height() + 1, win.width() + 1)) };
         dst.update(win);
         dst
     }
 
 }
 
-impl<T> AsRef<Image<T>> for Integral<T> 
-where
-    T : Scalar + Clone + Copy + Any + Zero + From<u8>
-{
+// pub enum Region {
+//    Empty
+// }
 
-    fn as_ref(&self) -> &Image<T> {
+/*// Carries a pair of cursor indices that change at each recursion (r1, r2)
+// and auxiliary data (to index the non-recursing dimension). Recursion happens
+// when a match does not happen.
+pub fn search_recursively_not_matched<F>(
+    ranges : &mut Vec<Range<usize>>,
+    w : &Window<i32>,
+    r1 : usize,
+    r2 : usize,
+    a : usize,
+    comp : F,
+    min_sz : usize
+) where
+    F : Fn(&Window<i32>, usize, usize, usize)->bool + Copy
+{
+    if r2 - r1 <= min_sz {
+        return;
+    }
+    assert!(r2 > r1);
+    if comp(w, r1, r2, a) {
+        ranges.push(Range { start : r1, end : r2 });
+    } else {
+        let middle = r1 + (r2 - r1) / 2;
+        search_recursively_not_matched(ranges, w, r1, middle-1, a, comp, min_sz);
+        search_recursively_not_matched(ranges, w, middle, r2, a, comp, min_sz);
+    }
+}
+
+// Recursion happens when a match happens.
+pub fn search_recursively_matched<F>(
+    ranges : &mut Vec<Range<usize>>,
+    w : &Window<i32>,
+    r1 : usize,
+    r2 : usize,
+    a : usize,
+    comp : F,
+    min_sz : usize
+) where
+    F : Fn(&Window<i32>, usize, usize, usize)->bool + Copy
+{
+    if r2 - r1 <= min_sz {
+        return;
+    }
+    assert!(r2 > r1);
+    if comp(w, r1, r2, a) {
+        let middle = r1 + (r2 - r1) / 2;
+        search_recursively_matched(ranges, w, r1, middle-1, a, comp, min_sz);
+        search_recursively_matched(ranges, w, middle, r2, a, comp, min_sz);
+    } else {
+        ranges.push(Range { start : r1, end : r2 });
+    }
+}*/
+
+/*fn empty_row_comp(w : &Window<i32>, r1 : usize, r2 : usize, c : usize) -> bool {
+    w[(r2, c)] - w[(r1, c)] == 0
+}
+
+fn empty_col_comp(w : &Window<i32>, c1 : usize, c2 : usize, r : usize) -> bool {
+    w[(r, c2)] - w[(r, c1)] == 0
+}*/
+
+#[derive(Debug, Clone, Copy)]
+pub struct Quad {
+    pub rect : (usize, usize, usize, usize),
+    pub content : Content
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Content {
+    Empty,
+    Mixed,
+    Filled
+}
+
+impl Content {
+
+    pub fn contains_any(&self) -> bool {
+        match self {
+            Content::Mixed | Content::Filled => true,
+            Content::Empty => false
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Content::Empty => true,
+            _ => false
+        }
+    }
+
+}
+
+fn rect_area(w : &Window<i32>) -> i32 {
+    let br = w[(w.height()-1,w.width()-1)];
+    let tr = w[(0, w.width()-1)];
+    let tl = w[(0usize, 0usize)];
+    let bl = w[(w.height()-1, 0)];
+    (br - (tr - tl) - bl)
+}
+
+fn rect_content(w : &Window<i32>) -> Content {
+    let total = rect_area(w);
+    let max = ((w.height()-1) * (w.width()-1)) as i32 * 255;
+    if total == 0 {
+        Content::Empty
+    } else if total == max {
+        Content::Filled
+    } else {
+        Content::Mixed
+    }
+}
+
+pub fn iter_col(
+    graph : &mut DiGraph<Quad, ()>,
+    parent_ix : NodeIndex<u32>,
+    w : &Window<i32>,
+    min_sz : (usize, usize)
+) {
+    // if w.height() < min_sz.0 || w.width() < min_sz.1 {
+    //    return;
+    // }
+    let rect = (w.offset().0, w.offset().1, w.height(), w.width());
+    match rect_content(w) {
+        Content::Empty => {
+            let ix = graph.add_node(Quad { rect, content : Content::Empty });
+            graph.add_edge(parent_ix, ix, ());
+        },
+        Content::Mixed => {
+            let ix = graph.add_node(Quad { rect, content : Content::Mixed });
+            graph.add_edge(parent_ix, ix, ());
+            let half_w = w.width() / 2;
+            if half_w >= min_sz.1 {
+                let left = w.window((0, 0), (w.height(), half_w)).unwrap();
+                let right = w.window((0, half_w), (w.height(), half_w)).unwrap();
+                iter_row(graph, ix, &left, min_sz);
+                iter_row(graph, ix, &right, min_sz);
+            }
+        },
+        Content::Filled => {
+            let ix = graph.add_node(Quad { rect, content : Content::Filled });
+            graph.add_edge(parent_ix, ix, ());
+        }
+    }
+}
+
+pub fn iter_row(
+    graph : &mut DiGraph<Quad, ()>,
+    parent_ix : NodeIndex<u32>,
+    w : &Window<i32>,
+    min_sz : (usize, usize)
+) {
+    // if w.height() < min_sz.0 || w.width() < min_sz.1 {
+    //    return;
+    // }
+    let rect = (w.offset().0, w.offset().1, w.height(), w.width());
+    match rect_content(w) {
+        Content::Empty => {
+            let ix = graph.add_node(Quad { rect, content : Content::Empty });
+            graph.add_edge(parent_ix, ix, ());
+        },
+        Content::Mixed => {
+            let ix = graph.add_node(Quad { rect, content : Content::Mixed });
+            graph.add_edge(parent_ix, ix, ());
+            let half_h = w.height() / 2;
+            if half_h >= min_sz.0 {
+                let top = w.window((0, 0), (half_h, w.width())).unwrap();
+                let bottom = w.window((half_h, 0), (half_h, w.width())).unwrap();
+                iter_col(graph, ix, &top, min_sz);
+                iter_col(graph, ix, &bottom, min_sz);
+            }
+        },
+        Content::Filled => {
+            let ix = graph.add_node(Quad { rect, content : Content::Filled });
+            graph.add_edge(parent_ix, ix, ());
+        }
+    }
+}
+
+pub fn iter_quad(
+    graph : &mut DiGraph<Quad, ()>,
+    parent_ix : NodeIndex<u32>,
+    w : &Window<i32>,
+    min_sz : (usize, usize)
+) {
+    if w.height() < min_sz.0 || w.width() < min_sz.1 {
+        return;
+    }
+    let rect = (w.offset().0, w.offset().1, w.height(), w.width());
+    match rect_content(w) {
+        Content::Empty => {
+            let ix = graph.add_node(Quad { rect, content : Content::Empty });
+            graph.add_edge(parent_ix, ix, ());
+        },
+        Content::Mixed => {
+            let ix = graph.add_node(Quad { rect, content : Content::Mixed });
+            graph.add_edge(parent_ix, ix, ());
+            let half_h = w.height() / 2;
+            let half_w = w.width() / 2;
+            let top_left = w.window((0, 0), (half_h, half_w)).unwrap();
+            let top_right = w.window((0, half_w), (half_h, half_w)).unwrap();
+            let bottom_left = w.window((half_h, 0), (half_h, half_w)).unwrap();
+            let bottom_right = w.window((half_h, half_w), (half_h, half_w)).unwrap();
+            if half_h >= min_sz.0 && half_w >= min_sz.1 {
+                iter_quad(graph, ix, &top_left, min_sz);
+                iter_quad(graph, ix, &top_right, min_sz);
+                iter_quad(graph, ix, &bottom_left, min_sz);
+                iter_quad(graph, ix, &bottom_right, min_sz);
+            }
+        },
+        Content::Filled => {
+            let ix = graph.add_node(Quad { rect, content : Content::Filled });
+            graph.add_edge(parent_ix, ix, ());
+        }
+    }
+}
+
+/*fn preserve_matching_regions(graph : &mut DiGraph<Rect, ()>) {
+    let start = graph.externals(Direction::Incoming).next().unwrap();
+    let mut is_solid : BTreeSet<NodeIndex<u32>> = BTreeSet::new();
+    petgraph::visit::depth_first_search(&*graph, Some(start), |event| {
+        match event {
+            DfsEvent::Finish(u, _) => {
+
+                if !graph[u].is_match {
+                    return;
+                }
+
+                let children = graph.neighbors_directed(u, Direction::Outgoing);
+                let is_leaf = children.clone().next().is_none();
+                if is_leaf {
+                    is_solid.insert(u);
+                } else {
+                    let solid = children.clone().all(|c| is_solid.contains(&c) );
+                    if solid {
+                        assert!(!is_solid.contains(&u));
+                        for ch in children.clone() {
+                            is_solid.remove(&ch);
+                        }
+                        is_solid.insert(u);
+                        assert!(!children.clone().any(|ch| is_solid.contains(&ch) ));
+                    } else {
+                        assert!(!is_solid.contains(&u));
+                    }
+                }
+            },
+            _ => { }
+        }
+    });
+    graph.retain_nodes(|_, ix| is_solid.contains(&ix) );
+}*/
+
+/// A QuadTree calculated from an integral image.
+pub struct IntegralQuad(DiGraph<Quad, ()>);
+
+impl std::convert::AsRef<DiGraph<Quad, ()>> for IntegralQuad {
+
+    fn as_ref(&self) -> &DiGraph<Quad, ()> {
         &self.0
     }
 
 }
 
-impl<'a, T> AsRef<Window<'a, T>> for Integral<T>
+#[derive(Debug, Clone, Copy)]
+pub enum Split {
+
+    // Split four quadrants at each iteration. Leads
+    // to more symmetric quads, since iteration stops
+    // when either one of (row, col) is smaller than
+    // minimum area.
+    Quadrants,
+
+    // Split rows, then columns. Leads to rects that
+    // reproduce the aspect ratio of the image, since
+    // iteration stops when the min(row, row) is
+    // smaller than the minimum area
+    Halves
+
+}
+
+pub fn bounding_row_points(window : &Window<i32>, pts : &mut Vec<(usize, usize)>) {
+    let width = window.width()-1;
+    let mut pts = Vec::new();
+    for i in 1..window.height() {
+        let fst_px = window[(i, 0)] - window[(i-1, 0)];
+        let lst_px = window[(i, width-1)] - window[(i-1, width-1)];
+        if lst_px == fst_px {
+            continue;
+        }
+
+        // TODO use sub_ptr instead of offset_from (that returns usize) when stabilized.
+        let fst_addr = &window[(i, 0)] as *const i32;
+        let start = window.row(i).unwrap().partition_point(|px| {
+            let col = unsafe { (px as *const i32).offset_from(fst_addr) as usize };
+            (px - window[(i-1, col)]) == fst_px
+        });
+        let mut end = window.row(i).unwrap()[start..].partition_point(|px| {
+            let col = unsafe { (px as *const i32).offset_from(fst_addr) as usize };
+            (px - window[(i-1, col)]) != lst_px
+        });
+        end += start;
+
+        // TODO verify (win[end] - win[start]) / 255 == end - start.
+        // Do not push in case this doesn't apply.
+        pts.push((i - 1, start - 1));
+        pts.push((i - 1, end - 1));
+    }
+}
+
+impl IntegralQuad {
+
+    pub fn new(window : &Window<i32>, min_sz : (usize, usize), method : Split) -> Self {
+        let h = if window.height() % 2 == 0 { window.height() } else { window.height() - 1 };
+        let w = if window.width() % 2 == 0 { window.width() } else { window.width() - 1 };
+        let win = window.window((0, 0), (h, w)).unwrap();
+        assert!(win.height() % 2 == 0 && win.width() % 2 == 0);
+        let mut graph : DiGraph<Quad, ()> = DiGraph::new();
+        let h = win.height();
+        let w = win.width();
+        let half_h = win.height()/2;
+        let half_w = win.width()/2;
+        let content = rect_content(&win);
+        let ix = graph.add_node(Quad { rect : (0, 0, h, w), content : content.clone() });
+        if content == Content::Mixed {
+            match method {
+                Split::Halves => {
+                    let top = win.window((0, 0), (half_h, w)).unwrap();
+                    let bottom = win.window((half_h, 0), (half_h, w)).unwrap();
+                    iter_row(&mut graph, ix, &top, min_sz);
+                    iter_row(&mut graph, ix, &bottom, min_sz);
+                },
+                Split::Quadrants => {
+                    let top_left = win.window((0, 0), (half_h, half_w)).unwrap();
+                    let top_right = win.window((0, half_w), (half_h, half_w)).unwrap();
+                    let bottom_left = win.window((half_h, 0), (half_h, half_w)).unwrap();
+                    let bottom_right = win.window((half_h, half_w), (half_h, half_w)).unwrap();
+                    iter_quad(&mut graph, ix, &top_left, min_sz);
+                    iter_quad(&mut graph, ix, &top_right, min_sz);
+                    iter_quad(&mut graph, ix, &bottom_left, min_sz);
+                    iter_quad(&mut graph, ix, &bottom_right, min_sz);
+                }
+            }
+        }
+        Self(graph)
+    }
+
+    /*pub fn empty_leaves(&self) -> Vec<Quad> {
+        for i in 0..self.0.raw_nodes().len() {
+            for j in (i+1)..self.0.raw_nodes().len() {
+
+            }
+        }
+    }*/
+
+    /// Returns all leaves of the graph that either contain mixed or filled content.
+    pub fn leaves_with_content(&self) -> BTreeMap<usize, SmallVec<[Quad; 4]>> {
+        use crate::shape::*;
+
+        let mut externals : Vec<NodeIndex<u32>> = self.0.externals(Direction::Outgoing).collect();
+        externals.retain(|n| self.0[*n].content.contains_any() );
+
+        let mut uf = UnionFind::<usize>::new(externals.len());
+        for i in 0..(externals.len().saturating_sub(1)) {
+            for j in (i+1)..externals.len() {
+                let ni = externals[i];
+                let nj = externals[j];
+                let r1 = Region::from_rect_tuple(&self.0[ni].rect);
+                let r2 = Region::from_rect_tuple(&self.0[nj].rect);
+                match r1.proximity(&r2) {
+                    Proximity::Contact | Proximity::Overlap => {
+                        uf.union(i, j);
+                    },
+                    _ => { }
+                }
+            }
+        }
+
+        let mut btm = BTreeMap::new();
+        for (i, ni) in externals.drain(..).enumerate() {
+            if self.0[ni].content.contains_any() {
+                let key = uf.find(i);
+                btm.entry(key).or_insert(SmallVec::new()).push(self.0[ni].clone());
+            }
+        }
+        btm
+    }
+
+    pub fn matching_rects(&self) -> Vec<(usize, usize, usize, usize)> {
+        let btm = self.leaves_with_content();
+        let mut rects = Vec::new();
+        for (_, mut qs) in btm {
+            rects.extend(qs.drain(..).filter_map(|q| if q.content.contains_any() {
+                Some(q.rect)
+            } else {
+                None
+            }));
+        }
+        rects
+    }
+
+    pub fn enclosing_rects(&self) -> Vec<(usize, usize, usize, usize)> {
+        let btm = self.leaves_with_content();
+        let mut rects = Vec::new();
+        for (_, qs) in &btm {
+            let outer = crate::shape::enclosing_rect_for_rects(qs.iter().map(|q| q.rect.clone() )).unwrap();
+            rects.push(outer);
+        }
+        rects
+    }
+
+}
+
+// cargo test --features ipp --message-format short -- image_integral --nocapture
+#[test]
+fn image_integral() {
+
+    use crate::draw::*;
+
+    {
+        let mut img = ImageBuf::<u8>::new_constant(16, 16, 1);
+        let int = Integral::<i32>::calculate(&img.full_window());
+        println!("{}", rect_area(&int.as_ref().window((8,8), (4,4)).unwrap()));
+        return;
+    }
+
+    let mut target = ImageBuf::<u8>::new_constant(128, 128, 0);
+    target.draw(Mark::Dot((32, 32), 8), 255);
+
+    target.draw(Mark::Dot((92, 92), 8), 255);
+
+    let int = Integral::<i32>::calculate(&target.full_window());
+
+    // TODO repeat same function for x and y dimension. Then calculate
+    // the intersections of empty x and empty y.
+
+    let win = int.0.full_window();
+    let iq = IntegralQuad::new(&win, (4, 4), Split::Halves);
+
+    /*for node in petgraph::algo::toposort(&graph, None).unwrap() {
+        let tl = (graph[node].rect.0 + 1, graph[node].rect.1 + 1);
+        let sz = (graph[node].rect.2 - 1, graph[node].rect.3 - 1);
+        println!("{:?}", (tl, sz, graph[node].is_match));
+        let color = if graph[node].is_match { 180 } else { 60 };
+        target.draw(Mark::Rect(tl, (sz.0-2, sz.1-2)), color);
+        // target.show();
+    }*/
+
+    // preserve_matching_regions(&mut graph);
+
+    /*for node in graph.node_indices() {
+        let tl = (graph[node].rect.0 + 1, graph[node].rect.1 + 1);
+        let sz = (graph[node].rect.2 - 1, graph[node].rect.3 - 1);
+        println!("{:?}", (tl, sz, graph[node].is_match));
+        let color = if graph[node].is_match { 180 } else { 60 };
+        target.draw(Mark::Rect(tl, (sz.0-2, sz.1-2)), color);
+    }*/
+
+    target.show();
+
+    // Now, to get the largest possible regions, just take
+    // either leaves or non-leaf nodes that are true such that all children
+    // are also true.
+
+    /*let last_col = target.width()-1;
+    search_recursively_not_matched(&mut ranges, &w, 0, w.height()-1, last_col, empty_row_comp, 2);
+    for r in &ranges {
+        rects.push((w.offset().0 + r.start, w.offset().1, (r.end - r.start)-1, w.size().1));
+    }
+    ranges.clear();
+
+    // Do the col search only for nonmatched row regions.
+    let last_row = target.height()-1;
+    search_recursively_not_matched(&mut ranges, &w, 0, w.width()-1, last_row, empty_col_comp, 2);
+    for c in &ranges {
+        rects.push((w.offset().0, w.offset().1 + c.start, w.size().0, (c.end - c.start)-1));
+    }
+    for r in rects {
+        println!("{:?}", r);
+        // target.draw(Mark::Rect((r.0, r.1), (r.2-2, r.3-2)), 255);
+        for i in 0..r.2 {
+            for j in 0..r.3 {
+                target[(r.0+i, r.1+j)] = 127;
+            }
+        }
+    }*/
+
+    // target.show();
+}
+
+impl<T> AsRef<ImageBuf<T>> for Integral<T>
+where
+    T : Pixel + Scalar + Clone + Copy + Any + Zero + From<u8>
+{
+
+    fn as_ref(&self) -> &ImageBuf<T> {
+        &self.0
+    }
+
+}
+
+/*impl<'a, T> AsRef<Window<'a, T>> for Integral<T>
 where
     T : Scalar + Clone + Copy + Any + Zero + From<u8>
 {
@@ -89,9 +596,9 @@ where
         self.0.as_ref()
     }
 
-}
+}*/
 
-impl<'a, T> AsMut<WindowMut<'a, T>> for Integral<T>
+/*impl<'a, T> AsMut<WindowMut<'a, T>> for Integral<T>
 where
     T : Scalar + Clone + Copy + Any + Zero + From<u8>
 {
@@ -100,14 +607,14 @@ where
         self.0.as_mut()
     }
 
-}
+}*/
 
-pub struct Accumulated(Image<i32>);
+pub struct Accumulated(ImageBuf<i32>);
 
 impl Accumulated {
 
     pub fn calculate(win : &Window<u8>) -> Self {
-        let mut dst = unsafe { Self(Image::<i32>::new_empty(win.height(), win.width())) };
+        let mut dst = unsafe { Self(ImageBuf::<i32>::new_empty(win.height(), win.width())) };
         dst.update(win);
         dst
     }
@@ -117,7 +624,7 @@ impl Accumulated {
     // the image as a 1D buffer (which is why it requires a reference to an
     // owned buffer - this trick cannot be applied to image views).
     pub fn update(&mut self, w : &Window<u8>) {
-        baseline_accumulate(self.0.as_mut(), w);
+        baseline_accumulate(&mut self.0.full_window_mut(), w);
     }
 
     pub fn update_vectorized(&mut self, w : &Window<i32>) {
@@ -141,7 +648,7 @@ fn baseline_accumulate(dst : &mut WindowMut<i32>, src : &Window<u8>) {
     }
 }
 
-impl<'a> AsRef<Window<'a, i32>> for Accumulated
+/*impl<'a> AsRef<Window<'a, i32>> for Accumulated
 {
 
     fn as_ref(&self) -> &Window<'a, i32> {
@@ -157,7 +664,7 @@ impl<'a> AsMut<WindowMut<'a, i32>> for Accumulated
         self.0.as_mut()
     }
 
-}
+}*/
 
 // cargo test -- foo --nocapture
 #[test]
@@ -187,8 +694,8 @@ fn prefix_sum() {
     unsafe {
         vectorized_cumulative_sum(&a[..], &mut s[..]);
         baseline_cumulative_sum(&a[..], &mut s2[..]);
-        println!("{:?}", s);
-        println!("{:?}", s2);
+        // println!("{:?}", s);
+        // println!("{:?}", s2);
         assert!(s == s2);
     }
 }

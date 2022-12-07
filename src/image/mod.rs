@@ -361,6 +361,21 @@ where
         self.window(offset, sz)
     }
     
+    pub unsafe fn window_unchecked(
+        &self,
+        offset : (usize, usize),
+        dims : (usize, usize)
+    ) -> Window<P> {
+        let new_offset = (self.offset.0 + offset.0, self.offset.1 + offset.1);
+        Image {
+            slice : &self.slice.as_ref()[..],
+            offset : new_offset,
+            width : self.width,
+            sz : dims,
+            _px : PhantomData
+        }
+    }
+
     pub fn window(
         &self, 
         offset : (usize, usize), 
@@ -881,6 +896,14 @@ where
     //for<'b> &'b [N] : Storage<N>
 {
 
+    pub fn as_slice(&self) -> &[N] {
+        &self.slice[..]
+    }
+
+    pub fn as_mut_slice(&mut self) -> &mut [N] {
+        &mut self.slice[..]
+    }
+
     pub fn leak(self) {
         Box::leak(self.slice);
     }
@@ -1012,6 +1035,15 @@ where
         }
     }*/
 
+    pub fn new_random(height : usize, width : usize) -> Self
+    where
+        rand::distributions::Standard : rand::distributions::Distribution<N>
+    {
+        let mut img = ImageBuf::<N>::new_constant(height, width, N::zero());
+        img.fill_random();
+        img
+    }
+
     pub fn new_from_slice(source : &[N], width : usize) -> Self {
         let mut buf = Vec::with_capacity(source.len());
         let height = buf.len() / width;
@@ -1141,14 +1173,6 @@ where
         // int dstStep, IppiSize roiSize);
         // self.slice.copy_from_slice(&other.buf[..]);
     //    self.full_window_mut().copy_from(&other.full_window());
-    // }
-    
-    // pub fn as_slice(&self) -> &[S::Pixel] {
-    //    &self.slice[..]
-    // }
-    
-    // pub fn as_mut_slice(&mut self) -> &mut [S::Pixel] {
-    //    &mut self.slice[..]
     // }
     
     /*pub fn convert_from(&mut self, other : &Image<N>) {
@@ -2146,8 +2170,11 @@ where
         let len = self.slice.as_ref().len();
         unsafe {
             for (off, sz) in offsets.iter().zip(sizes.iter()) {
-                let mut sub = ImageRef::from_ptr(ptr, len, self.width, *off, *sz).unwrap();
-                wins.push(sub);
+                if let Some(sub) = ImageRef::from_ptr(ptr, len, self.width, *off, *sz) {
+                    wins.push(sub);
+                } else {
+                    return Vec::new();
+                }
             }
         }
         wins
@@ -2203,7 +2230,14 @@ where
     S : StorageMut<P>,
     &'a mut [P] : StorageMut<P>
 {
-    
+
+    pub fn fill_random(&mut self)
+    where
+        rand::distributions::Standard : rand::distributions::Distribution<P>
+    {
+        self.pixels_mut(1).for_each(|px| *px = rand::random() );
+    }
+
     /// Applies a closure to a subset of the mutable window. This effectively forces
     /// the user to innaugurate a new scope for which the lifetime of the original window
     /// is no longer valid, thus allowing applying an operation to different positions of

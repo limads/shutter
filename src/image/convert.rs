@@ -22,7 +22,7 @@ where
     S : Storage<P>
 {
 
-    fn convert<Q, T>(&self) -> ImageBuf<Q> 
+    pub fn convert<Q, T>(&self) -> ImageBuf<Q>
     where
         Q : Pixel,
         Self : Convert<ImageBuf<Q>>
@@ -32,7 +32,7 @@ where
         dst
     }
     
-    fn abs_convert<Q, T>(&self) -> ImageBuf<Q> 
+    pub fn abs_convert<Q, T>(&self) -> ImageBuf<Q>
     where
         Q : Pixel,
         Self : AbsConvert<ImageBuf<Q>>
@@ -42,7 +42,7 @@ where
         dst
     }
     
-    fn mul_convert<Q, T>(&self) -> ImageBuf<Q> 
+    pub fn mul_convert<Q, T>(&self) -> ImageBuf<Q>
     where
         Q : Pixel,
         Self : MulConvert<ImageBuf<Q>>
@@ -52,7 +52,7 @@ where
         dst
     }
     
-    fn div_convert<Q, T>(&self) -> ImageBuf<Q> 
+    pub fn div_convert<Q, T>(&self) -> ImageBuf<Q>
     where
         Q : Pixel,
         Self : DivConvert<ImageBuf<Q>>
@@ -62,7 +62,7 @@ where
         dst
     }
     
-    fn abs_mul_convert<Q, T>(&self) -> ImageBuf<Q> 
+    pub fn abs_mul_convert<Q, T>(&self) -> ImageBuf<Q>
     where
         Q : Pixel,
         Self : AbsMulConvert<ImageBuf<Q>>
@@ -72,7 +72,7 @@ where
         dst
     }
     
-    fn abs_div_convert<Q, T>(&self) -> ImageBuf<Q> 
+    pub fn abs_div_convert<Q, T>(&self) -> ImageBuf<Q>
     where
         Q : Pixel,
         Self : AbsDivConvert<ImageBuf<Q>>
@@ -82,7 +82,7 @@ where
         dst
     }
     
-    fn norm_max_convert<Q, T>(&self) -> ImageBuf<Q> 
+    pub fn norm_max_convert<Q, T>(&self) -> ImageBuf<Q>
     where
         Q : Pixel,
         Self : NormMaxConvert<ImageBuf<Q>>
@@ -92,7 +92,7 @@ where
         dst
     }
     
-    fn norm_min_max_convert<Q, T>(&self) -> ImageBuf<Q> 
+    pub fn norm_min_max_convert<Q, T>(&self) -> ImageBuf<Q>
     where
         Q : Pixel,
         Self : NormMinMaxConvert<ImageBuf<Q>>
@@ -159,6 +159,17 @@ mod base {
         
     }
 
+    impl<S, T> Convert<Image<u8, T>> for Image<i16, S>
+    where
+        S : Storage<i16>,
+        T : StorageMut<u8>,
+    {
+
+        fn convert_to(&self, dst : &mut Image<u8, T>) {
+            convert_to(self, dst);
+        }
+    }
+
     // i16 -> f32
     impl<S, T> Convert<Image<i16, T>> for Image<f32, S> 
     where
@@ -187,7 +198,7 @@ mod base {
         
     }
     
-    // u8 -> i16
+    // i16 -> u8
     impl<S, T> Convert<Image<i16, T>> for Image<u8, S> 
     where
         S : Storage<u8>,
@@ -233,7 +244,8 @@ mod base {
                 return;
             } 
         }
-        b.pixels_mut(1).zip(a.pixels(1)).for_each(|(dst, src)| *dst = src.as_() );
+        // b.pixels_mut(1).zip(a.pixels(1)).for_each(|(dst, src)| *dst = src.as_() );
+        unimplemented!()
     }
 
 }

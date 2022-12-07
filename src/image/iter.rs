@@ -560,10 +560,10 @@ where
     // Index the most ancestral window possible.
     pub(crate) curr_pos : (usize, usize),
 
-    /// Vertical increment. Either U1 or Dynamic.
+    /// Vertical increment.
     pub(crate) step_v : usize,
 
-    /// Horizontal increment. Either U1 or Dynamic.
+    /// Horizontal increment.
     pub(crate) step_h : usize,
 
 }
@@ -886,7 +886,6 @@ where
     range.map(move |ix| (ix / w, ix % w) )
 }
 
-
 pub struct WindowNeighborhood<'a, N>
 where
     N : Scalar
@@ -896,5 +895,15 @@ where
     pub top : Window<'a, N>,
     pub right : Window<'a, N>,
     pub bottom : Window<'a, N>,
+}
+
+#[test]
+fn window_iterator() {
+    let v : Vec<_> = (0..1024).map(|i| i as u8 ).collect();
+    let img = ImageBuf::from_vec(v, 32);
+    let w = img.window((15, 15), (16, 16)).unwrap();
+    for w in w.windows((4, 4)) {
+        println!("{:?}", w.offset());
+    }
 }
 

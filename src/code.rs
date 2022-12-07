@@ -17,6 +17,17 @@ use nalgebra::{Point2, Vector2};
 use std::ops::AddAssign;
 use crate::gray::Foreground;
 
+// Contains a sparse image code. This implements Encoding
+// by dispatching to the encoding implementation of each
+// variant, so users can use the Encoding methods (points, etc)
+// Irrespective of what encoding is being used.
+pub enum ImageCode {
+    Point(PointCode),
+    RunLength(RunLengthCode),
+    Chain(ChainCode),
+    Pattern(PatternCode)
+}
+
 /* Represents a binary image by a set of foreground pixel coordinates. Useful when
 objects are expected to be speckle-like. For dense objects, consider using RunLengthEncoding
 instead, since PointEncoding is an encoding that is potentially memory-heavy. But if objects are
