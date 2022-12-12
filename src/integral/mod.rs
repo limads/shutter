@@ -15,8 +15,8 @@ use smallvec::SmallVec;
 
 #[cfg(feature="ipp")]
 fn ipp_integral(win : &Window<u8>, dst : &mut WindowMut<i32>) {
-    assert!(win.width() == dst.width() - 1);
-    assert!(win.height() == dst.height() - 1);
+    assert!(win.width() == dst.width() - 1, "Source = {:?} Target = {:?}", win.size(), dst.size());
+    assert!(win.height() == dst.height() - 1, "Source = {:?} Target = {:?}", win.size(), dst.size());
     unsafe {
         let (src_step, src_sz) = crate::image::ipputils::step_and_size_for_window(win);
         let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_window_mut(&dst);
@@ -180,7 +180,7 @@ impl Content {
 
 }
 
-fn rect_area(w : &Window<i32>) -> i32 {
+pub fn rect_area(w : &Window<i32>) -> i32 {
     let br = w[(w.height()-1,w.width()-1)];
     let tr = w[(0, w.width()-1)];
     let tl = w[(0usize, 0usize)];
@@ -188,7 +188,7 @@ fn rect_area(w : &Window<i32>) -> i32 {
     (br - (tr - tl) - bl)
 }
 
-fn rect_content(w : &Window<i32>) -> Content {
+pub fn rect_content(w : &Window<i32>) -> Content {
     let total = rect_area(w);
     let max = ((w.height()-1) * (w.width()-1)) as i32 * 255;
     if total == 0 {
@@ -367,12 +367,101 @@ pub enum Split {
 
 }
 
-pub fn bounding_row_points(window : &Window<i32>, pts : &mut Vec<(usize, usize)>) {
-    let width = window.width()-1;
-    let mut pts = Vec::new();
+pub fn update_integral_range(
+    fst_px : i32,
+    lst_px : i32,
+    i : usize,
+    lst_range : &mut Option<Range<usize>>,
+    ranges : &mut Vec<Range<usize>>
+) {
+    if fst_px == lst_px {
+        if let Some(lst_range) = lst_range.take() {
+            ranges.push(lst_range);
+        }
+    } else {
+        if let Some(lst_range) = lst_range.as_mut() {
+            lst_range.end += 1;
+        } else {
+            *lst_range = Some(Range { start : i, end : i + 1 });
+        }
+    }
+}
+
+pub fn rows_with_content(window : &Window<i32>) -> Vec<Range<usize>> {
+    let mut rows = Vec::new();
+    let lst_col = window.width()-1;
+    let mut lst_range : Option<Range<usize>> = None;
     for i in 1..window.height() {
         let fst_px = window[(i, 0)] - window[(i-1, 0)];
-        let lst_px = window[(i, width-1)] - window[(i-1, width-1)];
+        let lst_px = window[(i, lst_col)] - window[(i-1, lst_col)];
+        update_integral_range(fst_px, lst_px, i, &mut lst_range, &mut rows);
+    }
+    rows
+}
+
+pub fn cols_with_content(window : &Window<i32>) -> Vec<Range<usize>> {
+    let mut cols = Vec::new();
+    let lst_row = window.height()-1;
+    let mut lst_range : Option<Range<usize>> = None;
+    for i in 1..window.width() {
+        let fst_px = window[(0, i)] - window[(0, i-1)];
+        let lst_px = window[(lst_row, i)] - window[(lst_row, i-1)];
+        update_integral_range(fst_px, lst_px, i, &mut lst_range, &mut cols);
+    }
+    cols
+}
+
+// cargo test --lib -- brp --nocapture
+#[test]
+fn brp() {
+
+    use crate::draw::*;
+    use crate::image::*;
+
+    let mut img = ImageBuf::<u8>::new_constant(64, 64, 0);
+    img.draw(Mark::Dot((32, 32), 16), 255);
+    let int = Integral::calculate(&img.full_window());
+    let mut pts = Vec::new();
+    bounding_row_points(&int.as_ref().full_window(), &mut pts);
+    // println!("{:?}", pts);
+    for pt in pts {
+        img.draw(Mark::Cross(pt, 3), 127);
+    }
+    img.show();
+}
+
+const fn expected_diffs() -> [i32; 1024] {
+    let mut out : [i32; 1024] = [0; 1024];
+    let mut i = 0;
+    while i < 1024 {
+        out[i] = (i as i32)*255;
+        i += 1;
+    }
+    out
+}
+
+const EXPECTED_DIFFS : [i32; 1024] = expected_diffs();
+
+/*pub fn sub_window_with_content<'a>(window : &Window<'a,i32>) -> Option<Window<'a, i32>> {
+    let lst_col = window.width()-1;
+
+    let top_nonempty_row = itertools::partition((1..window.height()).map(|mut i| &mut i ), |i| {
+        let fst_px = window[(*i, 0)] - window[(*i-1, 0)];
+        let lst_px = window[(*i, lst_col)] - window[(*i-1, lst_col)];
+        fst_px == lst_px
+    });
+
+    Some(window.clone())
+
+}*/
+
+pub fn bounding_row_points(window : &Window<i32>, pts : &mut Vec<(usize, usize)>) {
+    let lst_col = window.width()-1;
+    let mut prev_i = 0;
+    for i in 1..window.height() {
+        prev_i = i-1;
+        let fst_px = window[(i, 0)] - window[(prev_i, 0)];
+        let lst_px = window[(i, lst_col)] - window[(prev_i, lst_col)];
         if lst_px == fst_px {
             continue;
         }
@@ -381,18 +470,21 @@ pub fn bounding_row_points(window : &Window<i32>, pts : &mut Vec<(usize, usize)>
         let fst_addr = &window[(i, 0)] as *const i32;
         let start = window.row(i).unwrap().partition_point(|px| {
             let col = unsafe { (px as *const i32).offset_from(fst_addr) as usize };
-            (px - window[(i-1, col)]) == fst_px
+            (px - window[(prev_i, col)]) == fst_px
         });
         let mut end = window.row(i).unwrap()[start..].partition_point(|px| {
             let col = unsafe { (px as *const i32).offset_from(fst_addr) as usize };
-            (px - window[(i-1, col)]) != lst_px
+            (px - window[(prev_i, col)]) != lst_px
         });
         end += start;
 
         // TODO verify (win[end] - win[start]) / 255 == end - start.
         // Do not push in case this doesn't apply.
-        pts.push((i - 1, start - 1));
-        pts.push((i - 1, end - 1));
+        let solid_diff = EXPECTED_DIFFS[end - start];
+        if ((window[(i, end)] - window[(i-1, end)]) - (window[(i, start)] - window[(i-1, start)])) == solid_diff {
+            pts.push((prev_i, start - 1));
+            pts.push((prev_i, end - 1));
+        }
     }
 }
 

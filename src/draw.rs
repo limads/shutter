@@ -218,7 +218,8 @@ where
                     return;
                 }
 
-                println!("Warning: Text drawing require opencv feature");
+                // println!("Warning: Text drawing require opencv feature");
+                draw_label(self, &txt, tl_pos);
             },
             Mark::Arrow(from, to, thickness) => {
 
@@ -497,11 +498,11 @@ pub fn draw_line(
     let (nrow, ncol) = img_dims;
 
     if src.0 >= img_dims.0 || dst.0 >= img_dims.0 {
-        panic!("Row is {}, {} but image has {} rows", src.0, dst.0, img_dims.0);
+        return;
     }
 
     if src.1 >= img_dims.1 || dst.1 >= img_dims.1 {
-        panic!("Col is {}, {} but image has {} cols", src.1, dst.1, img_dims.1);
+        return;
     }
 
     // Draw straight horizontal line (if applicable)
@@ -749,6 +750,26 @@ pub fn write_char(mut c : char, rows : &mut [&mut [u8]]) {
         for j in 0..8 {
             set = bitmap[i] & 1 << j;
             rows[i][j] = if bitmap[i] & 1 << j == 0 { 0 } else { 255 };
+        }
+    }
+}
+
+pub fn draw_label<S>(img : &mut Image<u8, S>, msg : &str, tl : (usize, usize))
+where
+    S : StorageMut<u8>
+{
+    let mut sub_w = img.window_mut(tl, (img.height() - tl.0, img.width() - tl.1)).unwrap();
+    let mut curr_line = 0;
+    let mut curr_col = 0;
+    for c in msg.chars() {
+        if c == '\n' {
+            curr_line += 1;
+            curr_col = 0;
+        } else {
+            if let Some(mut w) = sub_w.window_mut((curr_line*8, curr_col*8), (8, 8)) {
+                write_char(c, &mut w.rows_mut().collect::<Vec<_>>()[..]);
+            }
+            curr_col += 1;
         }
     }
 }

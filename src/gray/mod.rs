@@ -50,12 +50,52 @@ impl AdaptiveForeground {
 
 #[cfg(feature="ipp")]
 #[derive(Debug, Clone)]
+pub struct ErodedHysteresisOutput
+{
+    pub out : ImageBuf<u8>,
+    pub low : ImageBuf<u8>,
+    pub high : ImageBuf<u8>,
+    pub low_eroded : ImageBuf<u8>,
+    pub high_eroded : ImageBuf<u8>,
+    pub dilate : crate::morph::IppiMorph,
+    pub erode : crate::morph::IppiMorph,
+}
+
+#[cfg(feature="ipp")]
+impl ErodedHysteresisOutput {
+
+    pub fn output(&self) -> &ImageBuf<u8> {
+        &self.out
+    }
+
+    pub fn output_mut(&mut self) -> &mut ImageBuf<u8> {
+        &mut self.out
+    }
+
+    pub fn new<S>(height : usize, width : usize, se : &Image<u8, S>) -> Self
+    where
+        S : Storage<u8>
+    {
+        let low = ImageBuf::<u8>::new_constant(height, width, 0);
+        let out = low.clone();
+        let high = low.clone();
+        let low_eroded = low.clone();
+        let high_eroded = high.clone();
+        let dilate = crate::morph::IppiMorph::new(se.clone_owned(), (height, width), true);
+        let erode = crate::morph::IppiMorph::new(se.clone_owned(), (height, width), false);
+        Self { low, out, high, dilate, erode, low_eroded, high_eroded }
+    }
+
+}
+
+#[cfg(feature="ipp")]
+#[derive(Debug, Clone)]
 pub struct HysteresisOutput
 {
-    low : ImageBuf<u8>,
-    out : ImageBuf<u8>,
-    high : ImageBuf<u8>,
-    morph : crate::morph::IppiMorph
+    pub low : ImageBuf<u8>,
+    pub out : ImageBuf<u8>,
+    pub high : ImageBuf<u8>,
+    pub dilate : crate::morph::IppiMorph
 }
 
 #[cfg(feature="ipp")]
@@ -76,8 +116,8 @@ impl HysteresisOutput {
         let low = ImageBuf::<u8>::new_constant(height, width, 0);
         let out = low.clone();
         let high = low.clone();
-        let morph = crate::morph::IppiMorph::new(se.clone_owned(), (height, width), true);
-        Self { low, out, high, morph }
+        let dilate = crate::morph::IppiMorph::new(se.clone_owned(), (height, width), true);
+        Self { low, out, high, dilate }
     }
     
 }
@@ -141,8 +181,19 @@ where
     {
         self.threshold_to(fg_low, &mut out.low);
         self.threshold_to(fg_high, &mut out.high);
-        out.morph.apply(&out.low, &mut out.out);
+        out.dilate.apply(&out.low, &mut out.out);
         out.out.and_assign(&out.high);
+    }
+
+    #[cfg(feature="ipp")]
+    pub fn eroded_hysteresis_threshold_to(&self, fg_low : Foreground, fg_high : Foreground, out : &mut ErodedHysteresisOutput)
+    {
+        self.threshold_to(fg_low, &mut out.low);
+        self.threshold_to(fg_high, &mut out.high);
+        out.erode.apply(&out.low, &mut out.low_eroded);
+        out.erode.apply(&out.high, &mut out.high_eroded);
+        out.dilate.apply(&out.low_eroded, &mut out.out);
+        out.out.and_assign(&out.high_eroded);
     }
     
     /* Binarizes a bit image, setting all unmatched pixels to zero, and matched pixels

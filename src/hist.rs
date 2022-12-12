@@ -237,6 +237,26 @@ impl GrayHistogram {
         self.hist.iter().map(|f| *f as f64 / sum ).collect()
     }
     
+    pub fn accumulate_inplace(&mut self) {
+        for i in 1..256 {
+            self.hist[i] += self.hist[i-1];
+            // assert!(self.hist[i] >= self.hist[i-1]);
+        }
+        // assert!(self.hist[255] == self.sum, "{} vs. {}", self.hist[255], self.sum);
+    }
+
+    pub fn quantile_when_accumulated(&self, q : f32) -> u8 {
+        let target = (self.hist[255] as f32 * q) as u32;
+        self.hist.partition_point(|px| *px < target ) as u8
+
+        /*for i in 0..256 {
+            if self.hist[i] >= target {
+                return i as u8;
+            }
+        }
+        255 as u8*/
+    }
+
     pub fn accumulate(&self) -> Vec<u32> {
         bayes::calc::running::cumulative_sum(self.hist.iter().copied()).collect()
     }
@@ -317,19 +337,62 @@ impl GrayHistogram {
     pub fn update(&mut self, win : &Window<'_, u8>) {
 
         self.sum = (win.height() * win.width()) as u32;
-        
-        // TODO Maybe IPP already does this step?
-        self.hist.iter_mut().for_each(|bin| *bin = 0 );
 
         #[cfg(feature="ipp")]
         unsafe {
-            let mut n_levels = 256;
-            let n_channels = 1;
-            let (step, sz) = crate::image::ipputils::step_and_size_for_window(&win);
-            let dtype = crate::foreign::ipp::ippi::IppDataType_ipp8u;
-            let uniform_step = 1;
-            let mut spec_sz = 0;
-            let mut buf_sz = 0;
+            let mut h = IppHistogram::new(win.height(), win.width());
+            h.update(win);
+            self.hist.copy_from_slice(&h.hist[..]);
+
+            // assert!(ans == 0);
+            // let ans = crate::foreign::ipp::ippi::ippiHistogramGetLevels(spec.as_ptr(), )
+            return;
+        }
+
+        unimplemented!()
+    }
+
+    pub fn calculate(win : &Window<'_, u8>) -> Self {
+        // TODO Actually, hist is n_levels - 1 = 255, since position ix means a count of pixels w/ intensity <= px.
+        let mut hist = Self { hist : [0; 256], sum : 0 };
+        hist.update(win);
+        hist
+   }
+
+}
+
+#[cfg(feature="ipp")]
+pub struct IppHistogram {
+    spec : Vec<u8>,
+    pub hist : [u32; 256],
+    pub hist_buffer : Vec<u8>,
+    sum : u32
+}
+
+#[cfg(feature="ipp")]
+impl IppHistogram {
+
+    pub fn accumulate_inplace(&mut self) {
+        for i in 1..256 {
+            self.hist[i] += self.hist[i-1];
+        }
+    }
+
+    pub fn quantile_when_accumulated(&self, q : f32) -> u8 {
+        let target = (self.hist[255] as f32 * q) as u32;
+        self.hist.partition_point(|px| *px < target ) as u8
+    }
+
+    pub fn new(height : usize, width : usize) -> Self {
+
+        let mut n_levels = 256;
+        let n_channels = 1;
+        let dtype = crate::foreign::ipp::ippi::IppDataType_ipp8u;
+        let uniform_step = 1;
+        let mut spec_sz = 0;
+        let mut buf_sz = 0;
+        let sz = crate::foreign::ipp::ippi::IppiSize { width : width as i32, height : height as i32 };
+        unsafe {
             let ans = crate::foreign::ipp::ippi::ippiHistogramGetBufferSize(
                 dtype,
                 sz,
@@ -354,30 +417,30 @@ impl GrayHistogram {
                 mem::transmute(spec.as_mut_ptr())
             );
             assert!(ans == 0);
+            Self { spec, hist : [0; 256], hist_buffer, sum : (width * height) as u32 }
+        }
+    }
 
+    pub fn update<S>(&mut self, win : &Image<u8, S>)
+    where
+        S : Storage<u8>
+    {
+        // TODO Maybe IPP already does this step?
+        self.hist.iter_mut().for_each(|bin| *bin = 0 );
+
+        unsafe {
+            let (step, sz) = crate::image::ipputils::step_and_size_for_image(win);
             let ans = crate::foreign::ipp::ippi::ippiHistogram_8u_C1R(
                 win.as_ptr(),
                 step,
                 sz,
                 self.hist.as_mut_ptr(),
-                mem::transmute(spec.as_ptr()),
-                hist_buffer.as_mut_ptr()
+                mem::transmute(self.spec.as_ptr()),
+                self.hist_buffer.as_mut_ptr()
             );
             assert!(ans == 0);
-            // let ans = crate::foreign::ipp::ippi::ippiHistogramGetLevels(spec.as_ptr(), )
-            return;
         }
-
-        unimplemented!()
     }
-
-    pub fn calculate(win : &Window<'_, u8>) -> Self {
-        // TODO Actually, hist is n_levels - 1 = 255, since position ix means a count of pixels w/ intensity <= px.
-        let mut hist = Self { hist : [0; 256], sum : 0 };
-        hist.update(win);
-        hist
-   }
-
 }
 
 /// Calculates the intensity histogram of the image read.

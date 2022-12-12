@@ -833,6 +833,7 @@ unsafe fn ipp_convolution_u8(img : &Window<u8>, kernel : &Window<u8>, out : &mut
     // is u8::MAX, the result will be divided by u8::MAX*kernel_sz, thus
     // making the output u8::MAX.
     let divisor = (kernel.sum::<f32>(1) as i32).max(1);
+    // let divisor = 1;
 
     let status = ippiConv_8u_C1R(
         img.as_ptr(),

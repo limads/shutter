@@ -412,99 +412,50 @@ fn chain() {
     
 }*/
 
-impl ChainCode {
-    
-    fn chain_union_to_btree(&self, unions : UnionFind<usize>) -> BTreeMap<usize, ChainCode> {
-        let mut dst : BTreeMap<usize, ChainCode> = BTreeMap::new();
-        for i in 0..self.len() {
-            let ch = self.get(i).unwrap();
-            let repr = unions.find(i);
-            if let Some(enc) = dst.get_mut(&repr) {
-                enc.starts.push(ch.start);
-                enc.ends.push(ch.end);
-                let n = enc.directions.len();
-                enc.directions.extend(ch.traj.iter().copied());
-                enc.ranges.push(Range { start : n, end : enc.directions.len() });
-            } else {
-                let enc = ChainCode {
-                    starts : vec![ch.start],
-                    ends : vec![ch.end],
-                    directions : ch.traj.iter().copied().collect(),
-                    ranges : vec![Range { start : 0, end : ch.traj.len() }]
-                };
-                dst.insert(repr, enc);
-            }
-        }
-        dst
-    }
+pub struct ChainEncoder {
 
-    pub fn split_by_proximity(&self, by : usize) -> BTreeMap<usize, ChainCode> {
-        let unions = self.proximity_unions(by);
-        self.chain_union_to_btree(unions)
+    bump : bumpalo::Bump,
+    
+    size : (usize, usize)
+    
+}
+
+impl ChainEncoder {
+
+    pub fn new(height : usize, width : usize) -> Self {
+        let arena_sz = mem::size_of::<Direction>() * height * width;
+        let bump = bumpalo::Bump::with_capacity(arena_sz);
+        Self { bump, size : (height, width) }
     }
     
-    pub fn split(&self) -> BTreeMap<usize, ChainCode> {
-        let unions = self.unions();
-        self.chain_union_to_btree(unions)
-    }
-    
-    pub fn proximity_unions(&self, dist : usize) -> UnionFind<usize> {
-        let mut uf = UnionFind::new(self.starts.len());
-        for (i, c1) in self.chains().enumerate() {
-            for (j, c2) in self.chains().enumerate() {
-                if i != j && c1.close_to(&c2, dist).is_some() {
-                    uf.union(i, j);
-                }
-            }
-        }
-        uf
-    }
-    
-    /* Can also build an undirected graph using link as edges */
-    pub fn unions(&self) -> UnionFind<usize> {
-        let mut uf = UnionFind::new(self.starts.len());
-        for (i, c1) in self.chains().enumerate() {
-            for (j, c2) in self.chains().enumerate() {
-                if i != j && c1.link(&c2).is_some() {
-                    uf.union(i, j);
-                }
-            }
-        }
-        uf
-    }
-    
-    pub fn chains<'a>(&'a self) -> ChainIter<'a> {
-        ChainIter { enc : self, curr : 0 }
-    }
-    
-    pub fn encode<S>(bin_img : &Image<u8, S>) -> ChainCode 
+    pub fn encode<S>(&self, bin_img : &Image<u8, S>, mut old : Option<ChainCode>) -> ChainCode
     where
         S : Storage<u8>
     {
+        assert!(bin_img.height() == self.size.0 && bin_img.width() == self.size.1);
+        let mut old = old.unwrap_or(ChainCode::new_empty());
+        old.clear();
+        let ChainCode { mut starts, mut ends, mut ranges, mut directions } = old;
+        // let mut starts = Vec::new();
+        // let mut ends = Vec::new();
+        // let mut ranges : Vec<Range<usize>> = Vec::new();
+        // let mut directions = Vec::new();
+        let mut open_chains = BumpVecOpen::new_in(&self.bump);
+        let mut row_chains = BumpVecOpen::new_in(&self.bump);
 
-        use bumpalo::Bump;
-    
-        let arena_sz = mem::size_of::<Direction>() * bin_img.height() * bin_img.width();
-        let bump = Bump::with_capacity(arena_sz);
-        let mut starts = Vec::new();
-        let mut ends = Vec::new();
-        let mut ranges : Vec<Range<usize>> = Vec::new();
-        let mut open_chains = BumpVecOpen::new_in(&bump);
-        let mut row_chains = BumpVecOpen::new_in(&bump);
-        let mut directions = Vec::new();
 
         // Holds indices of open_chains that matched the current row.
-        let mut open_matched = bumpalo::collections::Vec::new_in(&bump);
+        let mut open_matched = bumpalo::collections::Vec::new_in(&self.bump);
 
         for (row_ix, row) in bin_img.rows().enumerate() {
 
             let mut past = row[0];
             if row[0] != 0 {
-                // Innaugurante a chain when first pixel is nonzero.
+                // Inaugurate a chain when first pixel is nonzero.
                 row_chains.push(OpenChain {
                     start : (row_ix, 0),
                     end : (row_ix, 0),
-                    directions : BumpVecDir::new_in(&bump)
+                    directions : BumpVecDir::new_in(&self.bump)
                 });
             }
 
@@ -521,7 +472,7 @@ impl ChainCode {
                         row_chains.push(OpenChain { 
                             start : (row_ix, col_ix), 
                             end : (row_ix, col_ix), 
-                            directions : BumpVecDir::new_in(&bump) 
+                            directions : BumpVecDir::new_in(&self.bump)
                         });
                     },
                     (true, false) => {
@@ -651,6 +602,158 @@ impl ChainCode {
             ends
         }
     }
+}
+
+impl ChainCode {
+
+    pub fn new_empty() -> Self {
+        Self::default()
+    }
+
+    pub fn clear(&mut self) {
+        self.starts.clear();
+        self.ends.clear();
+        self.ranges.clear();
+        self.directions.clear();
+    }
+
+    pub fn retain_larger(&mut self, min_sz : usize) {
+        for i in (0..self.starts.len()).rev() {
+            if self.ranges[i].end - self.ranges[i].start < min_sz {
+                // Note the directions Vector isn't actually cleaned
+                // so as to not invalidate the indices of the ranges.
+                // But there is no way to access the removed elements
+                // from the public API.
+                self.ranges.remove(i);
+                self.starts.remove(i);
+                self.ends.remove(i);
+            }
+        }
+    }
+
+    pub fn count_points(&self) -> usize {
+        self.chains().fold(0, |count, chain| count + chain.len() )
+    }
+
+    pub fn len(&self) -> usize {
+        self.starts.len()
+    }
+
+    pub fn get(&self, ix : usize) -> Option<Chain> {
+        let start = self.starts.get(ix)?;
+        let end = self.ends.get(ix)?;
+        let traj = &self.directions[self.ranges.get(ix)?.clone()];
+        Some(Chain { start : *start, end : *end, traj })
+    }
+
+    unsafe fn get_unchecked(&self, ix : usize) -> Chain {
+        let start = self.starts.get_unchecked(ix);
+        let end = self.ends.get_unchecked(ix);
+        let traj = &self.directions[self.ranges.get_unchecked(ix).clone()];
+        Chain { start : *start, end : *end, traj }
+    }
+
+    pub fn iter(&self) -> ChainIter {
+        ChainIter {
+            enc : self,
+            curr : 0,
+            end : self.starts.len()
+        }
+    }
+
+    pub fn iter_segment(&self, range : Range<usize>) -> ChainIter {
+        assert!(range.end >= range.start);
+        assert!(range.start <= self.starts.len());
+        assert!(range.end <= self.starts.len());
+        ChainIter {
+            enc : self,
+            curr : range.start,
+            end : range.end
+        }
+    }
+
+    pub fn chains<'a>(&'a self) -> ChainIter<'a> {
+        self.iter()
+    }
+
+    fn chain_union_to_btree(&self, unions : UnionFind<usize>) -> BTreeMap<usize, ChainCode> {
+        let mut dst : BTreeMap<usize, ChainCode> = BTreeMap::new();
+        for i in 0..self.len() {
+            let ch = self.get(i).unwrap();
+            let repr = unions.find(i);
+            if let Some(enc) = dst.get_mut(&repr) {
+                enc.starts.push(ch.start);
+                enc.ends.push(ch.end);
+                let n = enc.directions.len();
+                enc.directions.extend(ch.traj.iter().copied());
+                enc.ranges.push(Range { start : n, end : enc.directions.len() });
+            } else {
+                let enc = ChainCode {
+                    starts : vec![ch.start],
+                    ends : vec![ch.end],
+                    directions : ch.traj.iter().copied().collect(),
+                    ranges : vec![Range { start : 0, end : ch.traj.len() }]
+                };
+                dst.insert(repr, enc);
+            }
+        }
+        dst
+    }
+
+    pub fn split_by_proximity(&self, by : usize) -> BTreeMap<usize, ChainCode> {
+        let unions = self.proximity_unions(by);
+        self.chain_union_to_btree(unions)
+    }
+
+    pub fn split(&self) -> BTreeMap<usize, ChainCode> {
+        let unions = self.unions();
+        self.chain_union_to_btree(unions)
+    }
+
+    pub fn proximity_unions(&self, dist : usize) -> UnionFind<usize> {
+        let mut uf = UnionFind::new(self.starts.len());
+        /*for (i, c1) in self.chains().enumerate() {
+            for (j, c2) in self.chains().enumerate() {
+                if i != j && c1.close_to(&c2, dist).is_some() {
+                    uf.union(i, j);
+                }
+            }
+        }*/
+
+        if self.starts.len() < 2 {
+            return uf;
+        }
+        for i in 0..(self.starts.len()-1) {
+            for j in i..self.starts.len() {
+                let c1 = unsafe { self.get_unchecked(i) };
+                let c2 = unsafe { self.get_unchecked(j) };
+                if c1.is_close_to(&c2, dist) {
+                    uf.union(i, j);
+                }
+            }
+        }
+        uf
+    }
+
+    /* Can also build an undirected graph using link as edges */
+    pub fn unions(&self) -> UnionFind<usize> {
+        let mut uf = UnionFind::new(self.starts.len());
+        for (i, c1) in self.chains().enumerate() {
+            for (j, c2) in self.chains().enumerate() {
+                if i != j && c1.link(&c2).is_some() {
+                    uf.union(i, j);
+                }
+            }
+        }
+        uf
+    }
+
+    pub fn encode<S>(bin_img : &Image<u8, S>) -> ChainCode
+    where
+        S : Storage<u8>
+    {
+        ChainEncoder::new(bin_img.height(), bin_img.width()).encode(bin_img, None)
+    }
 
 }
 
@@ -768,33 +871,8 @@ pub struct ChainCode {
 
 pub struct ChainIter<'a> {
     enc : &'a ChainCode,
-    curr : usize
-}
-
-impl ChainCode {
-    
-    pub fn count_points(&self) -> usize {
-        self.chains().fold(0, |count, chain| count + chain.len() )
-    }
-    
-    pub fn len(&self) -> usize {
-        self.starts.len()
-    }
-    
-    pub fn get(&self, ix : usize) -> Option<Chain> {
-        let start = self.starts.get(ix)?;
-        let end = self.ends.get(ix)?;
-        let traj = &self.directions[self.ranges.get(ix)?.clone()];
-        Some(Chain { start : *start, end : *end, traj })
-    }
-    
-    pub fn iter(&self) -> ChainIter {
-        ChainIter {
-            enc : self,
-            curr : 0
-        }
-    }
-
+    curr : usize,
+    end : usize
 }
 
 impl<'a> Iterator for ChainIter<'a> {
@@ -802,7 +880,10 @@ impl<'a> Iterator for ChainIter<'a> {
     type Item = Chain<'a>;
 
     fn next(&mut self) -> Option<Chain<'a>> {
-        let ch = self.enc.get(self.curr)?;
+        if self.curr >= self.end {
+            return None;
+        }
+        let ch = unsafe { self.enc.get_unchecked(self.curr) };
         self.curr += 1;
         Some(ch)
     }
@@ -864,6 +945,14 @@ impl<'a> Chain<'a> {
             Chain { start : self.start, end : end_fst, traj : &self.traj[..=n_end_fst] },
             Chain { start : start_snd, end : self.end, traj : &self.traj[range.end..] }
         ))
+    }
+
+    pub fn is_close_to(&self, other : &Self, by : usize) -> bool {
+        let start_start = is_point_close(self.start, other.start, by);
+        let start_end = is_point_close(self.start, other.end, by);
+        let end_start = is_point_close(self.end, other.start, by);
+        let end_end = is_point_close(self.end, other.end, by);
+        start_start || start_end || end_start || end_end
     }
 
     pub fn close_to(&self, other : &Self, by : usize) -> Option<Link> {

@@ -9,6 +9,36 @@ pub use ripple::conv::*;
 use std::fmt::Debug;
 use std::ops::Add;
 
+#[test]
+pub fn sum_row() {
+    let side = 4;
+    let mut img = ImageBuf::<u8>::new_constant(side, side, 1);
+    let mut dst = ImageBuf::<f32>::new_constant(4, 4, 0.);
+    let (src_step, src_roi) = crate::image::ipputils::step_and_size_for_image(&img);
+    let (dst_step, dst_roi) = crate::image::ipputils::step_and_size_for_image(&img);
+    let mask_sz = 4 as i32;
+    let anchor = 0;
+    let ans = unsafe {
+        crate::foreign::ipp::ippi::ippiSumWindowRow_8u32f_C1R(
+            img.as_ptr(),
+            src_step,
+            dst.as_mut_ptr(),
+            dst_step,
+            dst_roi,
+            mask_sz,
+            anchor
+        )
+    };
+    assert!(ans == 0);
+    let mask_sz = 16;
+    for i in 0..4usize {
+        println!("Row {}", i);
+        for j in 0..4usize {
+            println!("{}", dst[(i, j)]);
+        }
+    }
+}
+
 /*/*
 The filling routines assumes 3x3 neighborhoods at object edges must have a given
 number of positive entries for the overall shape to be convex. The center pixel
