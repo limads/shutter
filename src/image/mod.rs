@@ -376,6 +376,22 @@ where
         }
     }
 
+    pub fn region(
+        &self,
+        region : &crate::shape::Region
+    ) -> Option<ImageRef<P>> {
+        let (y, x, h, w) = region.to_rect_tuple();
+        self.window((y, x), (h, w))
+    }
+
+    pub fn area_(
+        &self,
+        area : &crate::shape::Area
+    ) -> Option<ImageRef<P>> {
+        let (y, x, h, w) = area.region(self.sz)?.to_rect_tuple();
+        self.window((y, x), (h, w))
+    }
+
     pub fn window(
         &self, 
         offset : (usize, usize), 
@@ -507,6 +523,7 @@ where
         }
     }
     
+
 }
 
 pub enum ImmutableImage<'a, N> {
@@ -2180,6 +2197,22 @@ where
         wins
     }
     
+    pub fn area_mut(
+        &mut self,
+        area : &crate::shape::Area
+    ) -> Option<ImageMut<P>> {
+        let (y, x, h, w) = area.region(self.sz)?.to_rect_tuple();
+        self.window_mut((y, x), (h, w))
+    }
+
+    pub fn region_mut(
+        &mut self,
+        region : &crate::shape::Region
+    ) -> Option<ImageMut<P>> {
+        let (y, x, h, w) = region.to_rect_tuple();
+        self.window_mut((y, x), (h, w))
+    }
+
     pub fn window_mut(
         &mut self, 
         offset : (usize, usize), 

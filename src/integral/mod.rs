@@ -421,15 +421,18 @@ fn brp() {
     let mut img = ImageBuf::<u8>::new_constant(64, 64, 0);
     img.draw(Mark::Dot((32, 32), 16), 255);
     let int = Integral::calculate(&img.full_window());
-    let mut pts = Vec::new();
-    bounding_row_points(&int.as_ref().full_window(), &mut pts);
+    let mut rles = Vec::new();
+    bounding_row_points(&int.as_ref().full_window(), &mut rles);
     // println!("{:?}", pts);
-    for pt in pts {
-        img.draw(Mark::Cross(pt, 3), 127);
+    for rle in rles {
+        let (start, end) = rle.bounds();
+        img.draw(Mark::Cross(start, 3), 127);
+        img.draw(Mark::Cross(end, 3), 127);
     }
     img.show();
 }
 
+// Expected diffs where matching pixels have maximum u8 value (255).
 const fn expected_diffs() -> [i32; 1024] {
     let mut out : [i32; 1024] = [0; 1024];
     let mut i = 0;
@@ -455,35 +458,49 @@ const EXPECTED_DIFFS : [i32; 1024] = expected_diffs();
 
 }*/
 
-pub fn bounding_row_points(window : &Window<i32>, pts : &mut Vec<(usize, usize)>) {
+/*// Given that the two bounds of the slice are positive, iterate inward up to the point
+// where they stop changing.
+fn iter_inner(prev : &[i32], this : &[i32]) -> (usize, usize) {
+    let mut start = 0;
+    while start < (r.len()-1) {
+        if r[start+1]
+    }
+}*/
+
+pub fn bounding_row_points(window : &Window<i32>, pts : &mut Vec<crate::code::RunLength>) {
     let lst_col = window.width()-1;
     let mut prev_i = 0;
     for i in 1..window.height() {
         prev_i = i-1;
-        let fst_px = window[(i, 0)] - window[(prev_i, 0)];
-        let lst_px = window[(i, lst_col)] - window[(prev_i, lst_col)];
+        let this_row = window.row(i).unwrap();
+        let prev_row = window.row(prev_i).unwrap();
+        let fst_px = this_row[0] - prev_row[0];
+        let lst_px = this_row[lst_col] - prev_row[lst_col];
         if lst_px == fst_px {
             continue;
         }
 
         // TODO use sub_ptr instead of offset_from (that returns usize) when stabilized.
-        let fst_addr = &window[(i, 0)] as *const i32;
-        let start = window.row(i).unwrap().partition_point(|px| {
+        let fst_addr = &this_row[0] as *const i32;
+        let start = this_row.partition_point(|px| {
             let col = unsafe { (px as *const i32).offset_from(fst_addr) as usize };
-            (px - window[(prev_i, col)]) == fst_px
+            (px - prev_row[col]) == fst_px
         });
-        let mut end = window.row(i).unwrap()[start..].partition_point(|px| {
+        let mut len = this_row[start..].partition_point(|px| {
             let col = unsafe { (px as *const i32).offset_from(fst_addr) as usize };
-            (px - window[(prev_i, col)]) != lst_px
+            (px - prev_row[col]) != lst_px
         });
-        end += start;
+        let end = start + len;
 
-        // TODO verify (win[end] - win[start]) / 255 == end - start.
+        // Verify (win[end] - win[start]) / 255 == end - start (solid object)
         // Do not push in case this doesn't apply.
-        let solid_diff = EXPECTED_DIFFS[end - start];
-        if ((window[(i, end)] - window[(i-1, end)]) - (window[(i, start)] - window[(i-1, start)])) == solid_diff {
-            pts.push((prev_i, start - 1));
-            pts.push((prev_i, end - 1));
+        // let solid_diff = EXPECTED_DIFFS[end - start];
+        let solid_diff = EXPECTED_DIFFS[len];
+        let found_diff = ((this_row[end] - prev_row[end]) - (this_row[start] - prev_row[start]));
+        if found_diff == solid_diff {
+            // pts.push((prev_i, start - 1));
+            // pts.push((prev_i, end - 1));
+            pts.push(crate::code::RunLength { start : (prev_i, start), length : len });
         }
     }
 }

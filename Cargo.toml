@@ -19,7 +19,7 @@ crate-type = ["rlib", "cdylib"]
 approx = { version = "0.5" }
 nalgebra = { version = "0.31.0", features = ["serde-serialize", "sparse"] }
 nalgebra-lapack = { version = "0.22.0" }
-simba="0.7.1"
+simba= { version = "0.7.1", features = ["wide"] }
 num-traits = "0.2.14"
 serde = { version = "1.0.111", features=["derive"] }
 serde_json = "1.0.55"
@@ -27,7 +27,7 @@ serde_json = "1.0.55"
 opencv = { version = "0.71.0", optional=true }
 bumpalo = { version = "3.10.0", features=["collections"] }
 # packed_simd = { version = "0.3.8", package = "packed_simd_2" }
-wide = "0.7.4"
+wide = "0.7.5"
 tuples = "1.6.0"
 either="1.0"
 # gstreamer-app = { version = "0.17.0" }

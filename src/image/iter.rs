@@ -1,6 +1,19 @@
 use super::*;
 use tuples::TupleTranspose;
 
+impl<S> Image<u8, S>
+where
+S : Storage<u8>
+{
+
+    /*pub fn lanes(&self) -> impl Iterator<Item=wide::u8x16> {
+        assert!(self.width() % 16 == 0);
+        // TODO use std::slice::array_chunks when stable.
+        self.rows().map(|r| r.chunks(16).map(|c| unsafe { wide::u8x16::new(std::mem::transmute(c[0]) ) } ) ).flatten()
+    }*/
+
+}
+
 impl<P, S> Image<P, S>
 where
     S : Storage<P>,
@@ -56,7 +69,7 @@ where
     pub fn windows(&self, sz : (usize, usize)) -> impl Iterator<Item=Window<P>> {
         assert_nonzero(sz);
         let (step_v, step_h) = sz;
-        if sz.0 >= self.sz.0 || sz.1 >= self.sz.1 {
+        if sz.0 > self.sz.0 || sz.1 > self.sz.1 {
             panic!("Child window size bigger than parent window size");
         }
         if self.height() % sz.0 != 0 || self.width() % sz.1 != 0 {

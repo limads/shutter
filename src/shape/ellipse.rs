@@ -265,6 +265,26 @@ impl EllipseEstimator {
 
 impl Ellipse {
 
+    /*// Returns a rect represented as an vector with origin at the ellipse
+    // center and pointing to the top-right coordinate. Reflecting this vector
+    // should give the negative position.
+    pub fn enclosing_area(&self) -> crate::shape::Area {
+        let EllipseAxes { major, minor } = self.axes();
+        let (min_x, max_x) = if major[0] < minor[0] { (major[0], minor[0]) } else { (minor[0], major[0]) };
+        let (min_y, max_y) = if major[1] < minor[1] { (major[1], minor[1]) } else { (minor[1], major[1]) };
+        let origin = Vector2::new(min_x, min_y);
+        let target = Vector2::new(max_x, max_y);
+        crate::shape::Area { origin, target }
+    }*/
+
+    pub fn scaled_by(&self, s : f32) -> Ellipse {
+        Ellipse {
+            center : self.center.clone(),
+            major : s * self.major.clone(),
+            minor : s * self.minor.clone()
+        }
+    }
+
     pub fn rotate(&self, angle : f32) -> Self {
         let r = Rotation2::new(angle);
         let major = r.clone() * &self.major;
@@ -395,18 +415,25 @@ impl Ellipse {
         Ellipse { center, major, minor }
     }
 
+    pub fn axes(&self) -> EllipseAxes {
+        let major = Vector2::new(self.center[0] + self.major[0], self.center[1] + self.major[1]);
+        let minor = Vector2::new(self.center[0] + self.minor[0], self.center[1] + self.minor[1]);
+        EllipseAxes { major, minor }
+    }
+
     pub fn coords(&self, size: (usize, usize)) -> Option<EllipseCoords> {
     
-        let major_t = Vector2::new(self.center[0] + self.major[0], self.center[1] + self.major[1]);
-        let minor_t = Vector2::new(self.center[0] + self.minor[0], self.center[1] + self.minor[1]);
+        // let major_t = Vector2::new(self.center[0] + self.major[0], self.center[1] + self.major[1]);
+        // let minor_t = Vector2::new(self.center[0] + self.minor[0], self.center[1] + self.minor[1]);
+        let EllipseAxes { major, minor } = self.axes();
         
-        if major_t[0] < 0.0 || major_t[0] > size.1 as f32 || major_t[1] < 0.0 || major_t[1] > size.0 as f32 {
-            println!("major = {:?}", major_t);
+        if major[0] < 0.0 || major[0] > size.1 as f32 || major[1] < 0.0 || major[1] > size.0 as f32 {
+            // println!("major = {:?}", major_t);
             return None;
         }
         
-        if minor_t[0] < 0.0 || minor_t[0] > size.1 as f32 || minor_t[1] < 0.0 || minor_t[1] > size.0 as f32 {
-            println!("minor = {:?}", minor_t);
+        if minor[0] < 0.0 || minor[0] > size.1 as f32 || minor[1] < 0.0 || minor[1] > size.0 as f32 {
+            // println!("minor = {:?}", minor_t);
             return None;
         }
         
@@ -437,6 +464,14 @@ pub struct EllipseCoords {
     pub center : (usize, usize),
     pub major : (usize, usize),
     pub minor : (usize, usize)
+}
+
+/// Represents the elliptical axes after a translation is applied
+/// through the center coordinate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EllipseAxes {
+    pub major : Vector2<f32>,
+    pub minor : Vector2<f32>
 }
 
 fn get_ofs(i : i32, eps : f32) -> Vector2<f32> {
@@ -849,12 +884,14 @@ img.draw(Mark::Dot((img.height() - (closest[1] as usize), closest[0] as usize), 
 (closest - pt).abs().sum()*/
 
 pub fn circumference_coord_error(el : &Ellipse, coord : (usize, usize), img_shape : (usize, usize)) -> Option<f32> {
-    Some(circumference_point_error(el, &crate::shape::coord::coord_to_vec(coord, img_shape)?))
+    Some(abs_radial_deviation(el, &crate::shape::coord::coord_to_vec(coord, img_shape)?))
 }
 
-/// For a fitted point pt, returns its absolute deviation from the ellipse circumference.
-pub fn circumference_point_error(el : &Ellipse, pt : &Vector2<f32>) -> f32 {
-
+// Transform point to the elliptical coordinate frame, then calculates
+// its radial position with respect to the ellipse circumference: If point
+// is within ellipse, return positive value, 0.0 for point at the circumference,
+// and negative value for point outside circumference. TODO revert that (pt_rad - 1.0)
+pub fn radial_deviation(el : &Ellipse, pt : &Vector2<f32>) -> f32 {
     let theta = el.orientation();
     let a = el.major_scale();
     let b = el.minor_scale();
@@ -864,18 +901,27 @@ pub fn circumference_point_error(el : &Ellipse, pt : &Vector2<f32>) -> f32 {
 
     // Radius from ellipse center to the current point.
     let pt_rad = ((aligned_pt[0] / a).powf(2.) + (aligned_pt[1] / b).powf(2.)).sqrt();
-
-    (1. - pt_rad).abs()
-
+    (1. - pt_rad)
 }
+
+/// For a fitted point pt, returns its absolute deviation from the ellipse circumference.
+pub fn abs_radial_deviation(el : &Ellipse, pt : &Vector2<f32>) -> f32 {
+    radial_deviation(el, pt).abs()
+}
+
+pub fn contains(el : &Ellipse, pt : &Vector2<f32>) -> bool {
+    radial_deviation(el, pt) > 0.0
+}
+
+use std::ops::Range;
+
 
 pub fn coord_total_error(el : &Ellipse, coords : &[(usize, usize)], shape : (usize, usize)) -> f32 {
     coords.iter().fold(0.0, |e, c| e + circumference_coord_error(el, *c, shape).unwrap() )
 }
 
 pub fn total_error(el : &Ellipse, pts : &[Vector2<f32>]) -> f32 {
-
-    pts.iter().fold(0.0, |e, pt| e + circumference_point_error(el, pt) )
+    pts.iter().fold(0.0, |e, pt| e + abs_radial_deviation(el, pt) )
 }
 
 /// Theta is the ellipse orientation; arc is the actual position of the
@@ -918,7 +964,6 @@ pub fn generate_ellipse_opt_coords(
     let mut pts = crate::shape::ellipse::generate_ellipse_points(el, n);
     pts.iter().map(move |pt| crate::shape::coord::point_to_coord(pt, shape) ).collect()
 }
-
 
 pub fn generate_ellipse_coords(
     el : &OrientedEllipse,

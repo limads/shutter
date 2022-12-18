@@ -1178,9 +1178,21 @@ pub trait HalfOpen {
 
     fn proximity(&self, other : &Self) -> Proximity;
 
+    fn contains(&self, inner : &Self) -> bool;
+
+    fn contained(&self, outer : &Self) -> bool;
+
 }
 
 impl HalfOpen for Range<usize> {
+
+    fn contains(&self, inner : &Self) -> bool {
+        self.start <= inner.start && self.end >= inner.end
+    }
+
+    fn contained(&self, outer : &Self) -> bool {
+        self.start >= outer.start && self.end <= outer.end
+    }
 
     fn proximity(&self, other : &Self) -> Proximity {
         match (self.start.cmp(&other.end), self.end.cmp(&other.start)) {
@@ -1316,6 +1328,34 @@ pub enum Proximity {
     Exclude
 }
 
+/* Represents a cartesian plane with an origin (bottom-left point) and target
+(top-right point). This is the floating-point, cartesian plane counterpart
+of the image plane struct Region. */
+#[derive(Clone, Copy)]
+pub struct Area {
+    pub origin : Vector2<f32>,
+    pub target : Vector2<f32>
+}
+
+impl Area {
+
+    pub fn rect(&self, size : (usize, usize)) -> Option<(usize, usize, usize, usize)> {
+        let region = self.region(size)?;
+        Some(region.to_rect_tuple())
+    }
+
+    pub fn region(&self, size : (usize, usize)) -> Option<crate::shape::Region> {
+        let bl = (size.0.checked_sub(self.origin[0] as usize)?, self.origin[1] as usize);
+        let tr = (size.0.checked_sub(self.target[0] as usize)?, self.target[1] as usize);
+        if tr.0 > bl.0 && tr.1 > bl.1 {
+            Some(crate::shape::Region { h : Range { start : bl.1, end : tr.1 }, v : Range { start : bl.0, end : tr.0 } })
+        } else {
+            None
+        }
+    }
+
+}
+
 #[derive(Debug, Clone)]
 pub struct Region {
     pub h : Range<usize>,
@@ -1331,9 +1371,21 @@ impl Region {
         }
     }
 
+    pub fn to_rect_tuple(&self) -> (usize, usize, usize, usize) {
+        (self.v.start, self.h.start, self.v.end - self.v.start, self.h.end - self.h.start)
+    }
+
 }
 
 impl HalfOpen for Region {
+
+    fn contains(&self, inner : &Self) -> bool {
+        HalfOpen::contains(&self.h, &inner.h) && HalfOpen::contains(&self.v, &inner.v)
+    }
+
+    fn contained(&self, outer : &Self) -> bool {
+        self.h.contained(&outer.h) && self.v.contained(&outer.v)
+    }
 
     fn proximity(&self, other : &Self) -> Proximity {
         match (self.h.proximity(&other.h), self.v.proximity(&other.v)) {

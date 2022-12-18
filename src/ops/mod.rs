@@ -264,7 +264,8 @@ where
         unimplemented!()
     }
 }
-impl<P, S> Image<P, S> 
+
+impl<P, S> Image<P, S>
 where
     P : Pixel + Add<Output=P> + Sub<Output=P> + Mul<Output=P> + Div<Output=P>,
     S : Storage<P>,
@@ -308,6 +309,21 @@ where
         let (rhs_stride, rhs_roi) = crate::image::ipputils::step_and_size_for_image(rhs);
         let (dst_stride, dst_roi) = crate::image::ipputils::step_and_size_for_image(dst);
         unsafe {
+            /*if lhs.pixel_is::<u8>() {
+                let scale : i32 = 1;
+                let ans = crate::foreign::ipp::ippi::ippiMul_8u_C1RSfs(
+                    mem::transmute(lhs.as_ptr()),
+                    lhs_stride,
+                    mem::transmute(rhs.as_ptr()),
+                    rhs_stride,
+                    mem::transmute(dst.as_mut_ptr()),
+                    dst_stride,
+                    lhs_roi,
+                    scale
+                );
+                assert!(ans == 0);
+                return;
+            }*/
             if lhs.pixel_is::<f32>() {
                 let ans = crate::foreign::ipp::ippi::ippiMul_32f_C1R(
                     mem::transmute(lhs.as_ptr()),
@@ -322,7 +338,9 @@ where
                 return;
             }
         }
-        unimplemented!();
+        for (out, (a, b)) in dst.pixels_mut(1).zip(self.pixels(1).zip(rhs.pixels(1))) {
+            *out = *a * *b;
+        }
     }
 
     #[cfg(feature="ipp")]

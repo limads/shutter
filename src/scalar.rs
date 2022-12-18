@@ -121,6 +121,38 @@ where
         unimplemented!()
     }
 
+    pub fn scalar_sub_mut(&mut self, by : P) {
+
+        #[cfg(feature="ipp")]
+        unsafe {
+            let scale_factor = 0;
+            let (byte_stride, roi) = crate::image::ipputils::step_and_size_for_image(self);
+
+            if self.pixel_is::<u8>() {
+                let ans = crate::foreign::ipp::ippi::ippiSubC_8u_C1IRSfs(
+                    *mem::transmute::<_, &u8>(&by),
+                    mem::transmute(self.as_mut_ptr()),
+                    byte_stride,
+                    roi,
+                    scale_factor
+                );
+                assert!(ans == 0);
+                return;
+            }
+
+            if self.pixel_is::<f32>() {
+                let ans = crate::foreign::ipp::ippi::ippiSubC_32f_C1IR(
+                    *mem::transmute::<_, &f32>(&by),
+                    mem::transmute(self.as_mut_ptr()),
+                    byte_stride,
+                    roi
+                );
+                assert!(ans == 0);
+                return;
+            }
+        }
+    }
+
     pub fn scalar_mul_mut(&mut self, by : P) {
 
         #[cfg(feature="ipp")]

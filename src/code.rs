@@ -17,6 +17,695 @@ use nalgebra::{Point2, Vector2};
 use std::ops::AddAssign;
 use crate::gray::Foreground;
 
+const fn sum_pattern(offset : u8) -> [u8; 16] {
+    let mut arr = [0; 16];
+    let mut i = 0;
+    while i < 16 {
+        arr[i] = i as u8 + 1 + offset;
+        i += 1;
+    }
+    arr
+}
+
+const fn sum_arrays(a : [u8; 16], b : [u8; 16]) -> [u8; 16] {
+    // This can't be a loop in const context (Exceeded interpreter step limit error).
+    [
+        a[0] + b[0],
+        a[1] + b[1],
+        a[2] + b[2],
+        a[3] + b[3],
+        a[4] + b[4],
+        a[5] + b[5],
+        a[6] + b[6],
+        a[7] + b[7],
+        a[8] + b[8],
+        a[9] + b[9],
+        a[10] + b[10],
+        a[11] + b[11],
+        a[12] + b[12],
+        a[13] + b[13],
+        a[14] + b[14],
+        a[15] + b[15],
+    ]
+}
+
+const ONE_PATTERN : [[u8; 16]; 4] = [
+    sum_pattern(0),
+    sum_pattern(16),
+    sum_pattern(32),
+    sum_pattern(48)
+];
+
+const TWO_PATTERN : [[u8; 16]; 6] = [
+    sum_arrays(ONE_PATTERN[0], ONE_PATTERN[1]),
+    sum_arrays(ONE_PATTERN[0], ONE_PATTERN[2]),
+    sum_arrays(ONE_PATTERN[0], ONE_PATTERN[3]),
+    sum_arrays(ONE_PATTERN[1], ONE_PATTERN[2]),
+    sum_arrays(ONE_PATTERN[1], ONE_PATTERN[3]),
+    sum_arrays(ONE_PATTERN[2], ONE_PATTERN[3]),
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fold {
+    Empty,
+    Undecidable,
+    One(usize),
+    Two(usize, usize),
+    Three(usize, usize, usize),
+    Four(usize, usize, usize, usize)
+}
+
+const fn get_fold(n_patts : usize, patt_ix : usize, pos : usize) -> Fold {
+    match (n_patts, patt_ix) {
+        (1, 0) => Fold::One(pos),                          // 0
+        (1, 1) => Fold::One(16+pos),                       // 1
+        (1, 2) => Fold::One(32+pos),                       // 2
+        (1, 3) => Fold::One(48+pos),                       // 3
+        (2, 0) => Fold::Two(pos, 16+pos),                  // 0,1
+        (2, 1) => Fold::Two(pos, 32+pos),                  // 0,2
+        (2, 2) => Fold::Two(pos, 48+pos),                  // 0,3
+        (2, 3) => Fold::Two(16+pos, 32+pos),               // 1,2
+        (2, 4) => Fold::Two(16+pos, 48+pos),               // 1,3
+        (2, 5) => Fold::Two(32+pos, 48+pos),               // 2,3
+        (3, 0) => Fold::Three(pos, 16+pos, 32+pos),        // 0, 1, 2
+        (3, 1) => Fold::Three(pos, 16+pos, 48+pos),        // 0, 1, 3
+        (3, 2) => Fold::Three(pos, 32+pos, 48+pos),        // 0, 2, 3
+        (3, 3) => Fold::Three(16+pos, 32+pos, 48+pos),     // 1, 2, 3
+        (4, 0) => Fold::Four(pos, 16+pos, 32+pos, 48+pos), // 0, 1, 2, 3
+        _ => panic!("Invalid fold")
+    }
+}
+
+/*const TWO_PATTERN_FOLDS : [Fold; 6] = [
+    Fold::Two(0, 1),
+    Fold::Two(0, 2),
+    Fold::Two(0, 3),
+    Fold::Two(1, 2),
+    Fold::Two(1, 3),
+    Fold::Two(2, 3)
+];*/
+
+const THREE_PATTERN : [[u8; 16]; 4] = [
+    sum_arrays(sum_arrays(ONE_PATTERN[0], ONE_PATTERN[1]), ONE_PATTERN[2]),
+    sum_arrays(sum_arrays(ONE_PATTERN[0], ONE_PATTERN[1]), ONE_PATTERN[3]),
+    sum_arrays(sum_arrays(ONE_PATTERN[0], ONE_PATTERN[2]), ONE_PATTERN[3]),
+    sum_arrays(sum_arrays(ONE_PATTERN[1], ONE_PATTERN[2]), ONE_PATTERN[3])
+];
+
+/*const THREE_PATTERN_FOLDS : [Fold; 4] = [
+    Fold::Three(0, 1, 2),
+    Fold::Three(0, 1, 3),
+    Fold::Three(0, 2, 3),
+    Fold::Three(1, 2, 3)
+];*/
+
+const FOUR_PATTERN : [[u8; 16];1] = [sum_arrays(sum_arrays(sum_arrays(ONE_PATTERN[0], ONE_PATTERN[1]), ONE_PATTERN[2]), ONE_PATTERN[3])];
+
+// cargo test --lib -- sum_conflicts --nocapture
+#[test]
+fn sum_conflicts() {
+    let conflicts_two_two = [
+        (2, 3, 0),
+        (2, 3, 1),
+        (2, 3, 2),
+        (2, 3, 3),
+        (2, 3, 4),
+        (2, 3, 5),
+        (2, 3, 6),
+        (2, 3, 7),
+        (2, 3, 8),
+        (2, 3, 9),
+        (2, 3, 10),
+        (2, 3, 11),
+        (2, 3, 12),
+        (2, 3, 13),
+        (2, 3, 14),
+        (2, 3, 15),
+    ];
+    let conflicts_three_three : [(usize, usize, usize); 0] = [
+
+    ];
+    let conflicts_two_three = [
+        (4, 0, 15),
+        (5, 1, 15),
+    ];
+    let conflicts_one_two = [
+        (2, 0, 15),
+        (3, 1, 15)
+    ];
+    let conflicts_one_four : [(usize, usize, usize); 0] = [
+
+    ];
+    let conflicts_two_four : [(usize, usize, usize); 0] = [
+
+    ];
+    let conflicts_three_four : [(usize, usize, usize); 0] = [
+
+    ];
+    for i in 0..16 {
+        for ix1 in 0..5 {
+            for ix2 in (ix1+1)..6 {
+                if TWO_PATTERN[ix1][i] == TWO_PATTERN[ix2][i] && !conflicts_two_two.iter().any(|c| c.0 == ix1 && c.1 == ix2 && c.2 == i ) {
+                    panic!("Conflict (Two at {}, Two at {}) at pos {}", ix1, ix2, i);
+                }
+            }
+        }
+
+        for ix1 in 0..3 {
+            for ix2 in (ix1+1)..4 {
+                if THREE_PATTERN[ix1][i] == THREE_PATTERN[ix2][i] && !conflicts_three_three.iter().any(|c| c.0 == ix1 && c.1 == ix2 && c.2 == i ) {
+                    panic!("Conflict (Three at {}, Three at {}) at pos {}", ix1, ix2, i);
+                }
+            }
+        }
+
+        for (ix1, one) in ONE_PATTERN.iter().enumerate() {
+            for (ix2, two) in TWO_PATTERN.iter().enumerate() {
+                if one[i] == two[i] && !conflicts_one_two.iter().any(|c| c.0 == ix1 && c.1 == ix2 && c.2 == i ) {
+                    panic!("Conflict (One at {}, Two at {}) at pos {}", ix1, ix2, i);
+                }
+            }
+        }
+
+        for (ix1, two) in TWO_PATTERN.iter().enumerate() {
+            for (ix2, three) in THREE_PATTERN.iter().enumerate() {
+                if two[i] == three[i] && !conflicts_two_three.iter().any(|c| c.0 == ix1 && c.1 == ix2 && c.2 == i ) {
+                    panic!("Conflict (Two at {}, Three at {}) at pos {}", ix1, ix2, i);
+                }
+            }
+        }
+
+        for (ix1, one) in ONE_PATTERN.iter().enumerate() {
+            if one[i] == FOUR_PATTERN[0][i] && !conflicts_one_four.iter().any(|c| c.0 == ix1 && c.1 == 0 && c.2 == i ) {
+                panic!("Conflict (One at {}, Four) at pos {}", ix1, i);
+            }
+        }
+        for (ix1, two) in TWO_PATTERN.iter().enumerate() {
+            if two[i] == FOUR_PATTERN[0][i] && !conflicts_two_four.iter().any(|c| c.0 == ix1 && c.1 == 0 && c.2 == i ) {
+                panic!("Conflict (Two at {}, Four) at pos {}", ix1, i);
+            }
+        }
+        for (ix1, three) in THREE_PATTERN.iter().enumerate() {
+            if three[i] == FOUR_PATTERN[0][i] && !conflicts_three_four.iter().any(|c| c.0 == ix1 && c.1 == 0 && c.2 == i ) {
+                panic!("Conflict (Three at {}, Four) at pos {}", ix1, i);
+            }
+        }
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    struct CandSum(usize, u8);
+
+    impl std::cmp::PartialOrd for CandSum {
+        fn partial_cmp(&self, other : &Self) -> Option<std::cmp::Ordering> {
+            Some(self.0.cmp(&other.0).then(self.1.cmp(&other.1)))
+        }
+    }
+    impl std::cmp::Ord for CandSum {
+        fn cmp(&self, other : &Self) -> std::cmp::Ordering {
+            self.0.cmp(&other.0).then(self.1.cmp(&other.1))
+        }
+    }
+
+    /* Fold = 1 simply use the sum value as the index. Fold=4 use
+    (sum_value-3*16, sum_value-2*16, sum_value-1*16, sum_value) as the indices.
+    Fold=2 use the (sum_value-N*16, sum_value-M*16) as the indices. Fold=3
+    use the (sum_value-N*16, sum_value-M*16, sum_value-P*16) indices. */
+    let mut pos_map : BTreeMap<CandSum, Vec<Fold>> = BTreeMap::new();
+    for pos in 0..16 {
+        for sum in 1..=(FOUR_PATTERN[0].iter().max().copied().unwrap()) {
+            for (i, pat) in ONE_PATTERN.iter().enumerate() {
+                if sum == pat[pos] {
+                    pos_map.entry(CandSum(pos, sum)).or_insert(Vec::new()).push(get_fold(1, i, pos));
+                }
+            }
+            for (i, pat) in TWO_PATTERN.iter().enumerate() {
+                if sum == pat[pos] {
+                    pos_map.entry(CandSum(pos, sum)).or_insert(Vec::new()).push(get_fold(2, i, pos));
+                }
+            }
+            for (i, pat) in THREE_PATTERN.iter().enumerate() {
+                if sum == pat[pos] {
+                    pos_map.entry(CandSum(pos, sum)).or_insert(Vec::new()).push(get_fold(3, i, pos));
+                }
+            }
+            if sum == FOUR_PATTERN[0][pos] {
+                pos_map.entry(CandSum(pos, sum)).or_insert(Vec::new()).push(get_fold(4, 0, pos));
+            }
+        }
+    }
+
+    let mut mins = BTreeMap::new();
+    let mut maxs = BTreeMap::new();
+    let mut lens = BTreeMap::new();
+
+    for (s, p) in pos_map {
+        println!("{:?}: {:?}", s, p);
+        let mut min = mins.entry(s.0).or_insert(s.1);
+        let mut max = maxs.entry(s.0).or_insert(s.1);
+        let mut len = lens.entry(s.0).or_insert(0);
+        if s.1 < *min {
+            *min = s.1;
+        }
+        if s.1 > *max {
+            *max = s.1;
+        }
+        *len += 1;
+    }
+
+    for ix in 0..16 {
+        println!("{} : (min = {}; max = {}; len = {}", ix, mins[&ix], maxs[&ix], lens[&ix]);
+    }
+
+    // println!("{:?}", FOLD_LUT_0);
+}
+
+const FOLD_LUT_0 : [Fold; 101] = build_fold_lut::<101>(0, 1, 100);
+
+const FOLD_LUT_1 : [Fold; 105] = build_fold_lut::<105>(1, 2, 104);
+
+const FOLD_LUT_2 : [Fold; 109] = build_fold_lut::<109>(2, 3, 108);
+
+const FOLD_LUT_3 : [Fold; 113] = build_fold_lut::<113>(3, 4, 112);
+
+const FOLD_LUT_4 : [Fold; 117] = build_fold_lut::<117>(4, 5, 116);
+
+const FOLD_LUT_5 : [Fold; 121] = build_fold_lut::<121>(5, 6, 120);
+
+const FOLD_LUT_6 : [Fold; 125] = build_fold_lut::<125>(6, 7, 124);
+
+const FOLD_LUT_7 : [Fold; 129] = build_fold_lut::<129>(7, 8, 128);
+
+const FOLD_LUT_8 : [Fold; 133] = build_fold_lut::<133>(8, 9, 132);
+
+const FOLD_LUT_9 : [Fold; 137] = build_fold_lut::<137>(9, 10, 136);
+
+const FOLD_LUT_10 : [Fold; 141] = build_fold_lut::<141>(10, 11, 140);
+
+const FOLD_LUT_11 : [Fold; 145] = build_fold_lut::<145>(11, 12, 144);
+
+const FOLD_LUT_12 : [Fold; 149] = build_fold_lut::<149>(12, 13, 148);
+
+const FOLD_LUT_13 : [Fold; 153] = build_fold_lut::<153>(13, 14, 152);
+
+const FOLD_LUT_14 : [Fold; 157] = build_fold_lut::<157>(14, 15, 156);
+
+const FOLD_LUT_15 : [Fold; 161] = build_fold_lut::<161>(15, 16, 160);
+
+const fn next_fold<const M : usize>(
+    pos : usize,
+    sum : usize,
+    i : usize,
+    pattern : [[u8; 16]; M],
+    prev : Fold,
+    n_patts : usize
+) -> Option<Fold> {
+    if sum == pattern[i][pos] as usize {
+        match prev {
+            Fold::Undecidable => {
+                Some(get_fold(n_patts, i, pos))
+            },
+            _ => {
+                Some(Fold::Undecidable)
+            }
+        }
+    } else {
+        None
+    }
+}
+
+const fn build_fold_lut<const N : usize>(pos : usize, min_sum : usize, max_sum : usize) -> [Fold; N] {
+    let mut folds : [Fold; N] = [Fold::Undecidable; N];
+    folds[0] = Fold::Empty;
+    let mut sum = min_sum;
+    while sum <= max_sum {
+        let mut i = 0;
+        while i < ONE_PATTERN.len() {
+            if let Some(fold) = next_fold(pos, sum, i, ONE_PATTERN, folds[sum], 1) {
+                folds[sum] = fold;
+            }
+            i += 1;
+        }
+        i = 0;
+        while i < TWO_PATTERN.len() {
+            if let Some(fold) = next_fold(pos, sum, i, TWO_PATTERN, folds[sum], 2) {
+                folds[sum] = fold;
+            }
+            i += 1;
+        }
+        i = 0;
+        while i < THREE_PATTERN.len() {
+            if let Some(fold) = next_fold(pos, sum, i, THREE_PATTERN, folds[sum], 3) {
+                folds[sum] = fold;
+            }
+            i += 1;
+        }
+        i = 0;
+        while i < FOUR_PATTERN.len() {
+            if let Some(fold) = next_fold(pos, sum, i, FOUR_PATTERN, folds[sum], 4) {
+                folds[sum] = fold;
+            }
+            i += 1;
+        }
+        sum += 1;
+    }
+    folds
+}
+
+/*CandSum(0, 1): [One(0)]
+CandSum(0, 17): [One(16)]
+CandSum(0, 18): [Two(0, 16)]
+CandSum(0, 33): [One(32)]
+CandSum(0, 34): [Two(0, 32)]
+CandSum(0, 49): [One(48)]
+CandSum(0, 50): [Two(0, 48), Two(16, 32)]
+CandSum(0, 51): [Three(0, 16, 32)]
+CandSum(0, 66): [Two(16, 48)]
+CandSum(0, 67): [Three(0, 16, 48)]
+CandSum(0, 82): [Two(32, 48)]
+CandSum(0, 83): [Three(0, 32, 48)]
+CandSum(0, 99): [Three(16, 32, 48)]*/
+
+// Folds an image of dimension h x 64 into an image of dimension h x 16
+fn fold_image<S, T>(w : &Image<u8, S>, dst : &mut Image<u8, T>)
+where
+    S : Storage<u8>,
+    T : StorageMut<u8>
+{
+    assert!(w.width() == 64);
+    assert!(dst.width() == 16);
+    assert!(w.height() == dst.height());
+    let fold_sz = (w.height(), 16);
+    dst.copy_from(&w.window((0, 0), fold_sz).unwrap());
+    for i in 1..=3 {
+        dst.add_assign(&w.window((0, 16*i), fold_sz).unwrap());
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RasterPoints {
+
+    // All row indices (same dimensionality as cols).
+    pub rows : Vec<usize>,
+
+    // Each group is an individual line (with connectivity of points within lines unspecified).
+    pub groups : Vec<Range<usize>>,
+
+    // All column indices
+    pub cols : Vec<usize>
+
+}
+
+impl RasterPoints {
+
+    pub fn code(&self) -> RunLengthCode {
+        assert!(self.rows.len() == self.groups.len());
+        let mut rles = Vec::new();
+        let mut rle_rows = Vec::new();
+
+        // The points are assumed to be sorted by by columns within row fragments.
+        // A same row might appear multiple (contiguous )times, if the columns are collected from
+        // different image strips. Therefore contacting RLEs are contiguous.
+        for r in 0..self.rows.len() {
+            let n_before = rles.len();
+            let row = self.rows[r];
+            let group = &self.groups[r];
+            let mut curr_rle = Some(RunLength { start : (row, group.start), length : 1 });
+            for i in (group.start+1)..group.end {
+                if let Some(ref mut rle) = curr_rle {
+                    if self.cols[i].abs_diff(self.cols[i-1]) == 1 {
+                        rle.length += 1;
+                    } else {
+                        rles.push(rle.clone());
+                        curr_rle = None;
+                    }
+                } else {
+                    curr_rle = Some(RunLength { start : (row, group.start + i), length : 1 });
+                }
+            }
+            if let Some(rle) = curr_rle {
+                rles.push(rle);
+            }
+            let n_after = rles.len();
+            if n_after > n_before {
+                rle_rows.push(Range { start : n_before, end : n_after});
+            }
+        }
+        RunLengthCode {
+            rles,
+            rows : rle_rows
+        }
+    }
+
+}
+
+// cargo test --lib -- fold_encoding --nocapture
+#[test]
+fn fold_encoding() {
+
+    use crate::draw::*;
+
+    let mut img = ImageBuf::<u8>::new_constant(64, 64, 0);
+    img.draw(Mark::Dot((32, 32), 8), 1);
+
+    let mut enc = FoldEncoder::new(img.height(), img.width());
+    let rles = enc.encode(&img);
+
+    /*for i in 0..enc.pts.rows.len() {
+        let gr = enc.pts.groups[i].clone();
+        let r = enc.pts.rows[i];
+        for c in &enc.pts.cols[gr] {
+            img[(r, *c)] = 255;
+        }
+    }*/
+
+    for rle in &rles.rles {
+        for pt in rle.points() {
+            img[pt] = 255;
+        }
+    }
+
+    img.show();
+}
+
+pub struct FoldEncoder {
+    fold : Folded,
+    indices : ImageBuf<u8>,
+    masked_indices : ImageBuf<u8>,
+    pts : RasterPoints
+}
+
+impl FoldEncoder {
+
+    pub fn new(height : usize, width : usize) -> Self {
+        let mut indices = ImageBuf::<u8>::new_constant(height, width, 0);
+        let ixs = (1..=64).collect::<Vec<_>>();
+        for r in 0..height {
+            let mut row = indices.row_mut(r);
+            for i in 0..(width / 64) {
+                row[(i*64)..((i+1)*64)].copy_from_slice(&ixs[..]);
+            }
+        }
+        let masked_indices = indices.clone();
+        Self {
+            fold : Folded::new(height, width),
+            pts : RasterPoints::default(),
+            indices,
+            masked_indices
+        }
+    }
+
+    pub fn encode<S>(&mut self, w : &Image<u8, S>) -> RunLengthCode
+    where
+        S : Storage<u8>
+    {
+        w.mul_to(&self.indices, &mut self.masked_indices);
+        self.pts.update_flat(&self.masked_indices, &mut self.fold);
+        self.pts.code()
+    }
+
+}
+
+#[derive(Debug, Clone)]
+struct Folded {
+    // Contains sum of horizontal image fold (always with h x 16 size)
+    sum : ImageBuf<u8>,
+
+    // Contains concatenated folded regions, with dimension h x (n_folds*16) = h x (w / 4)
+    dst : ImageBuf<u8>
+}
+
+impl Folded {
+
+    fn new(height : usize, width : usize) -> Self {
+        let sum = ImageBuf::<u8>::new_constant(height, 16, 0);
+        let dst = ImageBuf::<u8>::new_constant(height, width / 4, 0);
+        Self { sum, dst }
+    }
+
+
+}
+
+impl RasterPoints {
+
+    fn clear(&mut self) {
+        self.rows.clear();
+        self.groups.clear();
+        self.cols.clear();
+    }
+
+    /* Updates by restricting the evaluated pixels to those that are nonzero
+    at a final image. */
+    fn update_folded<S, T>(&mut self, w : &Image<u8, S>, folded : &mut Folded)
+    where
+        S: Storage<u8>
+    {
+        let (height, width) = w.size();
+        assert!(w.width() % 64 == 0);
+        assert!(w.height() == folded.dst.height());
+        assert!(w.width() / 4 == folded.dst.width());
+
+        // No point in folding an image with the minimum size.
+        if w.width() == 64 {
+            return self.update_flat(w, folded);
+        }
+
+        // Fold image into concatenated regions
+        for (strip, mut dst) in w.windows((height, 64)).zip(folded.dst.windows_mut((height, 16))) {
+            fold_image(&strip, &mut dst);
+        }
+
+        // Add up concatenated regions.
+        let fst_strip = folded.dst.window((0, 0), (height, 16)).unwrap();
+        let rem_sz = (height, folded.dst.width()-16);
+        let rem_strips = folded.dst.window((0, 16), rem_sz).unwrap();
+        folded.sum.copy_from(&fst_strip);
+        for strip in rem_strips.windows((height, 16)) {
+            folded.sum.add_assign(&strip);
+        }
+
+        let mut col_evals = Vec::with_capacity(16);
+        for r in 0..height {
+            col_evals.clear();
+            for (i, px) in folded.sum.row(r).unwrap().iter().enumerate() {
+                if *px > 0 {
+                    col_evals.push(i);
+                }
+            }
+            for (strip, dst) in w.windows((height, 64)).zip(folded.dst.windows((height, 16))) {
+                self.update_row(&strip, &dst, &col_evals[..], r);
+            }
+        }
+    }
+
+    /* Updates by examining all pixels between (0..16) at each image fold. */
+    fn update_flat<S>(&mut self, w : &Image<u8, S>, folded : &mut Folded)
+    where
+        S: Storage<u8>,
+    {
+        assert!(w.height() == folded.dst.height());
+        assert!(w.width() % 64 == 0);
+        let height = w.height();
+        self.clear();
+        let strips = w.windows((height, 64));
+        let dsts = folded.dst.windows_mut((height, 16));
+        for (strip, mut dst) in strips.zip(dsts) {
+            fold_image(&strip, &mut dst);
+        }
+        let col_evals : Vec<_> = (0..16).collect();
+        // It is best to iterate over rows then over strips for each row, since
+        // in this case the pixels at the same row will be contiguous.
+        for r in 0..height {
+            for (strip, dst) in w.windows((height, 64)).zip(folded.dst.windows((height, 16))) {
+                self.update_row(&strip, &dst, &col_evals[..], r);
+            }
+        }
+    }
+
+    // W is assumed to be a bit binary image of dimensions r x 64, while
+    // dst is assumed to be a destination image with any content of
+    // dimensions r x 16.
+    fn update_row<S, T>(&mut self, w : &Image<u8, S>, dst : &Image<u8, T>, col_evals : &[usize], r : usize)
+    where
+        S : Storage<u8>,
+        T : Storage<u8>
+    {
+        let n_before = self.cols.len();
+        let fold_row = dst.row(r).unwrap();
+
+        let fold_luts : [&'static [Fold]; 16] = [
+            &FOLD_LUT_0[..],
+            &FOLD_LUT_1[..],
+            &FOLD_LUT_2[..],
+            &FOLD_LUT_3[..],
+            &FOLD_LUT_4[..],
+            &FOLD_LUT_5[..],
+            &FOLD_LUT_6[..],
+            &FOLD_LUT_7[..],
+            &FOLD_LUT_8[..],
+            &FOLD_LUT_9[..],
+            &FOLD_LUT_10[..],
+            &FOLD_LUT_11[..],
+            &FOLD_LUT_12[..],
+            &FOLD_LUT_13[..],
+            &FOLD_LUT_14[..],
+            &FOLD_LUT_15[..]
+        ];
+
+        for c in col_evals {
+            match fold_luts[*c][fold_row[*c] as usize] {
+                Fold::Empty => { },
+                Fold::Undecidable => {
+                    let orig_row = w.row(r).unwrap();
+                    for offset in [0, 16, 32, 48] {
+                        let oc = offset + *c;
+                        if orig_row[oc] > 0 {
+                            self.cols.push(oc);
+                        }
+                    }
+                },
+                Fold::One(pt) => {
+                    self.cols.push(pt);
+                },
+                Fold::Two(pt1, pt2) => {
+                    self.cols.push(pt1);
+                    self.cols.push(pt2);
+                },
+                Fold::Three(pt1, pt2, pt3) => {
+                    self.cols.push(pt1);
+                    self.cols.push(pt2);
+                    self.cols.push(pt3);
+                },
+                Fold::Four(pt1, pt2, pt3, pt4) => {
+                    self.cols.push(pt1);
+                    self.cols.push(pt2);
+                    self.cols.push(pt3);
+                    self.cols.push(pt4);
+                }
+            }
+        }
+        let n_after = self.cols.len();
+        if n_after > n_before {
+            self.rows.push(r);
+            let range = Range { start : n_before, end : n_after };
+            offset_cols(&mut self.cols[range.clone()], w);
+            self.cols[range.clone()].sort();
+            self.groups.push(range);
+        }
+    }
+
+}
+
+fn offset_cols<S>(cols : &mut [usize], w : &Image<u8, S>)
+where
+    S : Storage<u8>
+{
+    // use simba::simd::Simd;
+    // let col_offset = Simd::<wide::usizex8>::splat(w.offset().1);
+    // self.cols.chunks_mut(8).for_each(|mut c| Simd::<wide::usizex8>::from_slice_unaligned(c).add_assign(&col_offset) );
+    let col_offset = w.offset().1;
+    cols.iter_mut().for_each(|c| *c += col_offset );
+}
+
 // Contains a sparse image code. This implements Encoding
 // by dispatching to the encoding implementation of each
 // variant, so users can use the Encoding methods (points, etc)
@@ -348,7 +1037,6 @@ pub fn draw_connected_chain_random(chain : &ChainCode, img : &mut WindowMut<u8>)
         }
     }
 }
-
 
 pub fn draw_chain_random(chain : &ChainCode, img : &mut WindowMut<u8>) {
     img.fill(0);
@@ -1120,6 +1808,10 @@ pub struct RunLength {
 }
 
 impl RunLength {
+
+    pub fn bounds(&self) -> ((usize, usize), (usize, usize)) {
+        (self.start, self.end())
+    }
 
     pub fn points<'a>(&'a self) -> impl Iterator<Item=(usize, usize)> + 'a {
         ((self.start.1)..(self.start.1 + self.length)).map(move |c| (self.start.0, c) )
