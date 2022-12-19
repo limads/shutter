@@ -11,6 +11,29 @@ use nalgebra::Scalar;
 use num_traits::AsPrimitive;
 use std::mem;
 
+#[cfg(feature="ipp")]
+pub fn dot_prod<S, T>(a : &Image<u8, S>, b : &Image<u8, T>) -> f64
+where
+    S : Storage<u8>,
+    T : Storage<u8>
+{
+    let (a_stride, a_roi) = crate::image::ipputils::step_and_size_for_image(a);
+    let (b_stride, b_roi) = crate::image::ipputils::step_and_size_for_image(b);
+    let mut dst : f64 = 0.0;
+    unsafe {
+        let ans = crate::foreign::ipp::ippi::ippiDotProd_8u64f_C1R(
+            a.as_ptr(),
+            a_stride,
+            b.as_ptr(),
+            b_stride,
+            a_roi,
+            &mut dst
+        );
+        assert!(ans == 0);
+        dst
+    }
+}
+
 // Calculates the global maximum and minimum of the image.
 // Then sets all pixels close to the minimum to zero.
 /*pub fn supress_close_to_min_mut(w : &mut WindowMut<u8>) {

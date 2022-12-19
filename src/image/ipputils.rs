@@ -42,6 +42,16 @@ pub fn check_status(action : &str, status : i32) {
     panic!("IPPS Error\tAction: {}\tCode: {}\tMessage: {}", action, status, err_msg);
 }
 
+pub fn step_and_size_for_tuple<N>(
+    step : usize,
+    size : (usize, usize)
+) -> (i32, crate::foreign::ipp::ippi::IppiSize) {
+    (
+        (step * std::mem::size_of::<N>()) as i32,
+        crate::foreign::ipp::ippi::IppiSize { width : size.1 as i32, height : size.0 as i32 }
+    )
+}
+
 pub fn step_and_size_for_image<'a, P, S>(
     win : &Image<P, S>
 ) -> (i32, crate::foreign::ipp::ippi::IppiSize)

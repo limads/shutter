@@ -252,49 +252,85 @@ fn local_sum_test() {
     println!("{:?}", dst[(2usize,2usize)]);
 }
 
-pub fn local_sum(src : &Window<'_, u8>, dst : &mut WindowMut<'_, i32>) {
+#[cfg(feature="ipp")]
+#[derive(Debug, Clone)]
+pub struct IppSumWindow {
+    buf : Vec<u8>,
+    mask_sz : crate::foreign::ipp::ippi::IppiSize,
+    dst_sz : crate::foreign::ipp::ippi::IppiSize,
+}
 
-    assert!(src.height() % dst.height() == 0);
-    assert!(src.width() % dst.width() == 0);
+#[cfg(feature="ipp")]
+impl IppSumWindow {
 
-    let local_win_sz = (src.height() / dst.height(), src.width() / dst.width());
-
-    #[cfg(feature="ipp")]
-    unsafe {
-        let (src_step, src_sz) = crate::image::ipputils::step_and_size_for_window(src);
-        let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_window_mut(&dst);
+    pub fn new(
+        src_step : usize,
+        src_sz : (usize, usize),
+        dst_step : usize,
+        dst_sz : (usize, usize)
+    ) -> Self {
+        let local_win_sz = (src_sz.0 / dst_sz.0, src_sz.1 / dst_sz.1);
+        let (src_step, src_sz) = crate::image::ipputils::step_and_size_for_tuple::<u8>(src_step, src_sz);
+        let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_tuple::<i32>(dst_step, dst_sz);
         let mask_sz = crate::foreign::ipp::ippi::IppiSize {
             width : local_win_sz.1 as i32,
             height : local_win_sz.0 as i32
         };
         let mut num_channels = 1;
         let mut buf_sz : i32 = 0;
-        let ans = crate::foreign::ipp::ippi::ippiSumWindowGetBufferSize(
-            dst_sz,
-            mask_sz,
-            crate::foreign::ipp::ippi::IppDataType_ipp8u,
-            num_channels,
-            &mut buf_sz as *mut _
-        );
-        assert!(ans == 0);
-        let mut buffer = Vec::from_iter((0..buf_sz).map(|_| 0u8 ));
-        println!("Buffer allocated");
+        unsafe {
+            let ans = crate::foreign::ipp::ippi::ippiSumWindowGetBufferSize(
+                dst_sz.clone(),
+                mask_sz.clone(),
+                crate::foreign::ipp::ippi::IppDataType_ipp8u,
+                num_channels,
+                &mut buf_sz as *mut _
+            );
+            assert!(ans == 0);
+            assert!(buf_sz > 0);
+            let mut buf = Vec::from_iter((0..buf_sz).map(|_| 0u8 ));
+            Self { buf, mask_sz, dst_sz }
+        }
+    }
+
+    pub fn calculate<S, T>(&mut self, src : &Image<u8,S>, dst : &mut Image<i32, T>)
+    where
+        S : Storage<u8>,
+        T : StorageMut<i32>
+    {
         let border_val = 0u8;
-        let ans = crate::foreign::ipp::ippi::ippiSumWindow_8u32s_C1R(
-            src.as_ptr(),
-            src_step,
-            dst.as_mut_ptr(),
-            dst_step,
-            dst_sz,
-            mask_sz,
-            crate::foreign::ipp::ippi::_IppiBorderType_ippBorderConst,
-            &border_val,
-            buffer.as_mut_ptr()
-        );
-        assert!(ans == 0);
-        return;
+        let (src_step, src_sz) = crate::image::ipputils::step_and_size_for_image(&src);
+        let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_image(&*dst);
+        assert!(dst_sz.width == self.dst_sz.width && dst_sz.height == self.dst_sz.height);
+        unsafe {
+            let ans = crate::foreign::ipp::ippi::ippiSumWindow_8u32s_C1R(
+                src.as_ptr(),
+                src_step,
+                dst.as_mut_ptr(),
+                dst_step,
+                dst_sz,
+                self.mask_sz,
+                crate::foreign::ipp::ippi::_IppiBorderType_ippBorderConst,
+                &border_val,
+                self.buf.as_mut_ptr()
+            );
+            assert!(ans == 0);
+            return;
+        }
     }
     
+}
+
+pub fn local_sum(src : &Window<'_, u8>, dst : &mut WindowMut<'_, i32>) {
+
+    assert!(src.height() % dst.height() == 0);
+    assert!(src.width() % dst.width() == 0);
+
+    #[cfg(feature="ipp")]
+    unsafe {
+        let mut sw = IppSumWindow::new(src.original_width(), src.size(), dst.original_width(), dst.size());
+        sw.calculate(src, dst);
+    }
     
     /*for i in 0..dst.height() {
         for j in 0..dst.width() {

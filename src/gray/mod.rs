@@ -210,6 +210,14 @@ where
         panic!()
     }
     
+    pub fn bit_threshold_to<T>(&self, fg : Foreground, out : &mut Image<u8, T>)
+    where
+        T : StorageMut<u8>
+    {
+        self.threshold_to(fg, out);
+        byte_to_bit_inplace(out);
+    }
+
     /*
     Sets all pixels matching foreground to the maximum or minimum value of the pixel,
     according to the following rule:
@@ -1709,4 +1717,32 @@ fn test_median_cut() {
 pub struct UniformQuantization {
     log : bool
 }
+
+pub fn byte_to_bit<S, T>(byte : &Image<u8, S>, bit : &mut Image<u8, T>)
+where
+    S : Storage<u8>,
+    T : StorageMut<u8>
+{
+    // Solution (1)
+    // byte.scalar_sub_to(1, bit);
+    // bit.scalar_xor_assign(255);
+
+    // This can easily be done in-place too.
+    // byte.scalar_sub_to(1, bit);
+    // bit.bitwise_not_inplace();
+
+    // This assumes saturation of 0 entries.
+    // byte.scalar_sub_to(254, bit);
+
+    unimplemented!()
+}
+
+pub fn byte_to_bit_inplace<T>(img : &mut Image<u8, T>)
+where
+    T : StorageMut<u8>
+{
+    // This assumes saturation of 0 entries.
+    img.scalar_sub_mut(254);
+}
+
 

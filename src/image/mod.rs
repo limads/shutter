@@ -1461,6 +1461,12 @@ where
     P : Pixel
 {
 
+    pub unsafe fn row_unchecked(&self, ix : usize) -> &[P] {
+        let tl = self.offset.0 * self.width + self.offset.1;
+        let start = tl + ix*self.width;
+        &self.slice.as_ref().get_unchecked(start..(start+self.sz.1))
+    }
+
     pub fn row(&self, ix : usize) -> Option<&[P]> {
         if ix >= self.sz.0 {
             return None;

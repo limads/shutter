@@ -184,6 +184,8 @@ float_depth -> linearize_depth / depth_to_interval / interval_to_depth
 
 pub mod profile;
 
+pub mod util;
+
 // Scalar image operations
 // pub mod scalar;
 

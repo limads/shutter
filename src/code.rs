@@ -16,6 +16,7 @@ use num_traits::bounds::Bounded;
 use nalgebra::{Point2, Vector2};
 use std::ops::AddAssign;
 use crate::gray::Foreground;
+use crate::local::IppSumWindow;
 
 const fn sum_pattern(offset : u8) -> [u8; 16] {
     let mut arr = [0; 16];
@@ -70,28 +71,28 @@ pub enum Fold {
     Empty,
     Undecidable,
     One(usize),
-    Two(usize, usize),
-    Three(usize, usize, usize),
-    Four(usize, usize, usize, usize)
+    Two([usize; 2]),
+    Three([usize; 3]),
+    Four([usize; 4])
 }
 
 const fn get_fold(n_patts : usize, patt_ix : usize, pos : usize) -> Fold {
     match (n_patts, patt_ix) {
-        (1, 0) => Fold::One(pos),                          // 0
-        (1, 1) => Fold::One(16+pos),                       // 1
-        (1, 2) => Fold::One(32+pos),                       // 2
-        (1, 3) => Fold::One(48+pos),                       // 3
-        (2, 0) => Fold::Two(pos, 16+pos),                  // 0,1
-        (2, 1) => Fold::Two(pos, 32+pos),                  // 0,2
-        (2, 2) => Fold::Two(pos, 48+pos),                  // 0,3
-        (2, 3) => Fold::Two(16+pos, 32+pos),               // 1,2
-        (2, 4) => Fold::Two(16+pos, 48+pos),               // 1,3
-        (2, 5) => Fold::Two(32+pos, 48+pos),               // 2,3
-        (3, 0) => Fold::Three(pos, 16+pos, 32+pos),        // 0, 1, 2
-        (3, 1) => Fold::Three(pos, 16+pos, 48+pos),        // 0, 1, 3
-        (3, 2) => Fold::Three(pos, 32+pos, 48+pos),        // 0, 2, 3
-        (3, 3) => Fold::Three(16+pos, 32+pos, 48+pos),     // 1, 2, 3
-        (4, 0) => Fold::Four(pos, 16+pos, 32+pos, 48+pos), // 0, 1, 2, 3
+        (1, 0) => Fold::One(pos),                            // 0
+        (1, 1) => Fold::One(16+pos),                         // 1
+        (1, 2) => Fold::One(32+pos),                         // 2
+        (1, 3) => Fold::One(48+pos),                         // 3
+        (2, 0) => Fold::Two([pos, 16+pos]),                  // 0,1
+        (2, 1) => Fold::Two([pos, 32+pos]),                  // 0,2
+        (2, 2) => Fold::Two([pos, 48+pos]),                  // 0,3
+        (2, 3) => Fold::Two([16+pos, 32+pos]),               // 1,2
+        (2, 4) => Fold::Two([16+pos, 48+pos]),               // 1,3
+        (2, 5) => Fold::Two([32+pos, 48+pos]),               // 2,3
+        (3, 0) => Fold::Three([pos, 16+pos, 32+pos]),        // 0, 1, 2
+        (3, 1) => Fold::Three([pos, 16+pos, 48+pos]),        // 0, 1, 3
+        (3, 2) => Fold::Three([pos, 32+pos, 48+pos]),        // 0, 2, 3
+        (3, 3) => Fold::Three([16+pos, 32+pos, 48+pos]),     // 1, 2, 3
+        (4, 0) => Fold::Four([pos, 16+pos, 32+pos, 48+pos]), // 0, 1, 2, 3
         _ => panic!("Invalid fold")
     }
 }
@@ -279,37 +280,48 @@ fn sum_conflicts() {
     // println!("{:?}", FOLD_LUT_0);
 }
 
+// Those LUTs contain the minimum possible size for the sum at each entry*/
 const FOLD_LUT_0 : [Fold; 101] = build_fold_lut::<101>(0, 1, 100);
-
 const FOLD_LUT_1 : [Fold; 105] = build_fold_lut::<105>(1, 2, 104);
-
 const FOLD_LUT_2 : [Fold; 109] = build_fold_lut::<109>(2, 3, 108);
-
 const FOLD_LUT_3 : [Fold; 113] = build_fold_lut::<113>(3, 4, 112);
-
 const FOLD_LUT_4 : [Fold; 117] = build_fold_lut::<117>(4, 5, 116);
-
 const FOLD_LUT_5 : [Fold; 121] = build_fold_lut::<121>(5, 6, 120);
-
 const FOLD_LUT_6 : [Fold; 125] = build_fold_lut::<125>(6, 7, 124);
-
 const FOLD_LUT_7 : [Fold; 129] = build_fold_lut::<129>(7, 8, 128);
-
 const FOLD_LUT_8 : [Fold; 133] = build_fold_lut::<133>(8, 9, 132);
-
 const FOLD_LUT_9 : [Fold; 137] = build_fold_lut::<137>(9, 10, 136);
-
 const FOLD_LUT_10 : [Fold; 141] = build_fold_lut::<141>(10, 11, 140);
-
 const FOLD_LUT_11 : [Fold; 145] = build_fold_lut::<145>(11, 12, 144);
-
 const FOLD_LUT_12 : [Fold; 149] = build_fold_lut::<149>(12, 13, 148);
-
 const FOLD_LUT_13 : [Fold; 153] = build_fold_lut::<153>(13, 14, 152);
-
 const FOLD_LUT_14 : [Fold; 157] = build_fold_lut::<157>(14, 15, 156);
-
 const FOLD_LUT_15 : [Fold; 161] = build_fold_lut::<161>(15, 16, 160);
+
+// All those LUTs contain the maximum possible size
+// (so they might be packed into an array with the same
+// homogeneous element type). It is best to leave the upper
+// limit at u8::MAX (even if not used in practice) or else
+// a wrong input might lead to a buffer overflow (instead),
+// we get a wrong result.
+const FOLD_LUTS : [[Fold; 256]; 16] = [
+    build_fold_lut::<256>(0, 1, 100),
+    build_fold_lut::<256>(1, 2, 104),
+    build_fold_lut::<256>(2, 3, 108),
+    build_fold_lut::<256>(3, 4, 112),
+    build_fold_lut::<256>(4, 5, 116),
+    build_fold_lut::<256>(5, 6, 120),
+    build_fold_lut::<256>(6, 7, 124),
+    build_fold_lut::<256>(7, 8, 128),
+    build_fold_lut::<256>(8, 9, 132),
+    build_fold_lut::<256>(9, 10, 136),
+    build_fold_lut::<256>(10, 11, 140),
+    build_fold_lut::<256>(11, 12, 144),
+    build_fold_lut::<256>(12, 13, 148),
+    build_fold_lut::<256>(13, 14, 152),
+    build_fold_lut::<256>(14, 15, 156),
+    build_fold_lut::<256>(15, 16, 160)
+];
 
 const fn next_fold<const M : usize>(
     pos : usize,
@@ -436,7 +448,7 @@ impl RasterPoints {
                         curr_rle = None;
                     }
                 } else {
-                    curr_rle = Some(RunLength { start : (row, self.cols[group.start+i]), length : 1 });
+                    curr_rle = Some(RunLength { start : (row, self.cols[i]), length : 1 });
                 }
             }
             if let Some(rle) = curr_rle {
@@ -519,7 +531,13 @@ impl FoldEncoder {
         S : Storage<u8>
     {
         w.mul_to(&self.indices, &mut self.masked_indices);
+
+        #[cfg(feature="ipp")]
+        self.pts.update_folded2(&self.masked_indices, &mut self.fold);
+
+        #[cfg(not(feature="ipp"))]
         self.pts.update_folded(&self.masked_indices, &mut self.fold);
+
         self.pts.code()
     }
 
@@ -527,11 +545,27 @@ impl FoldEncoder {
 
 #[derive(Debug, Clone)]
 struct Folded {
+
     // Contains sum of horizontal image fold (always with h x 16 size)
     sum : ImageBuf<u8>,
 
     // Contains concatenated folded regions, with dimension h x (n_folds*16) = h x (w / 4)
-    dst : ImageBuf<u8>
+    dst : ImageBuf<u8>,
+
+    #[cfg(feature="ipp")]
+    sw_rows : IppSumWindow,
+
+    #[cfg(feature="ipp")]
+    sw_cols : IppSumWindow,
+
+    sum_rows : ImageBuf<u8>,
+
+    sum_cols : ImageBuf<u8>,
+
+    one_rows : ImageBuf<u8>,
+
+    one_cols : ImageBuf<u8>,
+
 }
 
 impl Folded {
@@ -539,9 +573,79 @@ impl Folded {
     fn new(height : usize, width : usize) -> Self {
         let sum = ImageBuf::<u8>::new_constant(height, 16, 0);
         let dst = ImageBuf::<u8>::new_constant(height, width / 4, 0);
-        Self { sum, dst }
+        let sum_rows = ImageBuf::<u8>::new_constant(height, 1, 0);
+        let sum_cols = ImageBuf::<u8>::new_constant(1, 16, 0);
+        let one_cols = ImageBuf::<u8>::new_constant(height, 1, 1);
+        let one_rows = ImageBuf::<u8>::new_constant(1, 16, 1);
+
+        #[cfg(feature="ipp")]
+        {
+            let src_sz = (height, 16);
+            let sw_rows = crate::local::IppSumWindow::new(
+                16,
+                src_sz,
+                1,
+                (height, 1)
+            );
+            let sw_cols = crate::local::IppSumWindow::new(
+                16,
+                src_sz,
+                16,
+                (1, 16)
+            );
+            Self { sum, dst, sum_rows, sum_cols, sw_cols, sw_rows, one_cols, one_rows }
+        }
+
+        #[cfg(not(feature="ipp"))]
+        Self { sum, dst, sum_rows, sum_cols }
     }
 
+    fn add_to_sum(&mut self) {
+        let height = self.sum.height();
+        let fst_strip = self.dst.window((0, 0), (height, 16)).unwrap();
+        let rem_sz = (height, self.dst.width()-16);
+        let rem_strips = self.dst.window((0, 16), rem_sz).unwrap();
+        self.sum.copy_from(&fst_strip);
+        for strip in rem_strips.windows((height, 16)) {
+            self.sum.add_assign(&strip);
+        }
+    }
+
+    #[cfg(feature="ipp")]
+    fn sum_profile(&mut self) {
+        // self.sw_rows.calculate(&self.sum, &mut self.sum_rows);
+        // self.sw_cols.calculate(&self.sum, &mut self.sum_cols);
+        let h = self.sum.height();
+        for c in 0..16usize {
+            self.sum_cols[(0, c)] = self.sum.window((0usize, c), (h, 1)).unwrap().sum::<f32>(1) as u8;
+        }
+        for r in 0..h {
+            self.sum_rows[(r,0)] = self.sum.window((r, 0), (1usize, 16usize)).unwrap().sum::<f32>(1) as u8;
+        }
+    }
+
+}
+
+const BASE_OFFSET : [usize; 4] = [0, 16, 32, 48];
+
+pub struct FoldRowIter {
+    col_evals : Vec<usize>,
+    chunks_per_row : usize,
+    col_offsets : Vec<usize>
+}
+
+impl FoldRowIter {
+
+    pub fn new(width : usize) -> Self {
+        let col_evals : Vec<_> = (0..16).collect();
+        let chunks_per_row = width / 64;
+        let col_offsets : Vec<_> = (0..chunks_per_row).map(|i| i * 64 ).collect();
+        Self {
+            col_evals,
+            chunks_per_row,
+            col_offsets
+        }
+    }
 
 }
 
@@ -553,53 +657,143 @@ impl RasterPoints {
         self.cols.clear();
     }
 
+    fn verify<S>(&self, w : &Image<u8, S>, folded : &Folded)
+    where
+        S: Storage<u8>
+    {
+        assert!(w.width() % 64 == 0);
+        assert!(w.height() == folded.dst.height());
+        assert!(w.width() / 4 == folded.dst.width());
+    }
+
+    // This not only sums the folds, but removes from analysis
+    // empty rows and columns.
+    #[cfg(feature="ipp")]
+    fn update_folded2<S>(&mut self, w : &Image<u8, S>, folded : &mut Folded)
+    where
+        S: Storage<u8>
+    {
+        self.verify(w, &*folded);
+        self.clear();
+
+        // No point in folding an image with the minimum size.
+        if w.width() == 64 {
+            self.update_flat(w, folded);
+            return;
+        }
+
+        let mut timer = crate::util::Timer::start();
+
+        self.fold_all(w, folded);
+        timer.time("fold");
+
+        // Add up concatenated regions.
+        folded.add_to_sum();
+        timer.time("sum");
+
+        folded.sum_profile();
+        timer.time("sum profile");
+
+        let mut strip_rows = w.row_chunks(64);
+        let mut dst_rows = folded.dst.row_chunks(16);
+        let FoldRowIter { mut col_evals, chunks_per_row, col_offsets} = FoldRowIter::new(w.width());
+
+        let valid_cols : Vec<_> = folded.sum_cols.pixels(1)
+            .enumerate()
+            .filter_map(|(pos, px)| if *px > 0 { Some(pos) } else { None })
+            .collect();
+        // assert!(valid_cols.len() <= 16);
+        // println!("{:?}", valid_cols);
+        // let valid_cols = col_evals.clone();
+        for r in 0..w.height() {
+
+            // println!("{}", folded.sum_rows[(r, 0)]);
+            if folded.sum_rows[(r, 0)] == 0 {
+                for _ in 0..chunks_per_row {
+                    let _ = strip_rows.next().unwrap();
+                    let _ = dst_rows.next().unwrap();
+                }
+                continue;
+            }
+
+            col_evals.clear();
+            let sum_row = unsafe { folded.sum.row_unchecked(r) };
+            for i in &valid_cols {
+                if sum_row[*i] > 0 {
+                    col_evals.push(*i);
+                }
+            }
+            let n_before = self.cols.len();
+            for i in 0..chunks_per_row {
+                self.update_row_segment(strip_rows.next().unwrap(), dst_rows.next().unwrap(), &col_evals[..], /*r*/ col_offsets[i]);
+            }
+            self.push_row(r, n_before);
+        }
+
+        timer.time("collect");
+    }
+
     /* Updates by restricting the evaluated pixels to those that are nonzero
     at a final image. */
     fn update_folded<S>(&mut self, w : &Image<u8, S>, folded : &mut Folded)
     where
         S: Storage<u8>
     {
-        let (height, width) = w.size();
-        assert!(w.width() % 64 == 0);
-        assert!(w.height() == folded.dst.height());
-        assert!(w.width() / 4 == folded.dst.width());
+        self.verify(w, &*folded);
+        self.clear();
 
         // No point in folding an image with the minimum size.
         if w.width() == 64 {
-            return self.update_flat(w, folded);
+            self.update_flat(w, folded);
+            return;
         }
 
-        // Fold image into concatenated regions
-        for (strip, mut dst) in w.windows((height, 64)).zip(folded.dst.windows_mut((height, 16))) {
-            fold_image(&strip, &mut dst);
-        }
+        let mut timer = crate::util::Timer::start();
+
+        self.fold_all(w, folded);
+        timer.time("fold");
 
         // Add up concatenated regions.
-        let fst_strip = folded.dst.window((0, 0), (height, 16)).unwrap();
-        let rem_sz = (height, folded.dst.width()-16);
-        let rem_strips = folded.dst.window((0, 16), rem_sz).unwrap();
-        folded.sum.copy_from(&fst_strip);
-        for strip in rem_strips.windows((height, 16)) {
-            folded.sum.add_assign(&strip);
-        }
+        folded.add_to_sum();
+        timer.time("sum");
 
-        let mut col_evals = Vec::with_capacity(16);
-        for r in 0..height {
+        let mut strip_rows = w.row_chunks(64);
+        let mut dst_rows = folded.dst.row_chunks(16);
+        let FoldRowIter { mut col_evals, chunks_per_row, col_offsets} = FoldRowIter::new(w.width());
+        for r in 0..w.height() {
             col_evals.clear();
-            for (i, px) in folded.sum.row(r).unwrap().iter().enumerate() {
+            let sum_row = unsafe { folded.sum.row_unchecked(r) };
+            for (i, px) in sum_row.iter().enumerate() {
                 if *px > 0 {
                     col_evals.push(i);
                 }
             }
             let n_before = self.cols.len();
-            for (strip, dst) in w.windows((height, 64)).zip(folded.dst.windows((height, 16))) {
-                self.update_row_segment(&strip, &dst, &col_evals[..], r);
+            for i in 0..chunks_per_row {
+                self.update_row_segment(strip_rows.next().unwrap(), dst_rows.next().unwrap(), &col_evals[..], /*r*/ col_offsets[i]);
             }
-            let n_after = self.cols.len();
-            if n_after > n_before {
-                self.rows.push(r);
-                self.groups.push(Range { start : n_before, end : n_after });
-            }
+            self.push_row(r, n_before);
+        }
+
+        timer.time("collect");
+    }
+
+    fn push_row(&mut self, r : usize, n_before : usize) {
+        let n_after = self.cols.len();
+        if n_after > n_before {
+            self.rows.push(r);
+            self.groups.push(Range { start : n_before, end : n_after });
+        }
+    }
+
+    fn fold_all<S>(&mut self, w : &Image<u8, S>, folded : &mut Folded)
+    where
+        S: Storage<u8>
+    {
+        let strips = w.windows((w.height(), 64));
+        let dsts = folded.dst.windows_mut((w.height(), 16));
+        for (strip, mut dst) in strips.zip(dsts) {
+            fold_image(&strip, &mut dst);
         }
     }
 
@@ -608,121 +802,110 @@ impl RasterPoints {
     where
         S: Storage<u8>,
     {
-        assert!(w.height() == folded.dst.height());
-        assert!(w.width() % 64 == 0);
-        let height = w.height();
+        self.verify(w, &*folded);
         self.clear();
-        let strips = w.windows((height, 64));
-        let dsts = folded.dst.windows_mut((height, 16));
-        for (strip, mut dst) in strips.zip(dsts) {
-            fold_image(&strip, &mut dst);
-        }
-        let col_evals : Vec<_> = (0..16).collect();
+        self.fold_all(w, folded);
+
         // It is best to iterate over rows then over strips for each row, since
         // in this case the pixels at the same row will be contiguous.
 
-        for r in 0..height {
+        let mut strip_rows = w.row_chunks(64);
+        let mut dst_rows = folded.dst.row_chunks(16);
+        let FoldRowIter { col_evals, chunks_per_row, col_offsets} = FoldRowIter::new(w.width());
+        for r in 0..w.height() {
             let n_before = self.cols.len();
-            for (strip, dst) in w.windows((height, 64)).zip(folded.dst.windows((height, 16))) {
-                self.update_row_segment(&strip, &dst, &col_evals[..], r);
+            for i in 0..chunks_per_row {
+                self.update_row_segment(strip_rows.next().unwrap(), dst_rows.next().unwrap(), &col_evals[..], col_offsets[i]);
             }
-            let n_after = self.cols.len();
-            if n_after > n_before {
-                self.rows.push(r);
-                self.groups.push(Range { start : n_before, end : n_after });
-            }
+            self.push_row(r, n_before);
         }
     }
 
     // W is assumed to be a bit binary image of dimensions r x 64, while
     // dst is assumed to be a destination image with any content of
     // dimensions r x 16.
-    fn update_row_segment<S, T>(
+    fn update_row_segment(
         &mut self,
-        w : &Image<u8, S>,
-        dst : &Image<u8, T>,
+        orig_row : &[u8],
+        fold_row : &[u8],
         col_evals : &[usize],
-        r : usize
-    ) where
-        S : Storage<u8>,
-        T : Storage<u8>
-    {
+        offset : usize
+    ) {
         let n_before = self.cols.len();
-        let fold_row = dst.row(r).unwrap();
-
-        let fold_luts : [&'static [Fold]; 16] = [
-            &FOLD_LUT_0[..],
-            &FOLD_LUT_1[..],
-            &FOLD_LUT_2[..],
-            &FOLD_LUT_3[..],
-            &FOLD_LUT_4[..],
-            &FOLD_LUT_5[..],
-            &FOLD_LUT_6[..],
-            &FOLD_LUT_7[..],
-            &FOLD_LUT_8[..],
-            &FOLD_LUT_9[..],
-            &FOLD_LUT_10[..],
-            &FOLD_LUT_11[..],
-            &FOLD_LUT_12[..],
-            &FOLD_LUT_13[..],
-            &FOLD_LUT_14[..],
-            &FOLD_LUT_15[..]
-        ];
-
         for c in col_evals {
-            match fold_luts[*c][fold_row[*c] as usize] {
+            match unsafe { FOLD_LUTS.get_unchecked(*c).get_unchecked(fold_row[*c] as usize) } {
                 Fold::Empty => { },
                 Fold::Undecidable => {
-                    let orig_row = w.row(r).unwrap();
-                    for offset in [0, 16, 32, 48] {
-                        let oc = offset + *c;
+                    for offset in &BASE_OFFSET[..] {
+                        let oc = *offset + *c;
                         if orig_row[oc] > 0 {
                             self.cols.push(oc);
                         }
                     }
                 },
                 Fold::One(pt) => {
-                    self.cols.push(pt);
+                    self.cols.push(*pt);
                 },
-                Fold::Two(pt1, pt2) => {
-                    self.cols.push(pt1);
-                    self.cols.push(pt2);
+                Fold::Two(pts) => {
+                    self.cols.extend_from_slice(&pts[..]);
                 },
-                Fold::Three(pt1, pt2, pt3) => {
-                    self.cols.push(pt1);
-                    self.cols.push(pt2);
-                    self.cols.push(pt3);
+                Fold::Three(pts) => {
+                    self.cols.extend_from_slice(&pts[..]);
                 },
-                Fold::Four(pt1, pt2, pt3, pt4) => {
-                    self.cols.push(pt1);
-                    self.cols.push(pt2);
-                    self.cols.push(pt3);
-                    self.cols.push(pt4);
+                Fold::Four(pts) => {
+                    self.cols.extend_from_slice(&pts[..]);
                 }
             }
         }
         let n_after = self.cols.len();
         if n_after > n_before {
             let range = Range { start : n_before, end : n_after };
-            offset_cols(&mut self.cols[range.clone()], w);
+
+            // This is taking a significant time.
+            offset_cols(&mut self.cols[range.clone()], offset);
+
+            // This too (but less so).
             self.cols[range].sort();
         }
     }
 
 }
 
-fn offset_cols<S>(cols : &mut [usize], w : &Image<u8, S>)
-where
-    S : Storage<u8>
-{
-    // use simba::simd::Simd;
-    // let col_offset = Simd::<wide::usizex8>::splat(w.offset().1);
-    // self.cols.chunks_mut(8).for_each(|mut c| Simd::<wide::usizex8>::from_slice_unaligned(c).add_assign(&col_offset) );
-    let col_offset = w.offset().1;
+fn offset_vectorized(cols : &mut [usize], col_offset : usize) {
+    let mut ptr : *mut wide::u64x4 = cols.as_mut_ptr() as *mut wide::u64x4;
+    let mut cols_v : &mut [wide::u64x4] = unsafe { std::slice::from_raw_parts_mut(ptr, cols.len() / 4) };
+    let col_offset_v = wide::u64x4::splat(col_offset as u64);
+    cols_v.iter_mut().for_each(|c| *c += col_offset_v );
+}
+
+fn offset_scalar(cols : &mut [usize], col_offset : usize) {
+    cols.iter_mut().for_each(|c| *c += col_offset );
+}
+
+fn offset_cols(cols : &mut [usize], col_offset : usize) {
+    if col_offset > 0 {
+        let sz = crate::util::closest_divisor(cols.len(), 4);
+        match sz.cmp(&4) {
+            Ordering::Less => {
+                offset_scalar(cols, col_offset);
+            },
+            Ordering::Equal => {
+                offset_vectorized(cols, col_offset);
+            },
+            Ordering::Greater => {
+                let (cols1, cols2) = cols.split_at_mut(sz);
+                offset_vectorized(cols1, col_offset);
+                offset_scalar(cols2, col_offset);
+            }
+        }
+    }
+}
+
+/*fn offset_cols(cols : &mut [usize], col_offset : usize) {
     if col_offset > 0 {
         cols.iter_mut().for_each(|c| *c += col_offset );
     }
-}
+}*/
 
 // Contains a sparse image code. This implements Encoding
 // by dispatching to the encoding implementation of each

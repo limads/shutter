@@ -20,13 +20,20 @@ where
     P : Pixel
 {
 
+    /* Returns a sequence of rows of this image from top to bottom. */
     pub fn rows<'a>(&'a self) -> impl Iterator<Item=&'a [P]> + Clone + 'a {
-        let stride = self.width;
-        let tl = self.offset.0 * stride + self.offset.1;
+        let tl = self.offset.0 * self.width + self.offset.1;
         (0..self.sz.0).map(move |i| {
-            let start = tl + i*stride;
-            &self.slice.as_ref()[start..(start+self.sz.1)]
+            let start = tl + i*self.width;
+            unsafe { self.slice.as_ref().get_unchecked(start..(start+self.sz.1)) }
         })
+    }
+
+    /* Returns the sequence of row sub-slices of size sz contained in this image, in raster
+    order. Panics if image width is not divisible by sz */
+    pub fn row_chunks<'a>(&'a self, sz : usize) -> impl Iterator<Item=&'a [P]> + Clone + 'a {
+        assert!(self.sz.1 % sz == 0);
+        self.rows().map(move |r| r.chunks(sz) ).flatten()
     }
 
     /// Returns iterator over (subsampled row index, subsampled col index, pixel color).
@@ -471,13 +478,19 @@ where
 {
 
     pub fn rows_mut<'a, 'b>(&'b mut self) -> impl Iterator<Item=&'a mut [P]> + 'b {
-        let stride = self.original_size().1;
-        let tl = self.offset.0 * stride + self.offset.1;
+        let tl = self.offset.0 * self.width + self.offset.1;
         (0..self.sz.0).map(move |i| {
-            let start = tl + i*stride;
-            let slice = &self.slice.as_ref()[start..(start+self.sz.1)];
-            unsafe { std::slice::from_raw_parts_mut(slice.as_ptr() as *mut _, slice.len()) }
+            let start = tl + i*self.width;
+            unsafe {
+                let mut slice = &mut self.slice.as_mut().get_unchecked_mut(start..(start+self.sz.1));
+                std::slice::from_raw_parts_mut(slice.as_mut_ptr() as *mut _, slice.len())
+            }
         })
+    }
+
+    pub fn row_chunks_mut<'b>(&'b mut self, sz : usize) -> impl Iterator<Item=&'b mut [P]> + 'b {
+        assert!(self.sz.1 % sz == 0);
+        self.rows_mut().map(move |r| r.chunks_mut(sz) ).flatten()
     }
 
     /*pub unsafe fn pixels_mut_ptr(&'a mut self, spacing : usize) -> impl Iterator<Item=*mut N> {
