@@ -422,14 +422,11 @@ impl RasterPoints {
         let mut rles = Vec::new();
         let mut rle_rows = Vec::new();
 
-        // The points are assumed to be sorted by by columns within row fragments.
-        // A same row might appear multiple (contiguous )times, if the columns are collected from
-        // different image strips. Therefore contacting RLEs are contiguous.
         for r in 0..self.rows.len() {
             let n_before = rles.len();
             let row = self.rows[r];
             let group = &self.groups[r];
-            let mut curr_rle = Some(RunLength { start : (row, group.start), length : 1 });
+            let mut curr_rle = Some(RunLength { start : (row, self.cols[group.start]), length : 1 });
             for i in (group.start+1)..group.end {
                 if let Some(ref mut rle) = curr_rle {
                     if self.cols[i].abs_diff(self.cols[i-1]) == 1 {
@@ -439,7 +436,7 @@ impl RasterPoints {
                         curr_rle = None;
                     }
                 } else {
-                    curr_rle = Some(RunLength { start : (row, group.start + i), length : 1 });
+                    curr_rle = Some(RunLength { start : (row, self.cols[group.start+i]), length : 1 });
                 }
             }
             if let Some(rle) = curr_rle {
@@ -464,25 +461,28 @@ fn fold_encoding() {
 
     use crate::draw::*;
 
-    let mut img = ImageBuf::<u8>::new_constant(64, 64, 0);
-    img.draw(Mark::Dot((32, 32), 8), 1);
+    // let mut img = ImageBuf::<u8>::new_constant(64, 64, 0);
+    // img.draw(Mark::Dot((32, 32), 8), 1);
+
+    let mut img = ImageBuf::<u8>::new_constant(128, 128, 0);
+    img.draw(Mark::Dot((64, 64), 32), 1);
 
     let mut enc = FoldEncoder::new(img.height(), img.width());
     let rles = enc.encode(&img);
 
-    /*for i in 0..enc.pts.rows.len() {
+    for i in 0..enc.pts.rows.len() {
         let gr = enc.pts.groups[i].clone();
         let r = enc.pts.rows[i];
         for c in &enc.pts.cols[gr] {
             img[(r, *c)] = 255;
         }
-    }*/
+    }
 
-    for rle in &rles.rles {
+    /*for rle in &rles.rles {
         for pt in rle.points() {
             img[pt] = 255;
         }
-    }
+    }*/
 
     img.show();
 }
@@ -519,7 +519,7 @@ impl FoldEncoder {
         S : Storage<u8>
     {
         w.mul_to(&self.indices, &mut self.masked_indices);
-        self.pts.update_flat(&self.masked_indices, &mut self.fold);
+        self.pts.update_folded(&self.masked_indices, &mut self.fold);
         self.pts.code()
     }
 
@@ -555,7 +555,7 @@ impl RasterPoints {
 
     /* Updates by restricting the evaluated pixels to those that are nonzero
     at a final image. */
-    fn update_folded<S, T>(&mut self, w : &Image<u8, S>, folded : &mut Folded)
+    fn update_folded<S>(&mut self, w : &Image<u8, S>, folded : &mut Folded)
     where
         S: Storage<u8>
     {
@@ -591,8 +591,14 @@ impl RasterPoints {
                     col_evals.push(i);
                 }
             }
+            let n_before = self.cols.len();
             for (strip, dst) in w.windows((height, 64)).zip(folded.dst.windows((height, 16))) {
-                self.update_row(&strip, &dst, &col_evals[..], r);
+                self.update_row_segment(&strip, &dst, &col_evals[..], r);
+            }
+            let n_after = self.cols.len();
+            if n_after > n_before {
+                self.rows.push(r);
+                self.groups.push(Range { start : n_before, end : n_after });
             }
         }
     }
@@ -614,9 +620,16 @@ impl RasterPoints {
         let col_evals : Vec<_> = (0..16).collect();
         // It is best to iterate over rows then over strips for each row, since
         // in this case the pixels at the same row will be contiguous.
+
         for r in 0..height {
+            let n_before = self.cols.len();
             for (strip, dst) in w.windows((height, 64)).zip(folded.dst.windows((height, 16))) {
-                self.update_row(&strip, &dst, &col_evals[..], r);
+                self.update_row_segment(&strip, &dst, &col_evals[..], r);
+            }
+            let n_after = self.cols.len();
+            if n_after > n_before {
+                self.rows.push(r);
+                self.groups.push(Range { start : n_before, end : n_after });
             }
         }
     }
@@ -624,8 +637,13 @@ impl RasterPoints {
     // W is assumed to be a bit binary image of dimensions r x 64, while
     // dst is assumed to be a destination image with any content of
     // dimensions r x 16.
-    fn update_row<S, T>(&mut self, w : &Image<u8, S>, dst : &Image<u8, T>, col_evals : &[usize], r : usize)
-    where
+    fn update_row_segment<S, T>(
+        &mut self,
+        w : &Image<u8, S>,
+        dst : &Image<u8, T>,
+        col_evals : &[usize],
+        r : usize
+    ) where
         S : Storage<u8>,
         T : Storage<u8>
     {
@@ -685,11 +703,9 @@ impl RasterPoints {
         }
         let n_after = self.cols.len();
         if n_after > n_before {
-            self.rows.push(r);
             let range = Range { start : n_before, end : n_after };
             offset_cols(&mut self.cols[range.clone()], w);
-            self.cols[range.clone()].sort();
-            self.groups.push(range);
+            self.cols[range].sort();
         }
     }
 
@@ -703,7 +719,9 @@ where
     // let col_offset = Simd::<wide::usizex8>::splat(w.offset().1);
     // self.cols.chunks_mut(8).for_each(|mut c| Simd::<wide::usizex8>::from_slice_unaligned(c).add_assign(&col_offset) );
     let col_offset = w.offset().1;
-    cols.iter_mut().for_each(|c| *c += col_offset );
+    if col_offset > 0 {
+        cols.iter_mut().for_each(|c| *c += col_offset );
+    }
 }
 
 // Contains a sparse image code. This implements Encoding

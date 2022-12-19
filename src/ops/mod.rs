@@ -282,6 +282,21 @@ where
         let (rhs_stride, rhs_roi) = crate::image::ipputils::step_and_size_for_image(rhs);
         let (dst_stride, dst_roi) = crate::image::ipputils::step_and_size_for_image(dst);
         unsafe {
+            if lhs.pixel_is::<u8>() {
+                let scale : i32 = 0;
+                let ans = crate::foreign::ipp::ippi::ippiDiv_8u_C1RSfs(
+                    mem::transmute(lhs.as_ptr()),
+                    lhs_stride,
+                    mem::transmute(rhs.as_ptr()),
+                    rhs_stride,
+                    mem::transmute(dst.as_mut_ptr()),
+                    dst_stride,
+                    lhs_roi,
+                    scale
+                );
+                assert!(ans == 0);
+                return;
+            }
             if lhs.pixel_is::<f32>() {
                 let ans = crate::foreign::ipp::ippi::ippiDiv_32f_C1R(
                     mem::transmute(lhs.as_ptr()),
@@ -309,8 +324,8 @@ where
         let (rhs_stride, rhs_roi) = crate::image::ipputils::step_and_size_for_image(rhs);
         let (dst_stride, dst_roi) = crate::image::ipputils::step_and_size_for_image(dst);
         unsafe {
-            /*if lhs.pixel_is::<u8>() {
-                let scale : i32 = 1;
+            if lhs.pixel_is::<u8>() {
+                let scale : i32 = 0;
                 let ans = crate::foreign::ipp::ippi::ippiMul_8u_C1RSfs(
                     mem::transmute(lhs.as_ptr()),
                     lhs_stride,
@@ -323,7 +338,7 @@ where
                 );
                 assert!(ans == 0);
                 return;
-            }*/
+            }
             if lhs.pixel_is::<f32>() {
                 let ans = crate::foreign::ipp::ippi::ippiMul_32f_C1R(
                     mem::transmute(lhs.as_ptr()),
