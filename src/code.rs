@@ -18,6 +18,308 @@ use std::ops::AddAssign;
 use crate::gray::Foreground;
 use crate::local::IppSumWindow;
 
+pub struct BitEncoder {
+
+    indices : ImageBuf<u8>,
+
+    masked_indices : ImageBuf<u8>,
+
+    index_sum : ImageBuf<u8>,
+
+    size : (usize, usize)
+
+}
+
+/* Those are the patterns that are folded with a logical OR across the 8 image sections */
+const BIT_INDICES : [u8; 8] = [0b00000001, 0b00000010, 0b00000100, 0b00001000, 0b00010000, 0b00100000, 0b01000000, 0b10000000];
+
+/* Those patterns are used to probe the index via a logical OR */
+const BIT_PROBES : [u8; 8] = [0b11111111, 0b11111110, 0b11111100, 0b11111000, 0b11110000, 0b11100000, 0b11000000, 0b10000000];
+
+impl BitEncoder {
+
+    pub fn new(height : usize, width : usize) -> Self {
+        assert!(width % 8 == 0);
+        let strip_width = width / 8;
+        let mut indices = ImageBuf::new_constant(height, width, 0);
+        for i in 0..8 {
+            indices.window_mut((0, i*strip_width), (height, strip_width)).unwrap().fill(BIT_INDICES[i]);
+        }
+        Self {
+            indices,
+            masked_indices : ImageBuf::new_constant(height, width, 0),
+            index_sum : ImageBuf::new_constant(height, strip_width, 0),
+            size : (height, width)
+        }
+    }
+
+    // img is assumed to be a binary image with 1's at hits.
+    pub fn calculate<S>(&mut self, img : &Image<u8, S>) -> RunLengthCode
+    where
+        S : Storage<u8>
+    {
+        assert!(img.size() == self.size);
+        let strip_width = img.width() / 8;
+        img.mul_to(&self.indices, &mut self.masked_indices);
+        fold_or_image(&self.masked_indices, &mut self.index_sum);
+
+        // println!("{:#08b}", (0b00000001 & 0b11111111));
+        // println!("{}", (0b00000001 & 0b11111111) % 2);
+
+        // After this stage, we can freely calculate a logical OR
+        // of index sum with itself shited by 1 over rows or columns
+        // (then subsample by 2) to sacrifice spatial precision in favor
+        // of better performance when searching for the RLEs (or to
+        // search at multiple scales, looking at the finer image only
+        // after hits at coarser image).
+
+        let mut rles : Vec<RunLength> = Default::default();
+        let mut rows : Vec<Range<usize>> = Default::default();
+        let mut rle_front : [Option<RunLength>; 8] = [None; 8];
+        let strip_offsets : Vec<_> = (0..8).map(|i| strip_width*i ).collect();
+
+        for r in 0..img.height() {
+            let n_before = rles.len();
+            for c in 0..self.index_sum.width() {
+                let bit = self.index_sum[(r, c)];
+                // let bit = unsafe { self.index_sum.get_unchecked((r, c)) };
+                let mut i = 0;
+
+                // This bitwise op selects which ones of the 8 sections
+                // should be examined (there is one bit for each).
+                let mut bit_and_ix = bit & BIT_PROBES[i];
+
+                // println!("{:#08b}", bit_and_ix);
+
+                while bit_and_ix > 0 && i < 7 {
+
+                    if (bit_and_ix >> i) % 2 == 1 {
+
+                        // Last bit is a 1: Then append/extend RLE at position i.
+                        if let Some(mut rle) = rle_front[i].as_mut() {
+                            rle.length += 1;
+                        } else {
+                            rle_front[i] = Some(RunLength { start : (r, strip_offsets[i] + c), length : 1 });
+                        }
+                    } else {
+
+                        // TODO verify if there is another point where RLEs must be closed
+                        // (like section end?)
+
+                        // TODO verifying this at every negative hit is hurting performance
+                        // significantly.
+
+                        // Last bit is a 0: Close RLE if any.
+                        if let Some(rle) = rle_front[i].take() {
+                            rles.push(rle);
+                        }
+                    }
+
+                    i += 1;
+                    bit_and_ix = bit & BIT_PROBES[i];
+                }
+            }
+            for i in 0..8 {
+                if let Some(rle) = rle_front[i].take() {
+                    rles.push(rle);
+                }
+            }
+            let n_after = rles.len();
+            if n_after > n_before {
+                rles[n_before..n_after].sort_by(|a, b| a.start.1.cmp(&b.start.1) );
+                for i in (n_before..(n_after-1)).rev() {
+                    if rles[i].start.1 + rles[i].length == rles[i+1].start.1 {
+                        rles[i].length += rles[i+1].length;
+                        rles.remove(i+1);
+                    }
+                }
+            }
+            let n_after_merge = rles.len();
+            rows.push(Range { start : n_before, end : n_after_merge });
+        }
+        RunLengthCode {
+            rles,
+            rows
+        }
+    }
+
+}
+
+fn fold_or_image<S, T>(w : &Image<u8, S>, dst : &mut Image<u8, T>)
+where
+    S : Storage<u8>,
+    T : StorageMut<u8>
+{
+    assert!(w.width() % 8 == 0);
+    let strip_w = w.width() / 8;
+    assert!(strip_w == dst.width());
+    assert!(w.height() == dst.height());
+    let fold_sz = (w.height(), strip_w);
+    dst.copy_from(&w.window((0, 0), fold_sz).unwrap());
+    for i in 1..(w.width() / strip_w) {
+        dst.or_assign(&w.window((0, strip_w*i), fold_sz).unwrap());
+    }
+}
+
+// cargo test --lib -- bit_encoding --nocapture
+#[test]
+fn bit_encoding() {
+
+    use crate::draw::*;
+    use crate::util::Timer;
+
+    let mut img = ImageBuf::<u8>::new_constant(128, 128, 0);
+    img.draw(Mark::Dot((64, 64), 32), 1);
+
+    let mut enc = BitEncoder::new(img.height(), img.width());
+
+    let mut t = Timer::start();
+    let rles = enc.calculate(&img);
+    t.time("encode");
+
+    for rle in &rles.rles {
+        for pt in rle.points() {
+            img[pt] = 255;
+        }
+    }
+
+    let mut img2 = ImageBuf::<u8>::new_constant(128, 128, 0);
+    img2.draw(Mark::Dot((64, 64), 32), 255);
+    RunLengthCode::encode(&img2.full_window());
+    t.time("RLE");
+
+    img.show();
+}
+
+/* This is a 10-th order Goulomb Ruler (excluding 0). It has the property that
+every sum of elements is unique - a property useful for vectorized
+run length encoding.*/
+// const GOLOMB_RULER : [u8; 9] = [1, 6, 10, 23, 26, 34, 41, 53, 55];
+
+// This prime sequence has the property that all sums
+// const GOLOMB_RULER : [u8; 9] = [2, 3, 5, 7, 11, 13, 17, 19, 23];
+
+// const GOLOMB_RULER : [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8]; // 31
+
+// const GOLOMB_RULER : [u8; 8] = [17,19,23,29,31,37,41,43]; // 63
+
+// const GOLOMB_RULER : [u8; 6] = [1, 4, 9, 15, 22, 32]; // 8
+
+const GOLOMB_RULER : [u8; 5] = [1, 4, 9, 15, 22]; // No conflicts
+
+// const GOLOMB_RULER : [u8; 6] = [1, 4, 9, 15, 22, 102]; // No conflicts
+
+// const GOLOMB_RULER : [u8; 6] = [1, 4, 9, 15, 22, 52]; // No conflicts
+
+// Only 7 sections are required (as long as sum is < 255: Anything bigger means all sections if we use saturating addition).
+// const GOLOMB_RULER : [u8; 7] = [1, 4, 9, 15, 22, 52, 152]; // No conflicts
+
+// const GOLOMB_RULER : [u8; 7] = [1, 4, 9, 15, 22, 52, 91]; // No conflicts
+
+// const GOLOMB_RULER : [u8; 8] = [1, 5, 12, 25, 27, 35, 41, 44]; // 82
+
+// const GOLOMB_RULER : [u8; 8] = [1, 6, 10, 23, 26, 34, 41, 53]; // 81
+
+// const GOLOMB_RULER : [u8; 8] = [1, 4, 13, 28, 33, 47, 54, 64]; // 71
+
+// const GOLOMB_RULER : [u8; 8] = [1, 9, 19, 24, 31, 52, 56, 58]; // 68
+
+// cargo test --lib -- ruler --nocapture
+#[test]
+pub fn ruler() {
+
+    use itertools::*;
+
+        for i in 30..204u8 {
+        for j in i..204u8 {
+            for k in j..204u8 {
+
+                if i.saturating_add(j).saturating_add(k) > 204  {
+                    continue;
+                }
+
+                let mut ruler = GOLOMB_RULER.to_vec();
+                ruler.push(i);
+                ruler.push(j);
+                ruler.push(k);
+
+                let mut sums = Vec::new();
+                let mut niter = 0;
+                println!("{} {} {}", i, j, k);
+                let giter = ruler.iter();
+                let full_iter = giter.clone()
+                    .combinations(1)
+                    .chain(giter.clone().combinations(2))
+                    .chain(giter.clone().combinations(3))
+                    .chain(giter.clone().combinations(4))
+                    .chain(giter.clone().combinations(5))
+                    .chain(giter.clone().combinations(6))
+                    .chain(giter.clone().combinations(7))
+                    .chain(giter.clone().combinations(8));
+                for c in full_iter {
+                    let s = c.iter().copied().sum::<u8>();
+                    sums.push((s, c));
+                    niter += 1;
+                }
+
+                // sums.sort();
+                // sums.dedup();
+                let dupls = sums.iter().duplicates_by(|a| a.0 ).collect::<Vec<_>>();
+                // println!("{:?}", dupls);
+                // println!("Duplicates = {}", dupls.len());
+                if dupls.len() == 0 {
+                    panic!();
+                }
+            }
+        }
+        }
+
+    // assert!(sums.len() == niter);
+}
+
+/*// Uses a mask where each subsection of size hx16 is filled with a single
+// entry of the Goulomb ruler. The accumulated image of size hx16 contains
+// at each row entry which sections should be expanded.
+pub struct GoulombEncoder {
+
+    indices : ImageBuf<u8>,
+
+    masked_indices : ImageBuf<u8>,
+
+    index_sum : ImageBuf<u8>,
+
+}
+
+impl GoulombEncoder {
+
+    // The size is restricted due to the maximum sum of section elements (if
+    // all are active, the sum will result in 249, nearly overflowing the integer
+    // domain)
+    pub fn new(height : usize, width : usize) -> Self {
+        assert!(width % 16 == 0 && width <= 16*9);
+        let mut indices = ImageBuf::new_constant(height, width, 0);
+        for i in 0..(width/16) {
+            indices.window_mut((0, i*16), (height, 16)).unwrap().fill(GOULOMB_RULER[i]);
+        }
+        Self {
+            indices,
+            masked_indices : ImageBuf::new_constant(height, width, 0),
+            index_sum : ImageBuf::new_constant(height, 16, 0)
+        }
+    }
+
+    // w is a bit-encoded binary image.
+    pub fn calculate<S>(&mut self, w : &Image<u8,S>)
+    where
+        S : Storage<u8>
+    {
+        w.mul_to(&self.indices, &mut self.masked_indices);
+        fold_image(&self.masked_indices, &mut self.index_sum);
+    }
+
+
+}*/
+
 const fn sum_pattern(offset : u8) -> [u8; 16] {
     let mut arr = [0; 16];
     let mut i = 0;
@@ -67,32 +369,90 @@ const TWO_PATTERN : [[u8; 16]; 6] = [
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OneFoldOrder {
+    Fst,
+    Snd,
+    Thd,
+    Fth
+}
+
+const fn get_one_fold_order(patt_ix : usize) -> OneFoldOrder {
+    match patt_ix {
+        0 => OneFoldOrder::Fst,
+        1 => OneFoldOrder::Snd,
+        2 => OneFoldOrder::Thd,
+        3 => OneFoldOrder::Fth,
+        _ => panic!("Invalid order")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TwoFoldOrder {
+    FstSnd,
+    FstThd,
+    FstFth,
+    SndThd,
+    SndFth,
+    ThdFth
+}
+
+const fn get_two_fold_order(patt_ix : usize) -> TwoFoldOrder {
+    match patt_ix {
+        0 => TwoFoldOrder::FstSnd,
+        1 => TwoFoldOrder::FstThd,
+        2 => TwoFoldOrder::FstFth,
+        3 => TwoFoldOrder::SndThd,
+        4 => TwoFoldOrder::SndFth,
+        5 => TwoFoldOrder::ThdFth,
+        _ => panic!("Invalid order")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThreeFoldOrder {
+    FstSndThd,
+    FstSndFth,
+    FstThdFth,
+    SndThdFth
+}
+
+const fn get_three_fold_order(patt_ix : usize) -> ThreeFoldOrder {
+    match patt_ix {
+        0 => ThreeFoldOrder::FstSndThd,
+        1 => ThreeFoldOrder::FstSndFth,
+        2 => ThreeFoldOrder::FstThdFth,
+        3 => ThreeFoldOrder::SndThdFth,
+        _ => panic!("Invalid fold order")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Fold {
     Empty,
     Undecidable,
-    One(usize),
-    Two([usize; 2]),
-    Three([usize; 3]),
+    One(usize, OneFoldOrder),
+    Two([usize; 2], TwoFoldOrder),
+    Three([usize; 3], ThreeFoldOrder),
     Four([usize; 4])
 }
 
 const fn get_fold(n_patts : usize, patt_ix : usize, pos : usize) -> Fold {
     match (n_patts, patt_ix) {
-        (1, 0) => Fold::One(pos),                            // 0
-        (1, 1) => Fold::One(16+pos),                         // 1
-        (1, 2) => Fold::One(32+pos),                         // 2
-        (1, 3) => Fold::One(48+pos),                         // 3
-        (2, 0) => Fold::Two([pos, 16+pos]),                  // 0,1
-        (2, 1) => Fold::Two([pos, 32+pos]),                  // 0,2
-        (2, 2) => Fold::Two([pos, 48+pos]),                  // 0,3
-        (2, 3) => Fold::Two([16+pos, 32+pos]),               // 1,2
-        (2, 4) => Fold::Two([16+pos, 48+pos]),               // 1,3
-        (2, 5) => Fold::Two([32+pos, 48+pos]),               // 2,3
-        (3, 0) => Fold::Three([pos, 16+pos, 32+pos]),        // 0, 1, 2
-        (3, 1) => Fold::Three([pos, 16+pos, 48+pos]),        // 0, 1, 3
-        (3, 2) => Fold::Three([pos, 32+pos, 48+pos]),        // 0, 2, 3
-        (3, 3) => Fold::Three([16+pos, 32+pos, 48+pos]),     // 1, 2, 3
-        (4, 0) => Fold::Four([pos, 16+pos, 32+pos, 48+pos]), // 0, 1, 2, 3
+        (1, 0) => Fold::One(pos, OneFoldOrder::Fst),                                    // 0
+        (1, 1) => Fold::One(16+pos, OneFoldOrder::Snd),                                 // 1
+        (1, 2) => Fold::One(32+pos, OneFoldOrder::Thd),                                 // 2
+        (1, 3) => Fold::One(48+pos, OneFoldOrder::Fth),                                 // 3
+        (2, 0) => Fold::Two([pos, 16+pos], TwoFoldOrder::FstSnd),                       // 0,1
+        (2, 1) => Fold::Two([pos, 32+pos], TwoFoldOrder::FstThd),                       // 0,2
+        (2, 2) => Fold::Two([pos, 48+pos], TwoFoldOrder::FstFth),                       // 0,3
+        (2, 3) => Fold::Two([16+pos, 32+pos], TwoFoldOrder::SndThd),                    // 1,2
+        (2, 4) => Fold::Two([16+pos, 48+pos], TwoFoldOrder::SndFth),                    // 1,3
+        (2, 5) => Fold::Two([32+pos, 48+pos], TwoFoldOrder::ThdFth),                    // 2,3
+        (3, 0) => Fold::Three([pos, 16+pos, 32+pos], ThreeFoldOrder::FstSndThd),        // 0, 1, 2
+        (3, 1) => Fold::Three([pos, 16+pos, 48+pos], ThreeFoldOrder::FstSndFth),        // 0, 1, 3
+        (3, 2) => Fold::Three([pos, 32+pos, 48+pos], ThreeFoldOrder::FstThdFth),        // 0, 2, 3
+        (3, 3) => Fold::Three([16+pos, 32+pos, 48+pos], ThreeFoldOrder::SndThdFth),     // 1, 2, 3
+        (4, 0) => Fold::Four([pos, 16+pos, 32+pos, 48+pos]),                            // 0, 1, 2, 3
         _ => panic!("Invalid fold")
     }
 }
@@ -403,14 +763,33 @@ where
     S : Storage<u8>,
     T : StorageMut<u8>
 {
-    assert!(w.width() == 64);
+    assert!(w.width() % 16 == 0);
     assert!(dst.width() == 16);
     assert!(w.height() == dst.height());
     let fold_sz = (w.height(), 16);
     dst.copy_from(&w.window((0, 0), fold_sz).unwrap());
-    for i in 1..=3 {
+    for i in 1..(w.width() / 16) {
         dst.add_assign(&w.window((0, 16*i), fold_sz).unwrap());
     }
+}
+
+#[derive(Debug, Clone, Default)]
+struct Section {
+    fst : Vec<usize>,
+    snd : Vec<usize>,
+    thd : Vec<usize>,
+    fth : Vec<usize>,
+}
+
+impl Section {
+
+    fn clear(&mut self) {
+        self.fst.clear();
+        self.snd.clear();
+        self.thd.clear();
+        self.fth.clear();
+    }
+
 }
 
 #[derive(Debug, Clone, Default)]
@@ -423,7 +802,9 @@ pub struct RasterPoints {
     pub groups : Vec<Range<usize>>,
 
     // All column indices
-    pub cols : Vec<usize>
+    pub cols : Vec<usize>,
+
+    sec : Section
 
 }
 
@@ -532,10 +913,10 @@ impl FoldEncoder {
     {
         w.mul_to(&self.indices, &mut self.masked_indices);
 
-        #[cfg(feature="ipp")]
-        self.pts.update_folded2(&self.masked_indices, &mut self.fold);
+        // #[cfg(feature="ipp")]
+        // self.pts.update_folded2(&self.masked_indices, &mut self.fold);
 
-        #[cfg(not(feature="ipp"))]
+        // #[cfg(not(feature="ipp"))]
         self.pts.update_folded(&self.masked_indices, &mut self.fold);
 
         self.pts.code()
@@ -770,7 +1151,9 @@ impl RasterPoints {
             }
             let n_before = self.cols.len();
             for i in 0..chunks_per_row {
-                self.update_row_segment(strip_rows.next().unwrap(), dst_rows.next().unwrap(), &col_evals[..], /*r*/ col_offsets[i]);
+                let strip_slice = strip_rows.next().unwrap();
+                let dst_slice = dst_rows.next().unwrap();
+                self.update_row_segment(strip_slice, dst_slice, &col_evals[..], col_offsets[i]);
             }
             self.push_row(r, n_before);
         }
@@ -831,6 +1214,7 @@ impl RasterPoints {
         col_evals : &[usize],
         offset : usize
     ) {
+        self.sec.clear();
         let n_before = self.cols.len();
         for c in col_evals {
             match unsafe { FOLD_LUTS.get_unchecked(*c).get_unchecked(fold_row[*c] as usize) } {
@@ -843,29 +1227,67 @@ impl RasterPoints {
                         }
                     }
                 },
-                Fold::One(pt) => {
-                    self.cols.push(*pt);
+                Fold::One(pt, ord) => {
+                    match ord {
+                        OneFoldOrder::Fst => self.sec.fst.push(*pt),
+                        OneFoldOrder::Snd => self.sec.snd.push(*pt),
+                        OneFoldOrder::Thd => self.sec.thd.push(*pt),
+                        OneFoldOrder::Fth => self.sec.fth.push(*pt),
+                    }
                 },
-                Fold::Two(pts) => {
-                    self.cols.extend_from_slice(&pts[..]);
+                Fold::Two(pts, ord) => {
+                    match ord {
+                        TwoFoldOrder::FstSnd => { self.sec.fst.push(pts[0]); self.sec.snd.push(pts[1]); },
+                        TwoFoldOrder::FstThd => { self.sec.fst.push(pts[0]); self.sec.thd.push(pts[1]); },
+                        TwoFoldOrder::FstFth => { self.sec.fst.push(pts[0]); self.sec.fth.push(pts[1]); },
+                        TwoFoldOrder::SndThd => { self.sec.snd.push(pts[0]); self.sec.thd.push(pts[1]); },
+                        TwoFoldOrder::SndFth => { self.sec.snd.push(pts[0]); self.sec.fth.push(pts[1]); },
+                        TwoFoldOrder::ThdFth => { self.sec.thd.push(pts[0]); self.sec.fth.push(pts[1]); },
+                    }
                 },
-                Fold::Three(pts) => {
-                    self.cols.extend_from_slice(&pts[..]);
+                Fold::Three(pts, ord) => {
+                    match ord {
+                        ThreeFoldOrder::FstSndThd => {
+                            self.sec.fst.push(pts[0]);
+                            self.sec.snd.push(pts[1]);
+                            self.sec.thd.push(pts[2]);
+                        },
+                        ThreeFoldOrder::FstSndFth => {
+                            self.sec.fst.push(pts[0]);
+                            self.sec.snd.push(pts[1]);
+                            self.sec.fth.push(pts[2]);
+                        },
+                        ThreeFoldOrder::FstThdFth => {
+                            self.sec.fst.push(pts[0]);
+                            self.sec.thd.push(pts[1]);
+                            self.sec.fth.push(pts[2]);
+                        },
+                        ThreeFoldOrder::SndThdFth => {
+                            self.sec.snd.push(pts[0]);
+                            self.sec.thd.push(pts[1]);
+                            self.sec.fth.push(pts[2]);
+                        }
+                    }
                 },
                 Fold::Four(pts) => {
-                    self.cols.extend_from_slice(&pts[..]);
+                    self.sec.fst.push(pts[0]);
+                    self.sec.snd.push(pts[1]);
+                    self.sec.thd.push(pts[2]);
+                    self.sec.fth.push(pts[3]);
                 }
             }
         }
+        let mut cols = std::mem::take(&mut self.cols);
+        cols.extend_from_slice(&self.sec.fst[..]);
+        cols.extend_from_slice(&self.sec.snd[..]);
+        cols.extend_from_slice(&self.sec.thd[..]);
+        cols.extend_from_slice(&self.sec.fth[..]);
+        self.cols = cols;
+
         let n_after = self.cols.len();
         if n_after > n_before {
             let range = Range { start : n_before, end : n_after };
-
-            // This is taking a significant time.
             offset_cols(&mut self.cols[range.clone()], offset);
-
-            // This too (but less so).
-            self.cols[range].sort();
         }
     }
 
