@@ -42,6 +42,22 @@ pub fn check_status(action : &str, status : i32) {
     panic!("IPPS Error\tAction: {}\tCode: {}\tMessage: {}", action, status, err_msg);
 }
 
+impl From<(usize, usize)> for crate::foreign::ipp::ippi::IppiSize {
+
+    fn from(size : (usize, usize)) -> Self {
+        crate::foreign::ipp::ippi::IppiSize { width : size.1 as i32, height : size.0 as i32 }
+    }
+
+}
+
+impl From<(usize, usize)> for crate::foreign::ipp::ippcv::IppiSizeL {
+
+    fn from(size : (usize, usize)) -> Self {
+        crate::foreign::ipp::ippcv::IppiSizeL { width : size.1 as i64, height : size.0 as i64 }
+    }
+
+}
+
 pub fn step_and_size_for_tuple<N>(
     step : usize,
     size : (usize, usize)
@@ -230,9 +246,9 @@ impl IppiResize {
 
         // Then initialize structure using the out parameters:
         // IppiResizeSpec_<T> has only types for T = 32f or T = 64f
-        let spec_bytes = Vec::from_iter((0..(spec_size as usize)).map(|_| 0u8 ));
+        let mut spec_bytes = Vec::from_iter((0..(spec_size as usize)).map(|_| 0u8 ));
         let init_buf_bytes = Vec::from_iter((0..(init_buf_size as usize)).map(|_| 0u8 ));
-        let spec : *mut IppiResizeSpec_32f = mem::transmute::<_, _>(&spec_bytes[0]);
+        let spec : *mut IppiResizeSpec_32f = mem::transmute::<_, _>(spec_bytes.as_mut_ptr());
         let init_buf : *mut u8 = mem::transmute::<_, _>(&init_buf_bytes[0]);
 
         // mem::forget(spec_bytes);

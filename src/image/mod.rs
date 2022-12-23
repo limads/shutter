@@ -64,17 +64,17 @@ pub use convert::*;
 
 /// Represents an integer offset from the first top-left pixel, using the convention 
 /// (row offset, column offset)
-pub type Offset = (usize, usize);
+pub type Coord = (usize, usize);
 
-/// Represents an integer image size, using the convention 
+/// Represents an integer image size, using the convention
 /// (image height, image width)
 pub type Size = (usize, usize);
 
 /// Represents a rectangle via its size and offset.
-pub type Rect = (Offset, Size);
+pub type Rect = (Coord, Size);
 
 /// Represents a circle via its center and radius.
-pub type Circle = (Offset, usize);
+pub type Circle = (Coord, usize);
 
 /* Perhaps use those type wrappers over slice<T> and box<[T]> */
 pub struct Borrowed<'a, T>(&'a [T]);
@@ -104,6 +104,10 @@ pub type ImageRef<'a, P> = Image<P, &'a [P]>;
 
 /* Mutably borrowed image, generic over the pixel type. */
 pub type ImageMut<'a, P> = Image<P, &'a mut [P]>;
+
+pub type Window<'a, N> = ImageRef<'a, N>;
+
+pub type WindowMut<'a, N> = ImageMut<'a, N>;
 
 // Alternatives:
 // ImageCut (mutable)
@@ -211,7 +215,7 @@ pub struct Image<P, S>
  //where
  //   S : AsRef<[P]>
 {
-    offset : Offset,
+    offset : Coord,
     sz : Size,
     width : usize,
     slice : S,
@@ -276,7 +280,7 @@ impl<P, S> Image<P, S> {
         self.sz.0
     }
     
-    pub fn offset(&self) -> Offset {
+    pub fn offset(&self) -> Coord {
         self.offset
     }
     
@@ -341,9 +345,22 @@ where
     }
     
     pub unsafe fn get_unchecked(&self, index : (usize, usize)) -> &P {
-        let off_ix = (self.offset.0 + index.0, self.offset.1 + index.1);
-        let (limit_row, limit_col) = (self.offset.0 + self.sz.0, self.offset.1 + self.sz.1);
-        unsafe { self.slice.as_ref().get_unchecked(index::linear_index(off_ix, self.original_size().1)) }
+        // let off_ix = (self.offset.0 + index.0, self.offset.1 + index.1);
+        // let (limit_row, limit_col) = (self.offset.0 + self.sz.0, self.offset.1 + self.sz.1);
+        self.slice.as_ref().get_unchecked(index::linear_index(index, self.width))
+    }
+
+    pub unsafe fn unchecked_linear_index(&self, ix : usize) -> &P {
+        self.slice.as_ref().get_unchecked(ix)
+    }
+
+    // The linear index directly indexes the underlying slice (but it might)
+    // index elements outside the effective region.
+    pub fn linear_index(&self, ix : usize) -> &P {
+        // assert!(ix < self.width() * self.height());
+        // let (row, col) = (ix / self.width(), ix % self.width());
+        // unsafe { &*self.as_ptr().offset((self.width * row + col) as isize) as &P }
+        &self.slice.as_ref()[ix]
     }
 
     /// Returns a borrowed view over the whole window. Same as self.as_ref(). But is
@@ -368,8 +385,8 @@ where
     ) -> Window<P> {
         let new_offset = (self.offset.0 + offset.0, self.offset.1 + offset.1);
         Image {
-            slice : &self.slice.as_ref()[..],
-            offset : new_offset,
+            slice : index::sub_slice(self.slice.as_ref(), offset, dims, self.width),
+            offset : offset,
             width : self.width,
             sz : dims,
             _px : PhantomData
@@ -399,11 +416,13 @@ where
     ) -> Option<Window<P>> {
         assert_nonzero(dims);
         let new_offset = (self.offset.0 + offset.0, self.offset.1 + offset.1);
-        if new_offset.0 + dims.0 <= self.original_size().0 && 
-            new_offset.1 + dims.1 <= self.original_size().1 
+        // println!("Window = {:?}", (offset, dims));
+        // if new_offset.0 + dims.0 <= self.original_size().0 &&
+        //    new_offset.1 + dims.1 <= self.original_size().1
+        if offset.0 + dims.0 <= self.height() && offset.1 + dims.1 <= self.width()
         {
             Some(Image {
-                slice : &self.slice.as_ref()[..],
+                slice : index::sub_slice(self.slice.as_ref(), offset, dims, self.width),
                 offset : new_offset,
                 width : self.width,
                 sz : dims,
@@ -430,9 +449,9 @@ where
         self.slice.as_ref()
     }
     
-    pub fn essential_slice(&mut self) -> &[P] {
-        unsafe { std::slice::from_raw_parts(self.as_ptr(), self.original_width() * self.height()) }
-    }
+    // pub fn essential_slice(&mut self) -> &[P] {
+    //    unsafe { std::slice::from_raw_parts(self.as_ptr(), self.original_width() * self.height()) }
+    // }
     
     pub fn depth(&self) -> Depth {
         P::depth()
@@ -453,11 +472,6 @@ where
     {
         let ix = (self.height() - usize::from(pt[1]), usize::from(pt[0]));
         &self[ix]
-    }
-
-
-    pub unsafe fn unchecked_linear_index(&self, ix : usize) -> &P {
-        self.slice.as_ref().get_unchecked(ix)
     }
     
     pub fn as_ptr(&self) -> *const P {
@@ -516,7 +530,7 @@ where
         }
     }
     
-    pub fn window_mut(&'a mut self, off : Offset, sz : Size) -> Option<ImageMut<'a, N>> {
+    pub fn window_mut(&'a mut self, off : Coord, sz : Size) -> Option<ImageMut<'a, N>> {
         match self {
             MutableImage::Borrowed(m) => m.window_mut(off, sz),
             MutableImage::Owned(buf) => buf.window_mut(off, sz)
@@ -559,9 +573,9 @@ where
         self.slice.as_mut()
     }
     
-    pub fn essential_slice_mut(&mut self) -> &mut [P] {
-        unsafe { std::slice::from_raw_parts_mut(self.as_mut_ptr(), self.original_width() * self.height()) }
-    }
+    // pub fn essential_slice_mut(&mut self) -> &mut [P] {
+    //    unsafe { std::slice::from_raw_parts_mut(self.as_mut_ptr(), self.original_width() * self.height()) }
+    // }
     
     pub unsafe fn unchecked_linear_index_mut(&mut self, ix : usize) -> &mut P {
         self.slice.as_mut().get_unchecked_mut(ix)
@@ -569,8 +583,9 @@ where
     
     pub fn linear_index_mut(&mut self, ix : usize) -> &mut P {
         assert!(ix < self.width() * self.height());
-        let (row, col) = (ix / self.width(), ix % self.width());
-        unsafe { &mut *self.as_mut_ptr().offset((self.width * row + col) as isize) as &mut P }
+        // let (row, col) = (ix / self.width(), ix % self.width());
+        // unsafe { &mut *self.as_mut_ptr().offset((self.width * row + col) as isize) as &mut P }
+        unsafe { &mut *self.as_mut_ptr().offset(ix as isize) as &mut P }
     }
 
     pub fn as_mut_ptr(&mut self) -> *mut P {
@@ -579,10 +594,6 @@ where
     }
 
 }
-
-pub type Window<'a, N> = ImageRef<'a, N>;
-
-pub type WindowMut<'a, N> = ImageMut<'a, N>;
 
 /*// Type alias variant
 pub type ImageBuf<T> = base::Image<Box<[T]>>;
@@ -621,10 +632,7 @@ mod storage {
     pub trait Storage<P>
     where
         Self : AsRef<[P]>
-        // P : Pixel
     {
-
-        // fn depth() -> Depth;
 
     }
     
@@ -634,125 +642,6 @@ mod storage {
     
     impl<T> Storage<T> for Box<[T]> where T : Pixel { }
 
-    /*impl<'a> Storage<u8> for &'a [u8] {
-
-        fn depth() -> Depth {
-            Depth::U8
-        }
-
-    }
-
-    impl<'a> Storage<u16> for &'a [u16] {
-
-        fn depth() -> Depth {
-            Depth::U16
-        }
-
-    }
-
-    impl<'a> Storage<i16> for &'a [i16] {
-
-        fn depth() -> Depth {
-            Depth::I16
-        }
-
-    }
-
-    impl<'a> Storage<i32> for &'a [i32] {
-
-        fn depth() -> Depth {
-            Depth::I32
-        }
-
-    }
-
-    impl<'a> Storage<f32> for &'a [f32] {
-
-        fn depth() -> Depth {
-            Depth::F32
-        }
-
-    }
-    
-    impl<'a> Storage<u8> for &'a mut [u8] {
-        
-        fn depth() -> Depth {
-            Depth::U8
-        }
-
-    }
-
-    impl<'a> Storage<u16> for &'a mut [u16] {
-
-        fn depth() -> Depth {
-            Depth::U16
-        }
-
-    }
-
-    impl<'a> Storage<i16> for &'a mut [i16] {
-
-        fn depth() -> Depth {
-            Depth::I16
-        }
-
-    }
-
-    impl<'a> Storage<i32> for &'a mut [i32] {
-
-        fn depth() -> Depth {
-            Depth::I32
-        }
-
-    }
-
-    impl<'a> Storage<f32> for &'a mut [f32] {
-
-        fn depth() -> Depth {
-            Depth::F32
-        }
-
-    }
-    
-    impl<'a> Storage<u8> for Box<[u8]> {
-
-        fn depth() -> Depth {
-            Depth::U8
-        }
-
-    }
-
-    impl<'a> Storage<u16> for Box<[u16]> {
-
-        fn depth() -> Depth {
-            Depth::U16
-        }
-
-    }
-
-    impl<'a> Storage<i16> for Box<[i16]> {
-
-        fn depth() -> Depth {
-            Depth::I16
-        }
-
-    }
-
-    impl<'a> Storage<i32> for Box<[i32]> {
-
-        fn depth() -> Depth {
-            Depth::I32
-        }
-
-    }
-
-    impl<'a> Storage<f32> for Box<[f32]> {
-
-        fn depth() -> Depth {
-            Depth::F32
-        }
-
-    }*/
 }
 
 mod storage_mut {
@@ -773,46 +662,6 @@ mod storage_mut {
     impl<'a, T> StorageMut<T> for Box<[T]> where T : Pixel,
     Box<[T]> : Storage<T> { }
 
-    /*impl<'a> StorageMut<u8> for &'a mut [u8] {
-
-    }
-
-    impl<'a> StorageMut<u16> for &'a mut [u16] {
-
-    }
-
-    impl<'a> StorageMut<i16> for &'a mut [i16] {
-
-    }
-
-    impl<'a> StorageMut<i32> for &'a mut [i32] {
-
-    }
-
-    impl<'a> StorageMut<f32> for &'a mut [f32] {
-
-    }
-    
-    impl<'a> StorageMut<u8> for Box<[u8]> {
-
-    }
-
-    impl<'a> StorageMut<u16> for Box<[u16]> {
-
-    }
-
-    impl<'a> StorageMut<i16> for Box<[i16]> {
-
-    }
-
-    impl<'a> StorageMut<i32> for Box<[i32]> {
-
-    }
-
-    impl<'a> StorageMut<f32> for Box<[f32]> {
-
-    }*/
-    
 }
 
 pub trait SignedPixel where Self : Pixel + num_traits::sign::Signed { }
@@ -1302,83 +1151,6 @@ impl ImageBuf<u8> {
     }
 }
 
-impl<P, S> Index<(usize, usize)> for Image<P, S> 
-//where
-//    N : Scalar + Copy + Any
-where 
-    S : Storage<P>
-{
-
-    type Output = P;
-
-    fn index(&self, index: (usize, usize)) -> &Self::Output {
-        let local_ix = (index.0 + self.offset.0, index.1 + self.offset.1);
-        unsafe { self.slice.as_ref().get_unchecked(index::linear_index(local_ix, self.width)) }
-    }
-}
-
-impl<P, S> IndexMut<(usize, usize)> for Image<P, S>
-// where
-//     N : Scalar + Copy + Default + Copy + Any
-where
-    S : StorageMut<P>
-{
-    
-    fn index_mut(&mut self, index: (usize, usize)) -> &mut Self::Output {
-        let local_ix = (index.0 + self.offset.0, index.1 + self.offset.1);
-        unsafe { self.slice.as_mut().get_unchecked_mut(index::linear_index(local_ix, self.width)) }
-    }
-    
-}
-
-impl<P, S> Index<(u16, u16)> for Image<P, S> 
-//where
-//    N : Scalar + Copy + Any
-where 
-    S : Storage<P>
-{
-
-    type Output = P;
-
-    fn index(&self, index: (u16, u16)) -> &Self::Output {
-        &self[(index.0 as usize, index.1 as usize)]
-    }
-}
-
-impl<P, S> IndexMut<(u16, u16)> for Image<P, S>
-// where
-//     N : Scalar + Copy + Default + Copy + Any
-where
-    S : StorageMut<P>
-{
-    
-    fn index_mut(&mut self, index: (u16, u16)) -> &mut Self::Output {
-        &mut self[(index.0 as usize, index.1 as usize)]
-    }
-    
-}
-
-impl<'a, N> Window<'a, N> {
-
-    pub const fn from_static<const S : usize, const W : usize>(
-        array : &'static [N; S]
-    ) -> Window<'static, N> {
-
-        if S % W != 0 {
-            panic!("Invalid image dimensions");
-        }
-
-        Window {
-            slice : array,
-            width : W,
-            offset : (0, 0),
-            sz : (S / W, W),
-            _px : PhantomData
-        }
-    }
-
-}
-
 impl<'a, N> WindowMut<'a, N>
 where
     N : Scalar + Copy + Any + 'static
@@ -1396,7 +1168,6 @@ where
         let sz = self.sz;
         let width = self.width;
         let (win1, win2) = self.slice.as_mut().split_at_mut(self.width * row);
-
         let w1 = WindowMut {
             slice : win1,
             width,
@@ -1462,8 +1233,8 @@ where
 {
 
     pub unsafe fn row_unchecked(&self, ix : usize) -> &[P] {
-        let tl = self.offset.0 * self.width + self.offset.1;
-        let start = tl + ix*self.width;
+        // let tl = self.offset.0 * self.width + self.offset.1;
+        let start = ix*self.width;
         &self.slice.as_ref().get_unchecked(start..(start+self.sz.1))
     }
 
@@ -1471,16 +1242,10 @@ where
         if ix >= self.sz.0 {
             return None;
         }
-        let stride = self.original_size().1;
-        let tl = self.offset.0 * stride + self.offset.1;
-        let start = tl + ix*stride;
+        // let stride = self.original_size().1;
+        // let tl = self.offset.0 * stride + self.offset.1;
+        let start = ix*self.width;
         Some(&self.slice.as_ref()[start..(start+self.sz.1)])
-    }
-
-    pub fn linear_index(&self, ix : usize) -> &P {
-        assert!(ix < self.width() * self.height());
-        let (row, col) = (ix / self.width(), ix % self.width());
-        unsafe { &*self.as_ptr().offset((self.width * row + col) as isize) as &P }
     }
 
     // Returns image corners with the given dimensions.
@@ -1536,7 +1301,6 @@ where
         self.width() * self.height()
     }
     
-
 }
 
 impl<'a, P> ImageRef<'a, P> {
@@ -1561,7 +1325,7 @@ impl<'a, P> ImageRef<'a, P> {
         let nrows = src.len() / original_width;
         if offset.0 + dims.0 <= nrows && offset.1 + dims.1 <= original_width {
             Some(Self {
-                slice : src,
+                slice : index::sub_slice(src, offset, dims, original_width),
                 width : original_width,
                 offset,
                 sz : dims,
@@ -2134,7 +1898,7 @@ where
         let nrows = src.len() / original_width;
         if offset.0 + dims.0 <= nrows && offset.1 + dims.1 <= original_width {
             Some(Self {
-                slice : src,
+                slice : index::sub_slice_mut(src, offset, dims, original_width),
                 offset,
                 width : original_width,
                 sz : dims,
@@ -2225,13 +1989,14 @@ where
         dims : (usize, usize)
     ) -> Option<WindowMut<P>> {
         assert_nonzero(dims);
+        // println!("Window Mut = {:?}", (offset, dims));
         let new_offset = (self.offset.0 + offset.0, self.offset.1 + offset.1);
-        if new_offset.0 + dims.0 <= self.original_size().0 
-            && new_offset.1 + dims.1 <= self.original_size().1 
-        {
+        // if new_offset.0 + dims.0 <= self.original_size().0
+        //    && new_offset.1 + dims.1 <= self.original_size().1
+        if offset.0 + dims.0 <= self.height() && offset.1 + dims.1 <= self.width() {
             Some(Image {
-                slice : &mut self.slice.as_mut()[..],
-                offset : (self.offset.0 + offset.0, self.offset.1 + offset.1),
+                slice : index::sub_slice_mut(self.slice.as_mut(), offset, dims, self.width),
+                offset : new_offset,
                 width : self.width,
                 sz : dims,
                 _px : PhantomData
@@ -2343,23 +2108,26 @@ where
     where
         S : 'a 
     {
-        if index.0 < self.height() && index.1 < self.width() {
+        /*if index.0 < self.height() && index.1 < self.width() {
             unsafe { Some(self.get_unchecked_mut(index)) }
         } else {
             None
-        }
+        }*/
+        self.slice.as_mut().get_mut(index::linear_index(index, self.width))
     }
 
     pub unsafe fn get_unchecked_mut(&'a mut self, index : (usize, usize)) -> &'a mut P 
     where
         S : 'a 
     {
-        let off_ix = (self.offset.0 + index.0, self.offset.1 + index.1);
+        /*let off_ix = (self.offset.0 + index.0, self.offset.1 + index.1);
         let (limit_row, limit_col) = (self.offset.0 + self.sz.0, self.offset.1 + self.sz.1);
         let lin_ix = index::linear_index(off_ix, self.original_size().1);
         unsafe { 
             self.slice.as_mut().get_unchecked_mut(lin_ix) 
-        }
+        }*/
+        let w = self.width;
+        unsafe { self.slice.as_mut().get_unchecked_mut(index::linear_index(index, w)) }
     }
 
     // pub fn offset_ptr_mut(mut self) -> *mut S::Pixel {
@@ -2695,12 +2463,22 @@ where
         unimplemented!()
     }*/
 
-    pub fn row_mut(&'a mut self, i : usize) -> &'a mut [P] {
-        let stride = self.original_size().1;
+    pub fn row_mut(&'a mut self, ix : usize) -> Option<&'a mut [P]> {
+        /*let stride = self.original_size().1;
         let tl = self.offset.0 * stride + self.offset.1;
         let start = tl + i*stride;
         let slice = &self.slice.as_ref()[start..(start+self.sz.1)];
-        unsafe { std::slice::from_raw_parts_mut(slice.as_ptr() as *mut _, slice.len()) }
+        unsafe { std::slice::from_raw_parts_mut(slice.as_ptr() as *mut _, slice.len()) }*/
+        if ix >= self.sz.0 {
+            return None;
+        }
+        let start = ix*self.width;
+        Some(&mut self.slice.as_mut()[start..(start+self.sz.1)])
+    }
+
+    pub unsafe fn row_mut_unchecked(&mut self, ix : usize) -> &mut [P] {
+        let start = ix*self.width;
+        self.slice.as_mut().get_unchecked_mut(start..(start+self.sz.1))
     }
 
 }
@@ -3398,3 +3176,4 @@ pub fn coords_across_line(
         }))
     }
 }
+

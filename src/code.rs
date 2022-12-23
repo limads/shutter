@@ -17,7 +17,20 @@ use nalgebra::{Point2, Vector2};
 use std::ops::AddAssign;
 use crate::gray::Foreground;
 use crate::local::IppSumWindow;
+use smallvec::SmallVec;
 
+/* Folding bit RunLength, Point and Chain encoders beat the performance
+of full raster scan encoders by making more heavy use of vectorized
+registers (such as u8x16) to process and exclude regions of the image
+without white pixels. We divide the image into 8 sectors, which are
+folded into a thin image of dimensions h x (w/8). Each byte of this
+image encode which sectors contain relevant information (with the first
+bit for the first sector and so on up to the eighth bit for the last sector).
+Instead of looking at individual pixels in each section, we can exclude 8 pixels
+at a time for all pixels 0b00. If the pixel is nonzero, we evaluate sectors
+by excluding the trailing zeros of the pattern, and proceed up the point where
+the pixel is 0b00, looking at the full 8 pixels only in the cases where all 8
+sectors are white. */
 pub struct BitEncoder {
 
     indices : ImageBuf<u8>,
@@ -30,11 +43,12 @@ pub struct BitEncoder {
 
 }
 
-/* Those are the patterns that are folded with a logical OR across the 8 image sections */
+/* Those patterns [0..=7] that are folded with a bitwise OR across the 8 image sections. */
 const BIT_INDICES : [u8; 8] = [0b00000001, 0b00000010, 0b00000100, 0b00001000, 0b00010000, 0b00100000, 0b01000000, 0b10000000];
 
-/* Those patterns are used to probe the index via a logical OR */
-const BIT_PROBES : [u8; 8] = [0b11111111, 0b11111110, 0b11111100, 0b11111000, 0b11110000, 0b11100000, 0b11000000, 0b10000000];
+/* Those patterns [0..=7] are used to probe the index via a bitwise OR */
+// The bit probe at position 8 isn't really used, but it is required if trailing_zeros() return 0 to avoid a buffer overflow.
+const BIT_PROBES : [u8; 9] = [0b11111111, 0b11111110, 0b11111100, 0b11111000, 0b11110000, 0b11100000, 0b11000000, 0b10000000, 0b00000000];
 
 impl BitEncoder {
 
@@ -53,96 +67,364 @@ impl BitEncoder {
         }
     }
 
+    fn fold<S>(&mut self, img : &Image<u8, S>)
+    where
+        S : Storage<u8>
+    {
+        assert!(img.size() == self.size);
+        img.mul_to(&self.indices, &mut self.masked_indices);
+        fold_or_image(&self.masked_indices, &mut self.index_sum);
+    }
+
     // img is assumed to be a binary image with 1's at hits.
     pub fn calculate<S>(&mut self, img : &Image<u8, S>) -> RunLengthCode
     where
         S : Storage<u8>
     {
-        assert!(img.size() == self.size);
+        self.fold(img);
         let strip_width = img.width() / 8;
-        img.mul_to(&self.indices, &mut self.masked_indices);
-        fold_or_image(&self.masked_indices, &mut self.index_sum);
+        encode_from_index_sum(&self.index_sum, strip_width)
+    }
 
-        // println!("{:#08b}", (0b00000001 & 0b11111111));
-        // println!("{}", (0b00000001 & 0b11111111) % 2);
+}
 
-        // After this stage, we can freely calculate a logical OR
-        // of index sum with itself shited by 1 over rows or columns
-        // (then subsample by 2) to sacrifice spatial precision in favor
-        // of better performance when searching for the RLEs (or to
-        // search at multiple scales, looking at the finer image only
-        // after hits at coarser image).
-
-        let mut rles : Vec<RunLength> = Default::default();
-        let mut rows : Vec<Range<usize>> = Default::default();
-        let mut rle_front : [Option<RunLength>; 8] = [None; 8];
-        let strip_offsets : Vec<_> = (0..8).map(|i| strip_width*i ).collect();
-
-        for r in 0..img.height() {
-            let n_before = rles.len();
-            for c in 0..self.index_sum.width() {
-                let bit = self.index_sum[(r, c)];
-                // let bit = unsafe { self.index_sum.get_unchecked((r, c)) };
-                let mut i = 0;
-
-                // This bitwise op selects which ones of the 8 sections
-                // should be examined (there is one bit for each).
-                let mut bit_and_ix = bit & BIT_PROBES[i];
-
-                // println!("{:#08b}", bit_and_ix);
-
-                while bit_and_ix > 0 && i < 7 {
-
-                    if (bit_and_ix >> i) % 2 == 1 {
-
-                        // Last bit is a 1: Then append/extend RLE at position i.
-                        if let Some(mut rle) = rle_front[i].as_mut() {
-                            rle.length += 1;
-                        } else {
-                            rle_front[i] = Some(RunLength { start : (r, strip_offsets[i] + c), length : 1 });
-                        }
-                    } else {
-
-                        // TODO verify if there is another point where RLEs must be closed
-                        // (like section end?)
-
-                        // TODO verifying this at every negative hit is hurting performance
-                        // significantly.
-
-                        // Last bit is a 0: Close RLE if any.
-                        if let Some(rle) = rle_front[i].take() {
-                            rles.push(rle);
-                        }
-                    }
-
-                    i += 1;
-                    bit_and_ix = bit & BIT_PROBES[i];
-                }
+// cargo test --lib -- distinct_sum --nocapture
+#[test]
+fn distinct_sum() {
+    /*let root_vals = [1, 2, 16, 17];
+    let mut sums = Vec::new();
+    let mut prev = Vec::new();
+    for lvl in 0..4 {
+        sums.clear();
+        if lvl == 0 {
+            sums.push(root_vals[0]);
+            sums.push(root_vals[1]);
+            sums.push(root_vals[0] + root_vals[1]);
+            sums.push(root_vals[2]);
+            sums.push(root_vals[3]);
+            sums.push(root_vals[2] + root_vals[3]);
+        } else {
+            for i in 0..=(prev.len() / 3) {
+                sums.push(prev[i]);
+                sums.push(prev[i+1]);
+                sums.push(prev[i] + prev[i+1]);
             }
-            for i in 0..8 {
-                if let Some(rle) = rle_front[i].take() {
-                    rles.push(rle);
-                }
-            }
-            let n_after = rles.len();
-            if n_after > n_before {
-                rles[n_before..n_after].sort_by(|a, b| a.start.1.cmp(&b.start.1) );
-                for i in (n_before..(n_after-1)).rev() {
-                    if rles[i].start.1 + rles[i].length == rles[i+1].start.1 {
-                        rles[i].length += rles[i+1].length;
-                        rles.remove(i+1);
-                    }
-                }
-            }
-            let n_after_merge = rles.len();
-            rows.push(Range { start : n_before, end : n_after_merge });
         }
-        RunLengthCode {
-            rles,
-            rows
+        println!("{:?}", sums);
+        prev = sums.clone();
+    }*/
+}
+
+pub struct ScaledBitEncoder {
+    enc : BitEncoder,
+    or_img : ImageBuf<u8>,
+    small_index_sum : ImageBuf<u8>,
+    scale : usize
+}
+
+impl ScaledBitEncoder {
+
+    // scale should be a power of two.
+    pub fn new(height : usize, width : usize, scale : usize) -> Self {
+        assert!(scale.next_power_of_two() == scale);
+        Self {
+            enc : BitEncoder::new(height, width),
+            or_img : ImageBuf::<u8>::new_constant(height, width / 8, 0),
+            small_index_sum : ImageBuf::<u8>::new_constant(height / scale, width / scale, 0),
+            scale
         }
     }
 
+    pub fn calculate<S>(&mut self, img : &Image<u8, S>) -> RunLengthCode
+    where
+        S : Storage<u8>
+    {
+
+        use ripple::resample::Resample;
+        self.enc.fold(img);
+        let mut red_sz = self.enc.index_sum.size();
+        red_sz.0 -= 1;
+        red_sz.1 -= 1;
+        let shift_right = self.enc.index_sum.window((0, 1), red_sz).unwrap();
+        let shift_down = self.enc.index_sum.window((1, 0), red_sz).unwrap();
+        let original = self.enc.index_sum.window((0, 0), red_sz).unwrap();
+        let mut or_img = self.or_img.window_mut((0, 0), red_sz).unwrap();
+        original.or_to(&shift_right, &mut or_img);
+        or_img.or_assign(&shift_down);
+        or_img.downsample_to(&mut self.small_index_sum, ripple::resample::Downsample::Aliased);
+        let strip_width = (img.width() / 8) / self.scale;
+        encode_from_index_sum(&self.small_index_sum, strip_width)
+    }
+
+}
+
+pub struct EdgeBitEncoder {
+    enc : BitEncoder,
+    edge_xor_img : ImageBuf<u8>,
+}
+
+impl EdgeBitEncoder {
+
+    // scale should be a power of two.
+    pub fn new(height : usize, width : usize) -> Self {
+        Self {
+            enc : BitEncoder::new(height, width),
+            edge_xor_img : ImageBuf::<u8>::new_constant(height, width / 8, 0)
+        }
+    }
+
+    /*pub fn calculate2<S>(&mut self, img : &Image<u8, S>) -> RunLengthCode
+    where
+        S : Storage<u8>
+    {
+        let mut dst = unsafe { ImageBuf::<u8>::new_constant(img.height(), img.width(), 0) };
+        let mut sz = img.shape();
+        sz.1 -= 1;
+        img.window((0, 0), sz).unwrap().xor_to(&img.window((0, 1), sz).unwrap(), &mut dst.window_mut((0, 0), sz).unwrap());
+        // dst.scalar_mul_mut(255);
+        dst.show();
+        self.enc.fold(&dst);
+        let strip_width = (img.width() / 8);
+        encode_from_edges(&self.enc.index_sum, &self.edge_xor_img, strip_width)
+    }*/
+
+    pub fn calculate<S>(&mut self, img : &Image<u8, S>) -> RunLengthCode
+    where
+        S : Storage<u8>
+    {
+        self.enc.fold(img);
+        let mut edge_ixs_sz = self.edge_xor_img.size();
+        edge_ixs_sz.1 -= 1;
+        let orig = self.enc.index_sum.window((0, 0), edge_ixs_sz).unwrap();
+        let shifted = self.enc.index_sum.window((0, 1), edge_ixs_sz).unwrap();
+        orig.xor_to(&shifted, &mut self.edge_xor_img.window_mut((0, 0), edge_ixs_sz).unwrap());
+
+        // This calculates the xor of the last column of each section with the
+        // first column of the next section using a bit shift of the first column
+        // (thus aligning the first column of the next sector with the last column
+        // of the previous sector).
+        let (h, w) = self.enc.index_sum.size();
+        let fst_col = self.enc.index_sum.window((0, 0), (h,1)).unwrap();
+        let last_col = self.enc.index_sum.window((0, w-1), (h,1)).unwrap();
+        let mut last_xor_col = self.edge_xor_img.window_mut((0, w-1), (h, 1)).unwrap();
+        fst_col.shr_to(1, &mut last_xor_col);
+        last_xor_col.xor_assign(&last_col);
+
+        let strip_width = (img.width() / 8);
+        encode_from_edges(&self.enc.index_sum, &self.edge_xor_img, strip_width)
+    }
+
+}
+
+use std::ops::BitOr;
+
+fn column_range(bytes : &[u8]) -> Range<usize> {
+    let row_byte = bytes.iter().fold(0, |bytes, b| bytes.bitor(b) );
+    Range { start : row_byte.leading_zeros() as usize, end : row_byte.trailing_zeros() as usize }
+}
+
+fn encode_from_index_sum<S>(index_sum : &Image<u8, S>, strip_width : usize) -> RunLengthCode
+where
+    S : Storage<u8>
+{
+    let mut rles : Vec<RunLength> = Default::default();
+    let mut rows : Vec<Range<usize>> = Default::default();
+    let mut rle_front : [Option<RunLength>; 8] = [None; 8];
+
+    let strip_offsets : Vec<_> = (0..8).map(|i| strip_width*i ).collect();
+
+    let height = index_sum.height();
+
+    /*// Fold sections that must be evaluated across all offsets, to get bounds for the actual iterator.
+    let mut section_evals : Box<dyn Iterator<Item=Range<usize>>> = match index_sum.width() % 16 == 0 {
+        true => {
+            let iter = (0..height).map(|r| {
+                let packed_row : wide::u8x16 = index_sum.row(r).unwrap()
+                    .chunks(16)
+                    .fold(wide::u8x16::ZERO, |bytes, b| bytes.bitor(wide::u8x16::from(b)) );
+                column_range(&packed_row.as_array_ref()[..])
+            });
+            Box::new(iter)
+        },
+        false => {
+
+            // Default: Eval all columns.
+            // Box::new((0..height).map(|_| Range { 0..index_sum.width() } ))
+
+            let iter = (0..height).map(|r| column_range(index_sum.row(r).unwrap()) );
+            Box::new(iter)
+        }
+    };*/
+
+    // let mut pxs = self.index_sum.pixels(1);
+
+    for r in (0..height) {
+        let n_before = rles.len();
+        let row = unsafe { index_sum.row_unchecked(r) };
+
+        for c in 0..index_sum.width() {
+        // for c in col_evals.next().unwrap() {
+            // let bit = self.index_sum[(r, c)];
+            // let bit = unsafe { self.index_sum.get_unchecked((r, c)) };
+            // let bit = pxs.next().unwrap();
+            let bit = unsafe { row.get_unchecked(c) };
+
+            // let mut i = 0;
+            let mut i = bit.trailing_zeros() as usize;
+            // if i == 8 { continue; }
+
+            // This bitwise op selects which ones of the 8 sections
+            // should be examined (there is one bit for each).
+            let mut bit_and_ix = bit & BIT_PROBES[i];
+            while bit_and_ix > 0 {
+
+                // All are valid options here:
+                // if bit_and_ix & (1 << i) == (1 << i) {
+                // if (bit_and_ix >> i) % 2 == 1 {
+                // if (bit_and_ix >> i).trailing_zeros() == 0 {
+                if bit_and_ix & BIT_INDICES[i] == BIT_INDICES[i] {
+                    let col = strip_offsets[i] + c;
+                    if let Some(mut rle) = rle_front[i].as_mut() {
+                        if (col - rle.start.1) - rle.length == 0 {
+                            rle.length += 1;
+                        } else {
+                            rles.push(rle.clone());
+                            *rle = RunLength { start : (r, col), length : 1 };
+                        }
+                    } else {
+                        rle_front[i] = Some(RunLength { start : (r, col), length : 1 });
+                    }
+                }
+
+                i += 1;
+                bit_and_ix = bit & BIT_PROBES[i];
+            }
+        }
+        close_rles(&mut rles, &mut rle_front);
+        organize_rles(&mut rles, &mut rows, n_before);
+    }
+    // timer.time("encoding");
+    RunLengthCode {
+        rles,
+        rows
+    }
+}
+
+fn close_rles(rles : &mut Vec<RunLength>, rle_front : &mut [Option<RunLength>; 8]) {
+    for i in 0..8 {
+        if let Some(rle) = rle_front[i].take() {
+            rles.push(rle);
+        }
+    }
+}
+
+fn organize_rles(rles : &mut Vec<RunLength>, rows : &mut Vec<Range<usize>>, n_before : usize) {
+    let mut n_after = rles.len();
+    if n_after > n_before {
+        rles[n_before..n_after].sort_by(|a, b| a.start.1.cmp(&b.start.1) );
+        for i in (n_before..(n_after - 1)).rev() {
+            if rles[i].start.1 + rles[i].length == rles[i+1].start.1 {
+                rles[i].length += rles[i+1].length;
+                rles.remove(i+1);
+            }
+        }
+        n_after = rles.len();
+        rows.push(Range { start : n_before, end : n_after });
+    }
+}
+
+fn encode_from_edges<S, T>(index_sum : &Image<u8, S>, edge_index_sum : &Image<u8, T>, strip_width : usize) -> RunLengthCode
+where
+    S : Storage<u8>,
+    T : Storage<u8>,
+{
+    let mut rles : Vec<RunLength> = Default::default();
+    let mut rows : Vec<Range<usize>> = Default::default();
+    let mut cols : [SmallVec<[usize; 32]>; 8] = Default::default();
+    let strip_offsets : Vec<_> = (0..8).map(|i| strip_width*i ).collect();
+    let height = edge_index_sum.height();
+    let lst_col = index_sum.width()-1;
+
+    for r in (0..height) {
+        let row = unsafe { edge_index_sum.row_unchecked(r) };
+        let mut ncols = 0;
+        for c in 0..edge_index_sum.width() {
+
+            let bit = unsafe { row.get_unchecked(c) };
+            let mut i = bit.trailing_zeros() as usize;
+            let mut bit_and_ix = bit & BIT_PROBES[i];
+
+            while bit_and_ix > 0 {
+                if bit_and_ix & BIT_INDICES[i] == BIT_INDICES[i] {
+                    let col = strip_offsets[i] + c;
+                    cols[i].push(col);
+                    ncols += 1;
+                }
+                i += 1;
+                bit_and_ix = bit & BIT_PROBES[i];
+            }
+        }
+
+        if ncols >= 1 {
+            let fst_white = index_sum[(r, 0)] & 1 == 1;
+            let lst_white = index_sum[(r, lst_col)] & 0b10000000 == 0b10000000;
+            collect_rles(&mut cols, &mut rles, &mut rows, fst_white, lst_white, r, strip_width);
+        }
+    }
+    // timer.time("encoding");
+    RunLengthCode {
+        rles,
+        rows
+    }
+}
+
+fn collect_rles(
+    cols : &mut [SmallVec<[usize; 32]>; 8],
+    rles : &mut Vec<RunLength>,
+    rows : &mut Vec<Range<usize>>,
+    fst_white : bool,
+    lst_white : bool,
+    row : usize,
+    strip_width : usize
+) {
+    let n_before = rles.len();
+    // if cols.iter().map(|cs| cs.len() ).sum::<usize>() == 0 {
+    //    return;
+    // }
+
+    // let mut cols_iter = cols.iter_mut().map(|cs| cs.drain(..) ).flatten();
+    let mut cols_iter = cols.iter_mut()
+        .filter_map(|cs| if cs.len() > 0 { Some(cs.drain(..)) } else { None } )
+        .flatten();
+
+    if fst_white {
+        if let Some(c) = cols_iter.next() {
+            let fst = RunLength { start : (row, 0), length : c  };
+            rles.push(fst);
+        }
+    }
+
+    loop {
+        match (cols_iter.next(), cols_iter.next()) {
+            (Some(c1), Some(c2)) => {
+                rles.push(RunLength { start : (row, c1), length : c2 - c1 });
+            },
+            (Some(c1), None) => {
+                // It is undecidable if this should extend to end or be a lenght-1 encoding.
+                // unless we look at the original image.
+                if lst_white {
+                    rles.push(RunLength { start : (row, c1), length : strip_width*8 - c1 });
+                } else {
+                    rles.push(RunLength { start : (row, c1), length : 1 });
+                }
+            },
+            _ => break
+        }
+    }
+
+    let n_after = rles.len();
+    rows.push(Range { start : n_before, end : n_after });
+    // cols.iter_mut().for_each(|cs| cs.clear() );
 }
 
 fn fold_or_image<S, T>(w : &Image<u8, S>, dst : &mut Image<u8, T>)
@@ -156,7 +438,7 @@ where
     assert!(w.height() == dst.height());
     let fold_sz = (w.height(), strip_w);
     dst.copy_from(&w.window((0, 0), fold_sz).unwrap());
-    for i in 1..(w.width() / strip_w) {
+    for i in 1..8 {
         dst.or_assign(&w.window((0, strip_w*i), fold_sz).unwrap());
     }
 }
@@ -171,18 +453,25 @@ fn bit_encoding() {
     let mut img = ImageBuf::<u8>::new_constant(128, 128, 0);
     img.draw(Mark::Dot((64, 64), 32), 1);
 
-    let mut enc = BitEncoder::new(img.height(), img.width());
+    /*let mut t = Timer::start();
+    let mut enc = ChainEncoder::new(img.height(), img.width());
+    enc.encode(&img, None);
+    t.time("chain code");*/
+
+    // let mut enc = BitEncoder::new(img.height(), img.width());
+    let mut enc = EdgeBitEncoder::new(img.height(), img.width());
 
     let mut t = Timer::start();
     let rles = enc.calculate(&img);
+    // enc.edge_xor_img.show();
     t.time("encode");
-
     for rle in &rles.rles {
         for pt in rle.points() {
             img[pt] = 255;
         }
     }
 
+    t.time("draw");
     let mut img2 = ImageBuf::<u8>::new_constant(128, 128, 0);
     img2.draw(Mark::Dot((64, 64), 32), 255);
     RunLengthCode::encode(&img2.full_window());
@@ -190,135 +479,6 @@ fn bit_encoding() {
 
     img.show();
 }
-
-/* This is a 10-th order Goulomb Ruler (excluding 0). It has the property that
-every sum of elements is unique - a property useful for vectorized
-run length encoding.*/
-// const GOLOMB_RULER : [u8; 9] = [1, 6, 10, 23, 26, 34, 41, 53, 55];
-
-// This prime sequence has the property that all sums
-// const GOLOMB_RULER : [u8; 9] = [2, 3, 5, 7, 11, 13, 17, 19, 23];
-
-// const GOLOMB_RULER : [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8]; // 31
-
-// const GOLOMB_RULER : [u8; 8] = [17,19,23,29,31,37,41,43]; // 63
-
-// const GOLOMB_RULER : [u8; 6] = [1, 4, 9, 15, 22, 32]; // 8
-
-const GOLOMB_RULER : [u8; 5] = [1, 4, 9, 15, 22]; // No conflicts
-
-// const GOLOMB_RULER : [u8; 6] = [1, 4, 9, 15, 22, 102]; // No conflicts
-
-// const GOLOMB_RULER : [u8; 6] = [1, 4, 9, 15, 22, 52]; // No conflicts
-
-// Only 7 sections are required (as long as sum is < 255: Anything bigger means all sections if we use saturating addition).
-// const GOLOMB_RULER : [u8; 7] = [1, 4, 9, 15, 22, 52, 152]; // No conflicts
-
-// const GOLOMB_RULER : [u8; 7] = [1, 4, 9, 15, 22, 52, 91]; // No conflicts
-
-// const GOLOMB_RULER : [u8; 8] = [1, 5, 12, 25, 27, 35, 41, 44]; // 82
-
-// const GOLOMB_RULER : [u8; 8] = [1, 6, 10, 23, 26, 34, 41, 53]; // 81
-
-// const GOLOMB_RULER : [u8; 8] = [1, 4, 13, 28, 33, 47, 54, 64]; // 71
-
-// const GOLOMB_RULER : [u8; 8] = [1, 9, 19, 24, 31, 52, 56, 58]; // 68
-
-// cargo test --lib -- ruler --nocapture
-#[test]
-pub fn ruler() {
-
-    use itertools::*;
-
-        for i in 30..204u8 {
-        for j in i..204u8 {
-            for k in j..204u8 {
-
-                if i.saturating_add(j).saturating_add(k) > 204  {
-                    continue;
-                }
-
-                let mut ruler = GOLOMB_RULER.to_vec();
-                ruler.push(i);
-                ruler.push(j);
-                ruler.push(k);
-
-                let mut sums = Vec::new();
-                let mut niter = 0;
-                println!("{} {} {}", i, j, k);
-                let giter = ruler.iter();
-                let full_iter = giter.clone()
-                    .combinations(1)
-                    .chain(giter.clone().combinations(2))
-                    .chain(giter.clone().combinations(3))
-                    .chain(giter.clone().combinations(4))
-                    .chain(giter.clone().combinations(5))
-                    .chain(giter.clone().combinations(6))
-                    .chain(giter.clone().combinations(7))
-                    .chain(giter.clone().combinations(8));
-                for c in full_iter {
-                    let s = c.iter().copied().sum::<u8>();
-                    sums.push((s, c));
-                    niter += 1;
-                }
-
-                // sums.sort();
-                // sums.dedup();
-                let dupls = sums.iter().duplicates_by(|a| a.0 ).collect::<Vec<_>>();
-                // println!("{:?}", dupls);
-                // println!("Duplicates = {}", dupls.len());
-                if dupls.len() == 0 {
-                    panic!();
-                }
-            }
-        }
-        }
-
-    // assert!(sums.len() == niter);
-}
-
-/*// Uses a mask where each subsection of size hx16 is filled with a single
-// entry of the Goulomb ruler. The accumulated image of size hx16 contains
-// at each row entry which sections should be expanded.
-pub struct GoulombEncoder {
-
-    indices : ImageBuf<u8>,
-
-    masked_indices : ImageBuf<u8>,
-
-    index_sum : ImageBuf<u8>,
-
-}
-
-impl GoulombEncoder {
-
-    // The size is restricted due to the maximum sum of section elements (if
-    // all are active, the sum will result in 249, nearly overflowing the integer
-    // domain)
-    pub fn new(height : usize, width : usize) -> Self {
-        assert!(width % 16 == 0 && width <= 16*9);
-        let mut indices = ImageBuf::new_constant(height, width, 0);
-        for i in 0..(width/16) {
-            indices.window_mut((0, i*16), (height, 16)).unwrap().fill(GOULOMB_RULER[i]);
-        }
-        Self {
-            indices,
-            masked_indices : ImageBuf::new_constant(height, width, 0),
-            index_sum : ImageBuf::new_constant(height, 16, 0)
-        }
-    }
-
-    // w is a bit-encoded binary image.
-    pub fn calculate<S>(&mut self, w : &Image<u8,S>)
-    where
-        S : Storage<u8>
-    {
-        w.mul_to(&self.indices, &mut self.masked_indices);
-        fold_image(&self.masked_indices, &mut self.index_sum);
-    }
-
-
-}*/
 
 const fn sum_pattern(offset : u8) -> [u8; 16] {
     let mut arr = [0; 16];
@@ -893,7 +1053,7 @@ impl FoldEncoder {
         let mut indices = ImageBuf::<u8>::new_constant(height, width, 0);
         let ixs = (1..=64).collect::<Vec<_>>();
         for r in 0..height {
-            let mut row = indices.row_mut(r);
+            let mut row = unsafe { indices.row_mut_unchecked(r) };
             for i in 0..(width / 64) {
                 row[(i*64)..((i+1)*64)].copy_from_slice(&ixs[..]);
             }
@@ -3086,9 +3246,8 @@ impl RunLengthCode {
     // only the middle of the RunLenghth, possibly splitting them into
     // two or more RunLengths depending on whether there are new unmatched
     // pixels separating them.
-    pub fn split(&mut self, w : &dyn AsRef<Window<u8>>) {
-
-    }
+    // pub fn split(&mut self, w : &dyn AsRef<Window<u8>>) {
+    // }
 
     // Similar to expand, but shortens unmatched RunLength regions (or remove
     // them entirely), by just examining their extremities.
@@ -3289,6 +3448,58 @@ impl RunLengthCode {
         encoding
     }
 
+    pub fn split(&self) -> BTreeMap<usize, RunLengthCode> {
+        let nrows = self.rows.len();
+        let mut uf = UnionFind::new(self.rles.len());
+        if self.rows.len() == 0 {
+            return BTreeMap::new();
+        }
+        let mut last_matched_above : Option<&RunLength> = None;
+        let row_pair_iter = self.rows[0..(nrows-1)].iter()
+            .zip(self.rows[1..nrows].iter());
+        for (row_above, row_below) in row_pair_iter {
+            if self.rles[row_below.start].start.0 - self.rles[row_above.start].start.0 == 1 {
+                for (local_ix_below, rl_below) in self.rles[row_below.clone()].iter().enumerate() {
+                    // Iterate over overlapping top RLEs (since they are ordered, there is no
+                    // need to check the overlap of intermediate elements:
+                    // only the start and end matching RLEs).
+                    let iter_above = self.rles[row_above.clone()].iter()
+                        .enumerate()
+                        .skip_while(|(_, above)| (above.start.1+above.length-1) < rl_below.start.1 )
+                        .take_while(|(_, above)| above.start.1 <= (rl_below.start.1+rl_below.length-1) )
+                        .map(|(local_ix_above, _)| local_ix_above + row_above.start );
+
+                    // Add edges to top RLEs
+                    for above_ix in iter_above {
+                        uf.union(above_ix, local_ix_below + row_below.start );
+                    }
+                }
+            }
+        }
+
+        let mut rlcs = BTreeMap::new();
+
+        // This linear iteration guarantees the RLEs are still in raster order
+        // within each connected subset in the connectivity BTreeMap.
+        for i in 0..self.rles.len() {
+            let parent_ix = uf.find(i);
+            rlcs.entry(parent_ix).or_insert(RunLengthCode::default()).rles.push(self.rles[i].clone());
+        }
+
+        for (_, rlc) in rlcs.iter_mut() {
+            let mut rows = Vec::new();
+            let mut offset = 0;
+            for (_, gr) in &rlc.rles.iter().group_by(|r| r.start.0 ) {
+                let n = gr.count();
+                let new_offset = offset + n;
+                rows.push(Range { start : offset, end : new_offset });
+                offset = new_offset;
+            }
+            rlc.rows = rows;
+        }
+        rlcs
+    }
+
     pub fn graph(&self) -> RunLengthGraph {
         let nrows = self.rows.len();
 
@@ -3299,7 +3510,7 @@ impl RunLengthCode {
             return RunLengthGraph { graph, uf };
         }
 
-        let mut last_matched_above : Option<&RunLength> = None;
+        // let mut last_matched_above : Option<&RunLength> = None;
         let mut curr_ixs = Vec::new();
         let mut past_ixs = Vec::new();
 
@@ -3313,6 +3524,10 @@ impl RunLengthCode {
         let row_pair_iter = self.rows[0..(nrows-1)].iter()
             .zip(self.rows[1..nrows].iter());
         for (row_above, row_below) in row_pair_iter {
+
+            // TODO verify if row_above and row_below are actually connected to
+            // avoid the more costly iteration over the row below.
+
             for rl_below in &self.rles[row_below.clone()] {
 
                 // Add current bottom RLE
@@ -3356,6 +3571,30 @@ impl RunLengthCode {
 
         RunLengthGraph { graph, uf }
     }
+}
+
+// cargo test --lib -- rle_split --nocapture
+#[test]
+fn rle_split() {
+
+    use crate::draw::*;
+    let mut buf = ImageBuf::<u8>::new_constant(128, 128, 0);
+    buf.draw(Mark::Dot((32, 32), 16), 255);
+    buf.draw(Mark::Dot((100, 100), 20), 255);
+    buf.draw(Mark::Dot((100, 50), 10), 255);
+    let mut rle = RunLengthCode::encode(&buf.full_window());
+
+    let mut colors : Vec<_> = (50..255).step_by(40).collect();
+    let mut i = 0;
+    for (_, rle) in rle.split() {
+        for pt in rle.points() {
+            buf[pt] = colors[i];
+        }
+        i += 1;
+    }
+
+    buf.show();
+
 }
 
 fn update_range(

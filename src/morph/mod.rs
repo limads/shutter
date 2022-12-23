@@ -682,6 +682,82 @@ impl IppiGrayMorph {
 
 }
 
+#[cfg(feature="ipp")]
+pub struct IppiTopHat {
+
+    spec : Vec<u8>,
+
+    buffer : Vec<u8>
+
+}
+
+#[cfg(feature="ipp")]
+impl IppiTopHat {
+
+    pub fn new(height : usize, width : usize, mask : ImageBuf<u8>) -> Self {
+        let roi_sz = crate::foreign::ipp::ippcv::IppiSizeL::from((height, width));
+        let mask_sz = crate::foreign::ipp::ippcv::IppiSizeL::from(mask.size());
+        let data_ty = crate::foreign::ipp::ippcv::IppDataType_ipp8u;
+        let num_channels = 1;
+        let mut spec_sz : i64 = 0;
+        unsafe {
+            crate::foreign::ipp::ippcv::ippiMorphGetSpecSize_L(
+                roi_sz,
+                mask_sz,
+                data_ty,
+                num_channels,
+                &mut spec_sz as *mut _
+            );
+            assert!(spec_sz > 0);
+            let mut spec = Vec::from_iter((0..(spec_sz as usize)).map(|_| 0u8 ));
+            let spec_ptr : *mut crate::foreign::ipp::ippcv::IppiMorphAdvStateL = std::mem::transmute::<_, _>(spec.as_mut_ptr());
+            let status = crate::foreign::ipp::ippcv::ippiMorphInit_L(
+                roi_sz,
+                mask.as_ptr(),
+                mask_sz,
+                data_ty,
+                num_channels,
+                spec_ptr
+            );
+            let mut buf_sz : i64 = 0;
+            let ans = crate::foreign::ipp::ippcv::ippiMorphGetBufferSize_L(
+                roi_sz,
+                mask_sz,
+                data_ty,
+                num_channels,
+                &mut buf_sz as *mut _
+            );
+            assert!(ans == 0);
+            assert!(buf_sz > 0);
+            let buffer = Vec::from_iter((0..(buf_sz as usize)).map(|_| 0u8 ));
+            Self { spec, buffer }
+        }
+    }
+
+    pub fn calculate<S, T>(&mut self, img : &Image<u8, S>, dst : &mut Image<u8, T>)
+    where
+        S : Storage<u8>,
+        T : StorageMut<u8>
+    {
+        let border_val = 0u8;
+        unsafe {
+            let ans = crate::foreign::ipp::ippcv::ippiMorphTophat_8u_C1R_L(
+                img.as_ptr(),
+                img.byte_stride() as i64,
+                dst.as_mut_ptr(),
+                dst.byte_stride() as i64,
+                crate::foreign::ipp::ippcv::IppiSizeL::from(img.size()),
+                crate::foreign::ipp::ippcv::_IppiBorderType_ippBorderDefault,
+                &border_val as *const _,
+                self.spec.as_mut_ptr() as *mut _,
+                self.buffer.as_mut_ptr()
+            );
+            assert!(ans == 0);
+        }
+    }
+
+}
+
 /*fn remove_salt(
     src_dst : &mut WindowMut<u8>,
     sum_dst : &mut WindowMut<u8>,

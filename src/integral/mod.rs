@@ -181,11 +181,15 @@ impl Content {
 }
 
 pub fn rect_area(w : &Window<i32>) -> i32 {
-    let br = w[(w.height()-1,w.width()-1)];
-    let tr = w[(0, w.width()-1)];
-    let tl = w[(0usize, 0usize)];
-    let bl = w[(w.height()-1, 0)];
-    (br - (tr - tl) - bl)
+    let hm1 = w.height()-1;
+    let wm1 = w.width()-1;
+    unsafe {
+        let br = w.get_unchecked((hm1,wm1));
+        let tr = w.get_unchecked((0, wm1));
+        let tl = w.get_unchecked((0usize, 0usize));
+        let bl = w.get_unchecked((hm1, 0));
+        (br - (tr - tl) - bl)
+    }
 }
 
 pub fn rect_content(w : &Window<i32>) -> Content {

@@ -3,9 +3,7 @@ use std::iter::{Iterator, IntoIterator};
 use std::convert::{TryFrom, AsMut};
 use std::ops::Range;
 use crate::image::*;
-// use crate::raster::*;
 use serde::{Serialize, Deserialize};
-// use crate::raster::*;
 use crate::shape::*;
 use crate::shape::ellipse::EllipseCoords;
 use crate::shape::ellipse::OrientedEllipse;
@@ -55,30 +53,30 @@ where
     pub fn draw(&mut self, mark : Mark, color : u8) {
         match mark {
             Mark::Cross(pos, sz) => {
-                let cross_pos = (self.offset().0 + pos.0, self.offset().1 + pos.1);
+                // let cross_pos = (self.offset().0 + pos.0, self.offset().1 + pos.1);
                 let orig_sz = self.original_size();
                 draw_cross(
                     self.slice_mut(),
                     orig_sz,
-                    cross_pos,
+                    pos,
                     color,
                     sz
                 );
             },
             Mark::Corner(pos, sz) => {
-                let center_pos = (self.offset().0 + pos.0, self.offset().1 + pos.1);
+                // let center_pos = (self.offset().0 + pos.0, self.offset().1 + pos.1);
                 let orig_sz = self.original_size();
                 draw_corners(
                     self.slice_mut(),
                     orig_sz,
-                    center_pos,
+                    pos,
                     color,
                     sz
                 );
             },
             Mark::Line(src, dst) => {
-                let src_pos = (self.offset().0 + src.0, self.offset().1 + src.1);
-                let dst_pos = (self.offset().0 + dst.0, self.offset().1 + dst.1);
+                // let src_pos = (self.offset().0 + src.0, self.offset().1 + src.1);
+                // let dst_pos = (self.offset().0 + dst.0, self.offset().1 + dst.1);
 
                 #[cfg(feature="opencv")]
                 unsafe {
@@ -86,19 +84,18 @@ where
                     cvutils::draw_line(
                         self.slice_mut(), 
                         orig_sz.1, 
-                        src_pos, 
-                        dst_pos, 
+                        src,
+                        dst,
                         color
                     );
                     return;
                 }
-
                 let orig_sz = self.original_size();
                 draw_line(
                     self.slice_mut(),
                     orig_sz,
-                    src_pos,
-                    dst_pos,
+                    src,
+                    dst,
                     color
                 );
             },
@@ -112,7 +109,7 @@ where
                 self.draw(Mark::Line(bl, tl), color);
             },
             Mark::Digit(pos, val, sz) => {
-                let tl_pos = (self.offset().0 + pos.0, self.offset().1 + pos.1);
+                // let tl_pos = (self.offset().0 + pos.0, self.offset().1 + pos.1);
                 
                 #[cfg(feature="opencv")]
                 unsafe {
@@ -120,7 +117,7 @@ where
                     cvutils::write_text(
                         self.slice_mut(),
                         m_sz.1, 
-                        tl_pos,
+                        pos,
                         &val.to_string()[..], 
                         color
                     );
@@ -131,7 +128,7 @@ where
                 draw_digit_native(
                     self.slice_mut(), 
                     orig_w, 
-                    tl_pos, 
+                    pos,
                     val, 
                     sz, 
                     color
@@ -149,7 +146,7 @@ where
                 panic!("Label draw require 'opencv' feature");
             },*/
             Mark::Circle(pos, radius) => {
-                let center_pos = (self.offset().0 + pos.0, self.offset().1 + pos.1);
+                // let center_pos = (self.offset().0 + pos.0, self.offset().1 + pos.1);
 
                 #[cfg(feature="opencv")]
                 unsafe {
@@ -157,7 +154,7 @@ where
                     crate::image::cvutils::draw_circle(
                         self.slice_mut(), 
                         orig_sz.1, 
-                        center_pos, 
+                        pos,
                         radius, 
                         color
                     );
@@ -200,17 +197,18 @@ where
                     self.draw(Mark::Line(pts[0], pts[pts.len()-1]), color);
                 }
             },
-            Mark::Text(tl_pos, txt) => {
+            Mark::Text(pos, txt) => {
 
                 #[cfg(feature="opencv")]
                 {
                     let sz = self.original_size();
                     let off = self.offset();
+                    // let tl_pos =  (off.0 + tl_pos.0, off.1 + tl_pos.1);
                     unsafe {
                         crate::image::cvutils::write_text(
                             self.slice_mut(),
                             sz.1,
-                            (off.0 + tl_pos.0, off.1 + tl_pos.1),
+                            pos,
                             &txt[..],
                             color
                         );
@@ -218,8 +216,7 @@ where
                     return;
                 }
 
-                // println!("Warning: Text drawing require opencv feature");
-                draw_label(self, &txt, tl_pos);
+                draw_label(self, &txt, pos);
             },
             Mark::Arrow(from, to, thickness) => {
 
@@ -303,7 +300,7 @@ pub enum Mark {
 
 impl Mark {
 
-    pub fn enclosing_rect(&self) -> (Offset, Size) {
+    pub fn enclosing_rect(&self) -> (Coord, Size) {
         /*match self {
         Self::Cross(center, sz, u8),
 
@@ -356,7 +353,7 @@ impl From<(usize, usize, usize, usize)> for Mark {
 // const HALF_PI : f64 = half_pi();
 // const HALF_PI : f64 = 1.570796327;
 
-pub fn draw_square(
+/*pub fn draw_square(
     mut frame : DMatrix<u8>,
     offset: (usize, usize),
     size: (usize, usize)
@@ -367,7 +364,7 @@ pub fn draw_square(
         }
     }
     frame
-}
+}*/
 
 // Returns pairs (rows (y); cols (x))
 // center of shape (rows (y), cols (x))
@@ -420,7 +417,7 @@ pub fn draw_cross(
 pub fn mark_window_with_color(win : &mut WindowMut<u8>, pts : &[(usize, usize)], color : u8) {
     let orig_w = win.original_width();
     mark_slice_with_color(
-        win.essential_slice_mut(), 
+        win.slice_mut(),
         pts, 
         color, 
         orig_w

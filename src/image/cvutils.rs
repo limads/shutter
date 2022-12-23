@@ -94,13 +94,13 @@ where
         core::Mat_AUTO_STEP
     };
     
-    // Trim start and end of the slice IF user informed a subslice
+    /*// Trim start and end of the slice IF user informed a subslice
     let effective_slice : &[T] = if let Some((offset, _)) = opt_subslice {
         let fst_ix = stride*offset.0 + offset.1;
         &slice[fst_ix..]
     } else {
         slice
-    };
+    };*/
     
     let cv_type = get_cv_type::<T>();
     
@@ -108,7 +108,7 @@ where
         nrow as i32, 
         ncol as i32, 
         cv_type, 
-        effective_slice.as_ptr() as *mut ffi::c_void,
+        slice.as_ptr() as *mut ffi::c_void,
         byte_stride
     ).unwrap()
 }

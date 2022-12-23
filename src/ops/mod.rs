@@ -855,7 +855,7 @@ where
         unimplemented!();
     }
 
-    fn or_to<T, U>(&self, other : &Image<u8, T>, dst : &mut Image<u8, U>) 
+    pub fn or_to<T, U>(&self, other : &Image<u8, T>, dst : &mut Image<u8, U>)
     where
         T : Storage<u8>,
         U : StorageMut<u8>
@@ -881,7 +881,47 @@ where
         unimplemented!();
     }
 
-    pub fn xor_to<T, U>(&self, other : &Image<u8, T>, dst : &mut Image<u8, U>) 
+    pub fn shr_to<U>(&self, by : u32, dst : &mut Image<u8, U>)
+    where
+        U : StorageMut<u8>
+    {
+        #[cfg(feature="ipp")]
+        unsafe {
+            let ans = crate::foreign::ipp::ippi::ippiRShiftC_8u_C1R(
+                self.as_ptr(),
+                self.byte_stride() as i32,
+                by,
+                dst.as_mut_ptr(),
+                dst.byte_stride() as i32,
+                crate::foreign::ipp::ippi::IppiSize::from(self.size())
+            );
+            assert!(ans == 0);
+            return;
+        }
+        unimplemented!()
+    }
+
+    pub fn shl_to<U>(&self, by : u32, dst : &mut Image<u8, U>)
+    where
+        U : StorageMut<u8>
+    {
+        #[cfg(feature="ipp")]
+        unsafe {
+            let ans = crate::foreign::ipp::ippi::ippiLShiftC_8u_C1R(
+                self.as_ptr(),
+                self.byte_stride() as i32,
+                by,
+                dst.as_mut_ptr(),
+                dst.byte_stride() as i32,
+                crate::foreign::ipp::ippi::IppiSize::from(self.size())
+            );
+            assert!(ans == 0);
+            return;
+        }
+        unimplemented!()
+    }
+
+    pub fn xor_to<T, U>(&self, other : &Image<u8, T>, dst : &mut Image<u8, U>)
     where
         T : Storage<u8>,
         U : StorageMut<u8>
@@ -913,6 +953,36 @@ impl<S> Image<u8, S>
 where
     S : StorageMut<u8>
 {
+
+    pub fn shr_inplace(&mut self, by : u32) {
+        #[cfg(feature="ipp")]
+        unsafe {
+            let ans = crate::foreign::ipp::ippi::ippiRShiftC_8u_C1IR(
+                by,
+                self.as_mut_ptr(),
+                self.byte_stride() as i32,
+                crate::foreign::ipp::ippi::IppiSize::from(self.size())
+            );
+            assert!(ans == 0);
+            return;
+        }
+        unimplemented!()
+    }
+
+    pub fn shl_inplace(&mut self, by : u32) {
+        #[cfg(feature="ipp")]
+        unsafe {
+            let ans = crate::foreign::ipp::ippi::ippiLShiftC_8u_C1IR(
+                by,
+                self.as_mut_ptr(),
+                self.byte_stride() as i32,
+                crate::foreign::ipp::ippi::IppiSize::from(self.size())
+            );
+            assert!(ans == 0);
+            return;
+        }
+        unimplemented!()
+    }
 
     pub fn or_assign<T>(&mut self, other : &Image<u8, T>)
     where

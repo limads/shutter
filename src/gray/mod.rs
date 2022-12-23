@@ -1521,6 +1521,63 @@ impl MedianCutQuantization {
     
 }
 
+#[cfg(feature="ipp")]
+pub struct IppReduceBits {
+    noise : i32,
+    dither : crate::foreign::ipp::ippi::IppiDitherType,
+    buf : Vec<u8>,
+    levels : u32
+}
+
+#[cfg(feature="ipp")]
+impl IppReduceBits {
+
+    pub fn new(height : usize, width : usize, noise : i32, levels : u32) -> Self {
+        // This is actually in ippcc
+        /*assert!(noise >= 0 && noise <= 100);
+        let chan = crate::foreign::ipp::ippi::IppChannels_ippC1;
+        let dither = crate::foreign::ipp::ippi::IppiDitherType_ippDitherNone;
+        let mut sz : i32 = 0;
+        unsafe {
+            let ans = crate::foreign::ipp::ippi::ippcvReduceBitsGetBufferSize(
+                chan,
+                crate::foreign::ipp::ippi::IppiSize::from((height, width)),
+                noise,
+                dither,
+                &mut sz as *mut _
+            );
+            assert!(ans == 0);
+            assert!(sz > 0);
+            let buf : Vec<_> = (0..sz).map(|_| 0u8 ).collect();
+            Self { buf, noise, dither, levels }
+        }*/
+        unimplemented!()
+    }
+
+    pub fn calculate<S, T>(&mut self, src : &Image<u8, S>, dst : &mut Image<u8, T>)
+    where
+        S : Storage<u8>,
+        T : StorageMut<u8>
+    {
+        // This is actually in ippcc
+        /*unsafe {
+            let ans = crate::foreign::ipp::ippcv::ippiReduceBits_8u_C1R(
+                src.as_ptr(),
+                src.byte_stride() as i32,
+                dst.as_mut_ptr(),
+                dst.byte_stride() as i32,
+                crate::foreign::ipp::ippi::IppiSize::from(src.size()),
+                self.noise,
+                self.dither,
+                self.levels as i32,
+                self.buf.as_mut_ptr()
+            );
+            assert!(ans == 0);
+        }*/
+    }
+
+}
+
 /*
 IppStatus ippiThresholdAdaptiveBoxGetBufferSize(IppiSize roiSize, IppiSize maskSize,
 IppDataType dataType, int numChannels, int* pBufferSize);
@@ -1539,13 +1596,6 @@ pBuffer);
 */
 
 /*
-IppStatus ippiReduceBitsGetBufferSize(IppChannels ippChan, IppiSize roiSize, int noise,
-IppiDitherType dtype, int* pBufferSize);
-
-IppStatus ippiReduceBits_8u_C1R(const Ipp<datatype>* pSrc, int srcStep, Ipp<datatype>*
-pDst, int dstStep, IppiSize roiSize, int noise, IppiDitherType dtype, int levels,
-Ipp8u* pBuffer);
-
 IppStatus ippiToneMapLinear_32f8u_C1R(const Ipp32f* pSrc, int srcStep, Ipp8u* pDst, int
 dstStep, IppiSize roiSize);
 */

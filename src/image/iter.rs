@@ -22,9 +22,9 @@ where
 
     /* Returns a sequence of rows of this image from top to bottom. */
     pub fn rows<'a>(&'a self) -> impl Iterator<Item=&'a [P]> + Clone + 'a {
-        let tl = self.offset.0 * self.width + self.offset.1;
+        // let tl = self.offset.0 * self.width + self.offset.1;
         (0..self.sz.0).map(move |i| {
-            let start = tl + i*self.width;
+            let start = i*self.width;
             unsafe { self.slice.as_ref().get_unchecked(start..(start+self.sz.1)) }
         })
     }
@@ -102,7 +102,7 @@ where
         );
         iter::iterate_row_wise(
             self.slice.as_ref(), 
-            self.offset, 
+            // self.offset,
             self.sz, 
             self.original_size(), 
             spacing
@@ -384,7 +384,6 @@ where
     pub fn rect_pixels<'a>(&'a self, rect : (usize, usize, usize, usize)) -> impl Iterator<Item=P> + Clone + 'a {
         let row_iter = rect.0..(rect.0 + rect.2);
         let col_iter = rect.1..(rect.1 + rect.3);
-
         col_iter.clone().map(move |c| self[(rect.0, c)] )
             .chain(row_iter.clone().map(move |r| self[(r, rect.1 + rect.3 - 1 )] ) )
             .chain(col_iter.clone().rev().map(move |c| self[(rect.0 + rect.2 - 1, c)] ) )
@@ -478,9 +477,9 @@ where
 {
 
     pub fn rows_mut<'a, 'b>(&'b mut self) -> impl Iterator<Item=&'a mut [P]> + 'b {
-        let tl = self.offset.0 * self.width + self.offset.1;
+        // let tl = self.offset.0 * self.width + self.offset.1;
         (0..self.sz.0).map(move |i| {
-            let start = tl + i*self.width;
+            let start = i*self.width;
             unsafe {
                 let mut slice = &mut self.slice.as_mut().get_unchecked_mut(start..(start+self.sz.1));
                 std::slice::from_raw_parts_mut(slice.as_mut_ptr() as *mut _, slice.len())
@@ -612,7 +611,7 @@ where
             offset, 
             sz : self.size, 
             width : self.source.width, 
-            slice : self.source.slice,
+            slice : index::sub_slice(self.source.slice.as_ref(), offset, self.size, self.source.width),
             _px : PhantomData
         })
     }
@@ -654,15 +653,12 @@ where
             self.size, 
             (self.step_h, self.step_v)
         )?;
+        let src_sub = index::sub_slice_mut(self.source.slice.as_mut(), offset, self.size, self.source.width);
         Some(WindowMut { 
             offset, 
             sz : self.size, 
             width : self.source.width, 
-            slice : unsafe { std::slice::from_raw_parts_mut(
-                self.source.slice.as_mut_ptr(), 
-                self.source.slice.len()
-                ) 
-            },
+            slice : unsafe { std::slice::from_raw_parts_mut(src_sub.as_mut_ptr(), src_sub.len()) },
             _px : PhantomData
         })
     }
@@ -691,14 +687,14 @@ fn diag() {
 
 pub fn iterate_row_wise<N>(
     src : &[N],
-    offset : (usize, usize),
+    // offset : (usize, usize),
     win_sz : (usize, usize),
     orig_sz : (usize, usize),
     row_spacing : usize
 ) -> impl Iterator<Item=&N> + Clone {
-    let start = orig_sz.1 * offset.0 + offset.1;
+    // let start = orig_sz.1 * offset.0 + offset.1;
     (0..win_sz.0).step_by(row_spacing).map(move |i| unsafe {
-        let row_offset = start + i*orig_sz.1;
+        let row_offset = /*start +*/ i*orig_sz.1;
         src.get_unchecked(row_offset..(row_offset+win_sz.1))
     }).flatten()
 }
