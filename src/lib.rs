@@ -59,6 +59,8 @@ Canny
 
 **/
 
+mod export;
+
 pub mod image;
 
 pub mod io;

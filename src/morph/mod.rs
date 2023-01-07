@@ -683,11 +683,176 @@ impl IppiGrayMorph {
 }
 
 #[cfg(feature="ipp")]
+pub struct IppiMorphAdv {
+    spec : Vec<u8>,
+    buf : Vec<u8>,
+    mask : ImageBuf<u8>,
+}
+
+#[cfg(feature="ipp")]
+impl IppiMorphAdv {
+
+    pub fn new(height : usize, width : usize, mask : ImageBuf<u8>) -> Self {
+        let roi_sz = crate::foreign::ipp::ippcv::IppiSize::from((height, width));
+        let mut spec_sz : i32 = 0;
+        let mut buf_sz : i32 = 0;
+        let mask_sz = crate::foreign::ipp::ippcv::IppiSize::from(mask.size());
+        unsafe {
+            let ans = crate::foreign::ipp::ippcv::ippiMorphAdvGetSize_8u_C1R(
+                roi_sz,
+                mask_sz,
+                &mut spec_sz,
+                &mut buf_sz
+            );
+            assert!(ans == 0);
+            assert!(spec_sz > 0);
+            assert!(buf_sz > 0);
+            let mut spec = Vec::from_iter((0..(spec_sz as usize)).map(|_| 0u8 ));
+            let mut buf = Vec::from_iter((0..(buf_sz as usize)).map(|_| 0u8 ));
+            crate::foreign::ipp::ippcv::ippiMorphAdvInit_8u_C1R(
+                roi_sz,
+                mask.as_ptr(),
+                mask_sz,
+                spec.as_mut_ptr() as *mut _,
+                buf.as_mut_ptr()
+            );
+            Self { spec, buf, mask }
+        }
+    }
+
+    pub fn top_hat<S, T>(&mut self, src : &Image<u8, S>, dst : &mut Image<u8, T>)
+    where
+        S : Storage<u8>,
+        T : StorageMut<u8>
+    {
+        let border_ty = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderRepl;
+        let border_val = 0u8;
+        unsafe {
+            let ans = crate::foreign::ipp::ippcv::ippiMorphTophatBorder_8u_C1R(
+                src.as_ptr(),
+                src.byte_stride() as i32,
+                dst.as_mut_ptr(),
+                dst.byte_stride() as i32,
+                crate::foreign::ipp::ippcv::IppiSize::from(src.size()),
+                border_ty,
+                border_val,
+                self.spec.as_mut_ptr() as *mut _,
+                self.buf.as_mut_ptr()
+            );
+            assert!(ans == 0);
+        }
+    }
+
+    pub fn black_hat<S, T>(&mut self, src : &Image<u8, S>, dst : &mut Image<u8, T>)
+    where
+        S : Storage<u8>,
+        T : StorageMut<u8>
+    {
+        let border_ty = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderRepl;
+        let border_val = 0u8;
+        unsafe {
+            let ans = crate::foreign::ipp::ippcv::ippiMorphBlackhatBorder_8u_C1R(
+                src.as_ptr(),
+                src.byte_stride() as i32,
+                dst.as_mut_ptr(),
+                dst.byte_stride() as i32,
+                crate::foreign::ipp::ippcv::IppiSize::from(src.size()),
+                border_ty,
+                border_val,
+                self.spec.as_mut_ptr() as *mut _,
+                self.buf.as_mut_ptr()
+            );
+            assert!(ans == 0);
+        }
+    }
+
+    pub fn open<S, T>(&mut self, src : &Image<u8, S>, dst : &mut Image<u8, T>)
+    where
+        S : Storage<u8>,
+        T : StorageMut<u8>
+    {
+        let border_ty = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderRepl;
+        let border_val = 0u8;
+        unsafe {
+            let ans = crate::foreign::ipp::ippcv::ippiMorphOpenBorder_8u_C1R(
+                src.as_ptr(),
+                src.byte_stride() as i32,
+                dst.as_mut_ptr(),
+                dst.byte_stride() as i32,
+                crate::foreign::ipp::ippcv::IppiSize::from(src.size()),
+                border_ty,
+                border_val,
+                self.spec.as_mut_ptr() as *mut _,
+                self.buf.as_mut_ptr()
+            );
+            assert!(ans == 0);
+        }
+    }
+
+    pub fn close<S, T>(&mut self, src : &Image<u8, S>, dst : &mut Image<u8, T>)
+    where
+        S : Storage<u8>,
+        T : StorageMut<u8>
+    {
+        let border_ty = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderRepl;
+        let border_val = 0u8;
+        unsafe {
+            let ans = crate::foreign::ipp::ippcv::ippiMorphCloseBorder_8u_C1R(
+                src.as_ptr(),
+                src.byte_stride() as i32,
+                dst.as_mut_ptr(),
+                dst.byte_stride() as i32,
+                crate::foreign::ipp::ippcv::IppiSize::from(src.size()),
+                border_ty,
+                border_val,
+                self.spec.as_mut_ptr() as *mut _,
+                self.buf.as_mut_ptr()
+            );
+            assert!(ans == 0);
+        }
+    }
+}
+
+// cargo test --lib -- top_hat --nocapture
+#[test]
+fn top_hat() {
+
+    use crate::draw::*;
+    use crate::util::Timer;
+
+    let mut img = ImageBuf::<u8>::new_constant(128, 128, 0);
+    img.draw(Mark::Dot((64, 64), 32), 255);
+    img.show();
+    let mut dst = img.clone();
+
+    /*let mask = ImageBuf::from_rows([
+        [64,64,64,64,64],
+        [64,64,64,64,64],
+        [64,64,64,64,64],
+        [64,64,64,64,64],
+        [64,64,64,64,64]
+    ]);*/
+    let mask = ImageBuf::from_rows([
+        [64,64,64,64,64],
+        [64,64,64,64,64],
+        [64,64,64,64,64],
+        [64,64,64,64,64],
+        [64,64,64,64,64],
+    ]);
+
+    let mut morph = IppiMorphAdv::new(img.height(), img.width(), mask.clone_owned());
+    morph.close(&img, &mut dst);
+    dst.show();
+}
+
+/*#[cfg(feature="ipp")]
 pub struct IppiTopHat {
 
     spec : Vec<u8>,
 
-    buffer : Vec<u8>
+    buffer : Vec<u8>,
+
+    mask : ImageBuf<u8>
 
 }
 
@@ -730,7 +895,7 @@ impl IppiTopHat {
             assert!(ans == 0);
             assert!(buf_sz > 0);
             let buffer = Vec::from_iter((0..(buf_sz as usize)).map(|_| 0u8 ));
-            Self { spec, buffer }
+            Self { spec, buffer, mask }
         }
     }
 
@@ -756,7 +921,7 @@ impl IppiTopHat {
         }
     }
 
-}
+}*/
 
 /*fn remove_salt(
     src_dst : &mut WindowMut<u8>,

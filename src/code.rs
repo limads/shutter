@@ -19,6 +19,47 @@ use crate::gray::Foreground;
 use crate::local::IppSumWindow;
 use smallvec::SmallVec;
 
+/*
+pub struct LogicFold { }
+
+pub struct SumFold { }
+*/
+
+/*pub struct BitChainEncoder {
+    enc : BitEncoder,
+    edge_xor_img : ImageBuf<u8>,
+    shift_right : ImageBuf<u8>,
+    shift_down_left : ImageBuf<u8>,
+    shift_down : ImageBuf<u8>,
+    shift_down_right : ImageBuf<u8>
+}
+
+impl BitChainEncoder {
+
+    pub fn new(height : usize, width : usize) -> Self {
+        let enc = BitEncoder::new(height, width);
+        let edge_xor_img = ImageBuf::<u8>::new_constant(height, width / 8, 0);
+        let shift_right = edge_xor_img.clone();
+        let shift_down_left = edge_xor_img.clone();
+        let shift_down = edge_xor_img.clone();
+        let shift_down_right = edge_xor_img.clone();
+        Self { enc, edge_xor_img, shift_right, shift_down_left, shift_down, shift_down_right }
+    }
+
+    pub fn calculate<S>(&mut self, img : &Image<u8, S>)
+    where
+        S : Storage<u8>
+    {
+        self.enc.fold(img);
+        binary_edges(&self.enc.index_sum, &mut self.edeg_xor_img);
+        // (edge_xor_img) >> 1 to right AND edge_xor_img
+        // Also repeat with others
+        // Build Vec<OpenChain>
+        //
+    }
+
+}*/
+
 /* Folding bit RunLength, Point and Chain encoders beat the performance
 of full raster scan encoders by making more heavy use of vectorized
 registers (such as u8x16) to process and exclude regions of the image
@@ -139,7 +180,6 @@ impl ScaledBitEncoder {
     where
         S : Storage<u8>
     {
-
         use ripple::resample::Resample;
         self.enc.fold(img);
         let mut red_sz = self.enc.index_sum.size();
@@ -193,27 +233,37 @@ impl EdgeBitEncoder {
         S : Storage<u8>
     {
         self.enc.fold(img);
-        let mut edge_ixs_sz = self.edge_xor_img.size();
-        edge_ixs_sz.1 -= 1;
-        let orig = self.enc.index_sum.window((0, 0), edge_ixs_sz).unwrap();
-        let shifted = self.enc.index_sum.window((0, 1), edge_ixs_sz).unwrap();
-        orig.xor_to(&shifted, &mut self.edge_xor_img.window_mut((0, 0), edge_ixs_sz).unwrap());
-
-        // This calculates the xor of the last column of each section with the
-        // first column of the next section using a bit shift of the first column
-        // (thus aligning the first column of the next sector with the last column
-        // of the previous sector).
-        let (h, w) = self.enc.index_sum.size();
-        let fst_col = self.enc.index_sum.window((0, 0), (h,1)).unwrap();
-        let last_col = self.enc.index_sum.window((0, w-1), (h,1)).unwrap();
-        let mut last_xor_col = self.edge_xor_img.window_mut((0, w-1), (h, 1)).unwrap();
-        fst_col.shr_to(1, &mut last_xor_col);
-        last_xor_col.xor_assign(&last_col);
-
+        binary_edges(&self.enc.index_sum, &mut self.edge_xor_img);
         let strip_width = (img.width() / 8);
         encode_from_edges(&self.enc.index_sum, &self.edge_xor_img, strip_width)
     }
 
+}
+
+fn binary_edges<S, T>(index_sum : &Image<u8, S>, edge_xor_img : &mut Image<u8, T>)
+where
+    S : Storage<u8>,
+    T : StorageMut<u8>
+{
+    assert!(index_sum.size() == edge_xor_img.size());
+
+    let mut edge_ixs_sz = edge_xor_img.size();
+    edge_ixs_sz.1 -= 1;
+
+    let orig = index_sum.window((0, 0), edge_ixs_sz).unwrap();
+    let shifted = index_sum.window((0, 1), edge_ixs_sz).unwrap();
+    orig.xor_to(&shifted, &mut edge_xor_img.window_mut((0, 0), edge_ixs_sz).unwrap());
+
+    // This calculates the xor of the last column of each section with the
+    // first column of the next section using a bit shift of the first column
+    // (thus aligning the first column of the next sector with the last column
+    // of the previous sector).
+    let (h, w) = index_sum.size();
+    let fst_col = index_sum.window((0, 0), (h,1)).unwrap();
+    let last_col = index_sum.window((0, w-1), (h,1)).unwrap();
+    let mut last_xor_col = edge_xor_img.window_mut((0, w-1), (h, 1)).unwrap();
+    fst_col.shr_to(1, &mut last_xor_col);
+    last_xor_col.xor_assign(&last_col);
 }
 
 use std::ops::BitOr;
@@ -470,8 +520,14 @@ fn bit_encoding() {
             img[pt] = 255;
         }
     }
-
     t.time("draw");
+
+    let _ = rles.split();
+    t.time("split");
+
+    let _ = rles.graph();
+    t.time("graph");
+
     let mut img2 = ImageBuf::<u8>::new_constant(128, 128, 0);
     img2.draw(Mark::Dot((64, 64), 32), 255);
     RunLengthCode::encode(&img2.full_window());
@@ -3457,21 +3513,23 @@ impl RunLengthCode {
         let mut last_matched_above : Option<&RunLength> = None;
         let row_pair_iter = self.rows[0..(nrows-1)].iter()
             .zip(self.rows[1..nrows].iter());
+
         for (row_above, row_below) in row_pair_iter {
             if self.rles[row_below.start].start.0 - self.rles[row_above.start].start.0 == 1 {
                 for (local_ix_below, rl_below) in self.rles[row_below.clone()].iter().enumerate() {
                     // Iterate over overlapping top RLEs (since they are ordered, there is no
                     // need to check the overlap of intermediate elements:
                     // only the start and end matching RLEs).
-                    let iter_above = self.rles[row_above.clone()].iter()
-                        .enumerate()
-                        .skip_while(|(_, above)| (above.start.1+above.length-1) < rl_below.start.1 )
-                        .take_while(|(_, above)| above.start.1 <= (rl_below.start.1+rl_below.length-1) )
-                        .map(|(local_ix_above, _)| local_ix_above + row_above.start );
-
-                    // Add edges to top RLEs
-                    for above_ix in iter_above {
-                        uf.union(above_ix, local_ix_below + row_below.start );
+                    let below_last = rl_below.start.1+rl_below.length-1;
+                    let iter_above = self.rles[row_above.clone()].iter().enumerate();
+                    for (local_above_ix, above) in iter_above {
+                        if (above.start.1+above.length-1) >= rl_below.start.1 {
+                            if above.start.1 <= below_last {
+                                uf.union(local_above_ix + row_above.start, local_ix_below + row_below.start );
+                            } else {
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -4474,6 +4532,7 @@ pub const TWO_S2_BR_B : u8 = TWO_S1_TL_TR.rotate_right(4);
 pub const TWO_S2_B_BL : u8 = TWO_S1_TL_TR.rotate_right(5);
 pub const TWO_S2_BL_L : u8 = TWO_S1_TL_TR.rotate_right(6);
 pub const TWO_S2_L_TL : u8 = TWO_S1_TL_TR.rotate_right(7);*/
+
 
 
 

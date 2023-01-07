@@ -50,6 +50,14 @@ impl From<(usize, usize)> for crate::foreign::ipp::ippi::IppiSize {
 
 }
 
+impl From<(usize, usize)> for crate::foreign::ipp::ippcv::IppiSize {
+
+    fn from(size : (usize, usize)) -> Self {
+        crate::foreign::ipp::ippcv::IppiSize { width : size.1 as i32, height : size.0 as i32 }
+    }
+
+}
+
 impl From<(usize, usize)> for crate::foreign::ipp::ippcv::IppiSizeL {
 
     fn from(size : (usize, usize)) -> Self {

@@ -45,7 +45,7 @@ fn registration_test() {
     
 }
 
-/* Given two equal length slices carryinig coordinates, permute elements at the second slice until
+/* Given two equal length slices carrying coordinates, permute elements at the second slice until
 all elements within the second slice satisfy the same comparison relations with each other as the elements 
 within the first slice. All elements at both slices are assumed distinct.
 If this condition can be satisfied, return Some(col), else None. 
@@ -1174,17 +1174,82 @@ pub fn inner_circle(pts : &[(usize, usize)]) -> Option<((usize, usize), f32)> {
 
 }
 
-pub trait HalfOpen {
+use std::ops::RangeInclusive;
+
+pub trait HalfOpen
+where
+    Self : Sized
+{
 
     fn proximity(&self, other : &Self) -> Proximity;
 
+    // perhaps rename to enclose so as to not conflict with std::ops::Range::contains
     fn contains(&self, inner : &Self) -> bool;
 
     fn contained(&self, outer : &Self) -> bool;
 
+    // If self contains all inner intervals, return the
+    // differences (disjoint intervals). Assume rs is sorted and
+    // end >= start for each inner interval.
+    fn difference(&self, rs : &[Self]) -> Vec<Self>;
+
+    fn overlapping_range(&self, b_ranges : &[Self]) -> Option<RangeInclusive<usize>>;
+
 }
 
-impl HalfOpen for Range<usize> {
+impl HalfOpen for Range<usize>
+where
+    Self : Sized
+{
+
+    fn overlapping_range(&self, b_ranges : &[Range<usize>]) -> Option<RangeInclusive<usize>> {
+        // Bottom is not partitioned (will return false for all entries, all b greater than a)
+        if let Some(fst_b) = b_ranges.first() {
+            if fst_b.start > self.end && fst_b.end > self.end {
+                return None;
+            }
+        }
+
+        // First false entry overlaps w/ a. (since non-overlapping ones were excluded at prev. step).
+        let smaller = b_ranges.partition_point(|b| b.start < self.start && b.end < self.start );
+
+        // All elements of b smaller than a starting point (returns true for all entries,
+        // see docs of partition point).
+        if smaller == b_ranges.len() {
+            return None;
+        }
+
+        // First false entry does not overlap w/ a.
+        let mut larger = b_ranges[smaller..].partition_point(|b| b.start <= self.end );
+        if larger < b_ranges[smaller..].len() {
+            // i.e. last one returning true.
+            larger -= 1;
+            Some(RangeInclusive::new(smaller, larger + smaller))
+        } else {
+            // All returned true (take whole rest of slice).
+            Some(RangeInclusive::new(smaller, b_ranges.len()-1))
+        }
+    }
+
+    fn difference(&self, rs : &[Range<usize>]) -> Vec<Range<usize>> {
+        let mut diffs = Vec::new();
+        let mut last_end = self.start;
+
+        // Add intervals before each range
+        for r in rs {
+            assert!(HalfOpen::contains(self, r));
+            assert!(r.start >= last_end);
+            assert!(r.end >= r.start);
+            diffs.push(Range { start : last_end, end : r.start });
+            last_end = r.end;
+        }
+
+        // Add interval after last range
+        if let Some(lst) = rs.last() {
+            diffs.push(Range { start : last_end, end : self.end });
+        }
+        diffs
+    }
 
     fn contains(&self, inner : &Self) -> bool {
         self.start <= inner.start && self.end >= inner.end
@@ -1377,7 +1442,18 @@ impl Region {
 
 }
 
-impl HalfOpen for Region {
+impl HalfOpen for Region
+where
+    Self : Sized
+{
+
+    fn overlapping_range(&self, b_ranges : &[Self]) -> Option<RangeInclusive<usize>> {
+        unimplemented!()
+    }
+
+    fn difference(&self, rs : &[Self]) -> Vec<Self> {
+        unimplemented!()
+    }
 
     fn contains(&self, inner : &Self) -> bool {
         HalfOpen::contains(&self.h, &inner.h) && HalfOpen::contains(&self.v, &inner.v)
