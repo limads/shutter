@@ -75,20 +75,17 @@ where
     /// requiring the user to call full_windows(.).
     pub fn windows(&self, sz : (usize, usize)) -> impl Iterator<Item=Window<P>> {
         assert_nonzero(sz);
-        let (step_v, step_h) = sz;
+        // let (step_v, step_h) = sz;
         if sz.0 > self.sz.0 || sz.1 > self.sz.1 {
             panic!("Child window size bigger than parent window size");
         }
         if self.height() % sz.0 != 0 || self.width() % sz.1 != 0 {
             panic!("Image size should be a multiple of window size (Required window {:?} over parent window {:?})", sz, self.sz);
         }
-        let offset = self.offset;
         iter::WindowIterator::<P> {
             source : self.window((0, 0), self.size()).unwrap(),
             size : sz,
-            curr_pos : offset,
-            step_v,
-            step_h
+            curr_pos : Some((0, 0)),
         }
     }
     
@@ -102,7 +99,6 @@ where
         );
         iter::iterate_row_wise(
             self.slice.as_ref(), 
-            // self.offset,
             self.sz, 
             self.original_size(), 
             spacing
@@ -476,6 +472,29 @@ where
     S : StorageMut<P>
 {
 
+    pub fn windows_mut<'a>(
+        &'a mut self,
+        sz : (usize, usize)
+    ) -> impl Iterator<Item=WindowMut<'a, P>>
+    where
+        Self : 'a,
+        P : Mul<Output=P> + MulAssign + 'a
+    {
+        assert_nonzero(sz);
+        // let (step_v, step_h) = sz;
+        if sz.0 > self.sz.0 || sz.1 > self.sz.1 {
+            panic!("Child window size bigger than parent window size");
+        }
+        if self.height() % sz.0 != 0 || self.width() % sz.1 != 0 {
+            panic!("Image size should be a multiple of window size (Required window {:?} over parent window {:?})", sz, self.sz);
+        }
+        iter::WindowIteratorMut::<'a, P> {
+            source : self.window_mut((0, 0), self.size()).unwrap(),
+            size : sz,
+            curr_pos : Some((0, 0)),
+        }
+    }
+
     pub fn rows_mut<'a, 'b>(&'b mut self) -> impl Iterator<Item=&'a mut [P]> + 'b {
         // let tl = self.offset.0 * self.width + self.offset.1;
         (0..self.sz.0).map(move |i| {
@@ -554,7 +573,7 @@ where
     pub fn split_windows(self, sz : (usize, usize)) -> impl Iterator<Item=Window<'a, P>> 
     {
         assert_nonzero(sz);
-        let (step_v, step_h) = sz;
+        // let (step_v, step_h) = sz;
         if sz.0 >= self.sz.0 || sz.1 >= self.sz.1 {
             panic!("Child window size bigger than parent window size");
         }
@@ -565,9 +584,7 @@ where
         iter::WindowIterator::<P> {
             source : self,
             size : sz,
-            curr_pos : offset,
-            step_v,
-            step_h
+            curr_pos : Some((0, 0)),
         }
     }
     
@@ -582,14 +599,9 @@ where
     // This child window size
     pub(crate) size : (usize, usize),
 
-    // Index the most ancestral window possible.
-    pub(crate) curr_pos : (usize, usize),
+    // Index the parent window.
+    pub(crate) curr_pos : Option<(usize, usize)>,
 
-    /// Vertical increment.
-    pub(crate) step_v : usize,
-
-    /// Horizontal increment.
-    pub(crate) step_h : usize,
 
 }
 
@@ -601,17 +613,18 @@ where
     type Item = Window<'a, N>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let offset = iterate_next_pos(
+        let mut old_offset = self.curr_pos?;
+        self.curr_pos = iterate_next_pos(
             &self.source, 
-            &mut self.curr_pos, 
+            old_offset,
             self.size, 
-            (self.step_h, self.step_v)
-        )?;
-        Some(Window { 
-            offset, 
+        );
+        let src_offset = self.source.offset();
+        Some(Window {
+            offset : (src_offset.0 + old_offset.0, src_offset.1 + old_offset.1),
             sz : self.size, 
             width : self.source.width, 
-            slice : index::sub_slice(self.source.slice.as_ref(), offset, self.size, self.source.width),
+            slice : index::sub_slice(self.source.slice.as_ref(), old_offset, self.size, self.source.width),
             _px : PhantomData
         })
     }
@@ -629,13 +642,7 @@ where
     pub(crate) size : (usize, usize),
 
     // Index the most ancestral window possible.
-    pub(crate) curr_pos : (usize, usize),
-
-    /// Vertical increment. Either U1 or Dynamic.
-    pub(crate) step_v : usize,
-
-    /// Horizontal increment. Either U1 or Dynamic.
-    pub(crate) step_h : usize,
+    pub(crate) curr_pos : Option<(usize, usize)>,
 
 }
 
@@ -647,15 +654,16 @@ where
     type Item = WindowMut<'a, N>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let offset = iterate_next_pos(
+        let mut old_offset = self.curr_pos?;
+        self.curr_pos = iterate_next_pos(
             &self.source, 
-            &mut self.curr_pos, 
-            self.size, 
-            (self.step_h, self.step_v)
-        )?;
-        let src_sub = index::sub_slice_mut(self.source.slice.as_mut(), offset, self.size, self.source.width);
-        Some(WindowMut { 
-            offset, 
+            old_offset,
+            self.size
+        );
+        let src_offset = self.source.offset();
+        let src_sub = index::sub_slice_mut(self.source.slice.as_mut(), old_offset, self.size, self.source.width);
+        Some(WindowMut {
+            offset : (src_offset.0 + old_offset.0, src_offset.1 + old_offset.1),
             sz : self.size, 
             width : self.source.width, 
             slice : unsafe { std::slice::from_raw_parts_mut(src_sub.as_mut_ptr(), src_sub.len()) },
@@ -701,26 +709,25 @@ pub fn iterate_row_wise<N>(
 
 fn iterate_next_pos<P, S>(
     s : &Image<P, S>,
-    curr_pos : &mut (usize, usize),
-    size : (usize, usize),
-    (step_h, step_v) : (usize, usize)
+    mut curr_pos : (usize, usize),
+    sub_size : (usize, usize)
 ) -> Option<(usize, usize)>
 {
-    let (offset, win_sz) = (s.offset(), s.size());
-    let within_horiz = curr_pos.0  + size.0 <= (offset.0 + win_sz.0);
-    let within_vert = curr_pos.1 + size.1 <= (offset.1 + win_sz.1);
-    let within_bounds = within_horiz && within_vert;
-    let pos = if within_bounds {
-        Some(*curr_pos)
+    let parent_sz = s.size();
+    let within_horiz = curr_pos.1 + sub_size.1 < parent_sz.1;
+    if within_horiz {
+        curr_pos.1 += sub_size.1;
+        Some(curr_pos)
     } else {
-        None
-    };
-    curr_pos.1 += step_h;
-    if curr_pos.1 + size.1 > (offset.1 + win_sz.1) {
-        curr_pos.1 = offset.1;
-        curr_pos.0 += step_v;
+        let within_vert = curr_pos.0 + sub_size.0 < parent_sz.0;
+        curr_pos.0 += sub_size.0;
+        curr_pos.1 = 0;
+        if within_vert {
+            Some(curr_pos)
+        } else {
+            None
+        }
     }
-    pos
 }
 
 /// Iterates over pairs of pixels within a column, carrying row index of the top element at first position.
@@ -929,3 +936,11 @@ fn window_iterator() {
     }
 }
 
+// cargo test --lib -- window_iterator2 --nocapture
+#[test]
+fn window_iterator2() {
+    let img = ImageBuf::new_constant(128, 128, 0);
+    for w in img.windows((16, 128)) {
+        println!("{:?} {:?}", w.offset(), w.size());
+    }
+}

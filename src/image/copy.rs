@@ -88,6 +88,13 @@ where
     where
         P : Copy + Default + Zero
     {
+        #[cfg(feature="ipp")]
+        unsafe {
+            let mut new_img = ImageBuf::<P>::new_empty(self.height(), self.width());
+            new_img.copy_from(self);
+            return new_img;
+        }
+
         let mut buf = Vec::new();
         self.rows().for_each(|row| buf.extend(row.iter().cloned()) );
         ImageBuf::from_vec(buf, self.sz.1)

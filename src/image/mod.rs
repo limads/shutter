@@ -2136,32 +2136,6 @@ where
 
     // pub fn centered_sub_window_mut(mut self, center : (usize, usize))
 
-    pub fn windows_mut(
-        &'a mut self, 
-        sz : (usize, usize)
-    ) -> impl Iterator<Item=WindowMut<'a, P>>
-    where
-        Self : 'a,
-        P : Mul<Output=P> + MulAssign + 'a
-    {
-        assert_nonzero(sz);
-        let (step_v, step_h) = sz;
-        if sz.0 > self.sz.0 || sz.1 > self.sz.1 {
-            panic!("Child window size bigger than parent window size");
-        }
-        if self.height() % sz.0 != 0 || self.width() % sz.1 != 0 {
-            panic!("Image size should be a multiple of window size (Required window {:?} over parent window {:?})", sz, self.sz);
-        }
-        let offset = self.offset;
-        iter::WindowIteratorMut::<'a, P> {
-            source : self.window_mut((0, 0), self.size()).unwrap(),
-            size : sz,
-            curr_pos : offset,
-            step_v,
-            step_h
-        }
-    }
-
 }
 
 impl<P, S> Image<P, S> 

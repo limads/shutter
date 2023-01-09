@@ -38,6 +38,7 @@ fn ipp_integral(win : &Window<u8>, dst : &mut WindowMut<i32>) {
 }
 
 /// The integral should have nrows+1, ncols+1 relative to the source image.
+#[derive(Debug, Clone)]
 pub struct Integral<T>(ImageBuf<T>)
 where
     T : Pixel + Scalar + Clone + Copy + Any;

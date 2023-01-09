@@ -19,6 +19,305 @@ use crate::gray::Foreground;
 use crate::local::IppSumWindow;
 use smallvec::SmallVec;
 
+use crate::bitonal::*;
+use crate::pyr::*;
+
+#[derive(Debug, Clone)]
+pub struct PyrBitonalEncoder {
+    pyr : Pyramid,
+    bit_img : BitonalImage,
+    strip_height : usize,
+    levels : usize
+}
+
+impl PyrBitonalEncoder {
+
+    pub fn new(height : usize, width : usize, levels : usize) -> Self {
+        assert!(levels > 0 && levels <= 8);
+        assert!(height / (2usize).pow(levels as u32) > 1);
+        let strip_height = height / (2usize).pow(levels as u32);
+        // assert!(strip_height == 16);
+        Self { bit_img : BitonalImage::new(height, width / 8), pyr : Pyramid::new_vertical(height, width / 8), strip_height, levels }
+    }
+
+    pub fn calculate<S>(&mut self, img : &Image<u8, S>) -> RunLengthCode
+    where
+        S : Storage<u8>
+    {
+        self.bit_img.update(&img);
+        let bit : &ImageBuf<u8> = self.bit_img.as_ref();
+        let (h, w) = self.bit_img.as_ref().size();
+        let sh = self.strip_height;
+        let mut tops = bit.windows((sh, w)).step_by(2);
+        let win_bottom = bit.window((sh, 0), (h - sh, w)).unwrap();
+        let mut bottoms = win_bottom.windows((sh, w)).step_by(2);
+        let mut dst_win = &mut self.pyr.as_mut()[0];
+        // bit.show();
+
+        for ((top, bottom), mut dst) in tops.zip(bottoms).zip(dst_win.windows_mut((sh, w))) {
+            println!("win sizes = {:?} {:?} {:?}", top.size(), bottom.size(), dst.size());
+            top.or_to(&bottom, &mut dst);
+        }
+
+        // dst_win.show();
+        // Use open range since first level has already been calculated from original image.
+
+        for lvl in 1..self.levels {
+            let PyramidStepMut { mut coarse, fine } = self.pyr.step_mut(lvl);
+            let h = fine.height();
+            // let sh = self.strip_height / (2usize).pow(lvl as u32);
+            let mut tops = fine.windows((sh, w)).step_by(2);
+            let win_bottom = fine.window((sh, 0), (h - sh, w)).unwrap();
+            let mut bottoms = win_bottom.windows((sh, w)).step_by(2);
+            println!("sh = {}", sh);
+            println!("coarse height = {}, coarse wins = {}", coarse.height(), coarse.windows_mut((sh, w)).count());
+            let mut niter = 0;
+            for ((top, bottom), mut dst) in tops.zip(bottoms).zip(coarse.windows_mut((sh, w))) {
+                println!("win sizes = {:?} {:?} {:?}", top.size(), bottom.size(), dst.size());
+                println!("offsets = {:?}, {:?}, {:?}", top.offset(), bottom.offset(), dst.offset());
+                top.or_to(&bottom, &mut dst);
+                niter += 1;
+                /*if lvl == 1 {
+                    println!("top");
+                    top.clone_owned().show();
+                    println!("bottom");
+                    bottom.clone_owned().show();
+                    println!("dst");
+                    dst.clone_owned().show();
+                }*/
+            }
+            // println!("level = {} niter = {}", lvl, niter);
+            if lvl == 1 {
+                println!("final");
+                coarse.show();
+            }
+        }
+
+        let num_rles = (2usize).pow(self.levels as u32);
+        let mut accum_rles : Vec<Vec<RunLength>> = (0..num_rles).map(|_| Default::default() ).collect();
+        let mut curr_rles : Vec<Option<RunLength>> = (0..num_rles).map(|_| Default::default() ).collect();
+
+        let pyr = &self.pyr.as_ref()[..self.levels];
+        let last_pyr = pyr.last().unwrap();
+
+        // assert!(last_pyr.height() == 16);
+
+        for r in 0..last_pyr.height() {
+            for c in 0..last_pyr.width() {
+                lossy_encode_bitonal_pyr(
+                    pyr,
+                    self.bit_img.as_ref(),
+                    self.levels-1,
+                    (r, c),
+                    self.bit_img.as_ref().width()-1,
+                    // self.strip_height / (2usize).pow((self.levels-1) as u32),
+                    self.strip_height,
+                    &mut accum_rles,
+                    &mut curr_rles,
+                );
+            }
+            for (ix, curr) in curr_rles.iter_mut().enumerate() {
+                if let Some(last) = curr.take() {
+                    accum_rles[ix].push(last);
+                }
+            }
+        }
+        let (mut fst_accum, mut rem_accum) = accum_rles.split_at_mut(1);
+        for mut rem in rem_accum.iter_mut() {
+            fst_accum[0].extend(rem.drain(..));
+        }
+        RunLengthCode::from_unsorted(std::mem::take(&mut fst_accum[0]))
+    }
+
+}
+
+// the strip height is always the same; it is just the number of
+// strips that double at each pyramid level. The strip height is
+// a function of the desired number of levels.
+pub fn lossy_encode_bitonal_pyr(
+    pyr : &[ImageBuf<u8>],
+    coarse : &ImageBuf<u8>,
+    level : usize,
+    ix : (usize, usize),
+    max_ix : usize,
+    strip_height : usize,
+    accum_rles : &mut [Vec<RunLength>],
+    curr_rles : &mut [Option<RunLength>]
+) {
+    // println!("Level = {:?}; Index = {:?}", level, ix);
+    // if level == 1 {
+    //    println!("{:?} = {:?}", ix, pyr[level][ix] != 0);
+    // }
+    if pyr[level][ix] != 0 {
+        let top_ix = ((ix.0 / strip_height) * (2*strip_height) + ix.0 % strip_height, ix.1);
+        // let top_ix = ix;
+        let bottom_ix = (top_ix.0 + strip_height, ix.1);
+        if level > 0 {
+            let prev_lvl = level-1;
+            // let prev_strip_height = strip_height * 2;
+            lossy_encode_bitonal_pyr(
+                pyr,
+                coarse,
+                prev_lvl,
+                top_ix,
+                max_ix,
+                strip_height,
+                accum_rles,
+                curr_rles
+            );
+            lossy_encode_bitonal_pyr(
+                pyr,
+                coarse,
+                prev_lvl,
+                bottom_ix,
+                max_ix,
+                strip_height,
+                accum_rles,
+                curr_rles
+            );
+        } else {
+            // println!("lvl = {:?}, ix = {:?}; top = {:?}, bottom = {:?}", level, ix, top_ix, bottom_ix);
+            // println!("len = {:?}", accum_rles.len());
+
+            let top_pos = top_ix.0 / strip_height;
+            let bottom_pos = bottom_ix.0 / strip_height;
+            // let bottom_pos = top_pos + 1;
+
+            // println!("{:?} {:?}", top_pos, bottom_pos);
+            lossy_encode_bitonal_pixel(
+                top_ix.0,
+                top_ix.1,
+                max_ix,
+                unsafe { coarse.row_unchecked(top_ix.0) },
+                &mut curr_rles[top_pos],
+                &mut accum_rles[top_pos]
+            );
+            lossy_encode_bitonal_pixel(
+                bottom_ix.0,
+                bottom_ix.1,
+                max_ix,
+                unsafe { coarse.row_unchecked(bottom_ix.0) },
+                &mut curr_rles[bottom_pos],
+                &mut accum_rles[bottom_pos]
+            );
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BitonalEncoder {
+    bit_img : BitonalImage
+}
+
+impl BitonalEncoder {
+
+    pub fn new(height : usize, width : usize) -> Self {
+        Self { bit_img : BitonalImage::new(height, width / 8) }
+    }
+
+    pub fn calculate<S>(&mut self, img : &Image<u8, S>) -> RunLengthCode
+    where
+        S : Storage<u8>
+    {
+        self.bit_img.update(&img);
+        let bit : &ImageBuf<u8> = self.bit_img.as_ref();
+        let mut rles = Vec::new();
+        let mut rows = Vec::new();
+        for r in 0..bit.height() {
+            let len_before = rles.len();
+            lossy_encode_bitonal_row(unsafe { bit.row_unchecked(r) }, r, &mut rles);
+            let len_after = rles.len();
+            if len_after > len_before {
+                rows.push(Range { start : len_before, end : len_after });
+            }
+        }
+        RunLengthCode { rles, rows }
+    }
+
+}
+
+#[inline(always)]
+fn lossy_encode_bitonal_pixel(
+    row_ix : usize,
+    col_ix : usize,
+    max_ix : usize,
+    row : &[u8],
+    curr_rle : &mut Option<RunLength>,
+    rles : &mut Vec<RunLength>,
+) {
+    let px = unsafe { row.get_unchecked(col_ix) };
+    if *px > 0 {
+        if let Some(rle) = curr_rle.as_mut() {
+            let length_incr = 8 - px.leading_zeros() as usize;
+            rle.length += length_incr;
+
+            // The last condition is never evaluated at last column due to short circuit,
+            // so there is no risk of a buffer overflow.
+            let must_push = length_incr < 8 ||
+                col_ix == max_ix ||
+                row[col_ix+1].trailing_zeros() > 0;
+            if must_push {
+                rles.push(rle.clone());
+                *curr_rle = None;
+            }
+        } else {
+            let trailing = px.trailing_zeros() as usize;
+            let col_start = col_ix * 8 + trailing;
+            *curr_rle = Some(RunLength { start : (row_ix, col_start), length : (8 - trailing) });
+        }
+    }
+}
+
+/* Note the encoding is in reverse order: Empty spaces at the front of the RunLength
+is examined with trailing_zeros, and empty spaces at the end of the RunLength are examined
+with leading_zeros. This representation is lossy because it misses zeroed bits inside each
+8-bit sequence to gain performance by only evaluating the trailing and leading bits
+within each packed region. If the objects of interest are solid and have no holes (i.e are convex),
+the representation is complete. */
+fn lossy_encode_bitonal_row(row : &[u8], row_ix : usize, rles : &mut Vec<RunLength>) {
+    let mut curr_rle : Option<RunLength> = None;
+    let max_ix = row.len()-1;
+    for col_ix in 0..row.len() {
+        lossy_encode_bitonal_pixel(row_ix, col_ix, max_ix, row, &mut curr_rle, rles);
+    }
+}
+
+// cargo test --lib -- bitonal_encoder --nocapture
+#[test]
+fn bitonal_encoder() {
+
+    use crate::draw::*;
+    use crate::util::Timer;
+
+    let mut img = ImageBuf::<u8>::new_constant(128, 128, 0);
+    img.draw(Mark::Dot((64, 64), 32), 255);
+
+    /*let mut t = Timer::start();
+    let mut enc = ChainEncoder::new(img.height(), img.width());
+    enc.encode(&img, None);
+    t.time("chain code");*/
+
+    // let mut enc = BitEncoder::new(img.height(), img.width());
+    // let mut enc = BitonalEncoder::new(img.height(), img.width());
+    let mut enc = PyrBitonalEncoder::new(img.height(), img.width(), 3);
+
+    let mut t = Timer::start();
+    let rles = enc.calculate(&img);
+    // assert!(rles.rles.iter().any(|r| r.start.0 == 79 ));
+    // println!("{:?}", rles);
+
+    // enc.edge_xor_img.show();
+    t.time("encode");
+    for rle in &rles.rles {
+        for pt in rle.points() {
+            img[pt] = 127;
+        }
+    }
+    t.time("draw");
+    img.show();
+
+}
+
 /*
 pub struct LogicFold { }
 
@@ -62,7 +361,7 @@ impl BitChainEncoder {
 
 /* Folding bit RunLength, Point and Chain encoders beat the performance
 of full raster scan encoders by making more heavy use of vectorized
-registers (such as u8x16) to process and exclude regions of the image
+registers (holding u8x16) to process and exclude regions of the image
 without white pixels. We divide the image into 8 sectors, which are
 folded into a thin image of dimensions h x (w/8). Each byte of this
 image encode which sectors contain relevant information (with the first
@@ -72,6 +371,7 @@ at a time for all pixels 0b00. If the pixel is nonzero, we evaluate sectors
 by excluding the trailing zeros of the pattern, and proceed up the point where
 the pixel is 0b00, looking at the full 8 pixels only in the cases where all 8
 sectors are white. */
+#[derive(Debug, Clone)]
 pub struct BitEncoder {
 
     indices : ImageBuf<u8>,
@@ -198,6 +498,7 @@ impl ScaledBitEncoder {
 
 }
 
+#[derive(Debug, Clone)]
 pub struct EdgeBitEncoder {
     enc : BitEncoder,
     edge_xor_img : ImageBuf<u8>,
@@ -351,7 +652,7 @@ where
             }
         }
         close_rles(&mut rles, &mut rle_front);
-        organize_rles(&mut rles, &mut rows, n_before);
+        organize_rles_at_last_row(&mut rles, &mut rows, n_before);
     }
     // timer.time("encoding");
     RunLengthCode {
@@ -368,7 +669,7 @@ fn close_rles(rles : &mut Vec<RunLength>, rle_front : &mut [Option<RunLength>; 8
     }
 }
 
-fn organize_rles(rles : &mut Vec<RunLength>, rows : &mut Vec<Range<usize>>, n_before : usize) {
+fn organize_rles_at_last_row(rles : &mut Vec<RunLength>, rows : &mut Vec<Range<usize>>, n_before : usize) {
     let mut n_after = rles.len();
     if n_after > n_before {
         rles[n_before..n_after].sort_by(|a, b| a.start.1.cmp(&b.start.1) );
@@ -1939,12 +2240,21 @@ fn chain() {
     
 }*/
 
+#[derive(Debug)]
 pub struct ChainEncoder {
 
     bump : bumpalo::Bump,
     
     size : (usize, usize)
     
+}
+
+impl Clone for ChainEncoder {
+
+    fn clone(&self) -> Self {
+        ChainEncoder::new(self.size.0, self.size.1)
+    }
+
 }
 
 impl ChainEncoder {
@@ -2885,7 +3195,7 @@ impl Encoding for RunLengthCode {
 }
 
 /* Given a (sorted) RLE vector, extract its row vector. */
-fn rows_vector(rles : &[RunLength]) -> Vec<Range<usize>> {
+fn rle_rows_from_sorted(rles : &[RunLength]) -> Vec<Range<usize>> {
     let mut rows = Vec::new();
     let mut start = 0;
     for (r, mut s) in &rles.iter().group_by(|v| v.start.0 ) {
@@ -3177,6 +3487,16 @@ fn rows_for_sorted_rles(rles : &[RunLength], rows : &mut Vec<Range<usize>>) {
 
 impl RunLengthCode {
 
+    pub fn from_sorted(rles : Vec<RunLength>) -> Self {
+        let rows = rle_rows_from_sorted(&rles);
+        Self { rles, rows }
+    }
+
+    pub fn from_unsorted(mut rles : Vec<RunLength>) -> Self {
+        rles.sort_by(|a, b| a.start.0.cmp(&b.start.0).then(a.start.1.cmp(&b.start.1)) );
+        Self::from_sorted(rles)
+    }
+
     /* Transpose this RunLenght, so that its decoding is equivalent to the decoding of the transposed image */
     pub fn transpose(mut self) -> Self {
         if self.rows.len() == 0 {
@@ -3277,15 +3597,11 @@ impl RunLengthCode {
                 rles.extend(row_below);
             }
         }
-        rles.sort_by(|a, b| a.start.0.cmp(&b.start.0).then(a.start.1.cmp(&b.start.1)) );
+        let rlc = RunLengthCode::from_unsorted(rles);
 
-        // Count elements per row
-        let rows = rows_vector(&rles);
-        let rle = Self { rles, rows };
+        verify_rle_state(&rlc);
 
-        verify_rle_state(&rle);
-
-        rle
+        rlc
     }
 
     pub fn calculate_from_accumulated(

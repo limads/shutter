@@ -821,6 +821,9 @@ where
     S : Storage<u8>
 {
 
+    /* All IPP logical operations are bitwise. perhaps rename them to bitor/bitand/bitxor to keep
+    consistent with the standard library? */
+
     // Equality is different in that we do not want to allocate a new buffer to accumulate individual pixel differences / compare tags.
     pub fn eq<T>(&self, other : &Image<u8, T>) -> bool
     where

@@ -107,6 +107,10 @@ pub mod edge;
 
 pub mod integral;
 
+pub mod bitonal;
+
+pub mod pyr;
+
 /// Common optical manipulations (calculation of focal depth, magnification, camera calibration, lens distortion correction),
 // pub mod optics;
 
