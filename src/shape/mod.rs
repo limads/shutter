@@ -111,6 +111,112 @@ pub fn bounding_rect(pts : &[(usize, usize)]) -> (usize, usize, usize, usize) {
     (min_y, min_x, max_y - min_y, max_x - min_x)
 }
 
+/** Holds a partitioned plane delimited by size. A plane can be split
+into four rects:
+
+| Base   | Right |
+| Bottom | Complement |
+
+With the base always having offset zero, and complement
+having offset given by the offset field.
+
+Offset is always guaranteed to be < size, and size should be non-zero.
+
+Plane is a base structure used to map unsigned integer memory offsets used
+to index images (type Offset = (usize, usize), y-down) into the analytical plane where
+floating poing operations are performed (type Point = Vector2<f32>, y-up). The floating-point
+counterpart to plane is Area, which carries a pair of vectors in the analytical plane
+that delimit a Plane.
+**/
+#[derive(Debug, Clone)]
+pub struct Plane {
+    pub offset : (usize, usize),
+    pub size : (usize, usize)
+}
+
+impl Plane {
+
+    pub fn base(&self) -> Rect {
+        Rect {
+            offset : (0, 0),
+            size : self.offset
+        }
+    }
+
+    pub fn bottom(&self) -> Rect {
+        Rect {
+            offset : (self.offset.0 + self.size.0, 0),
+            size : (self.size.0 - self.offset.0, self.offset.1)
+        }
+    }
+
+    pub fn right(&self) -> Rect {
+        Rect {
+            offset : (0, self.offset.1 + self.size.1),
+            size : (self.offset.1, self.size.1 - self.offset.1)
+        }
+    }
+
+    pub fn complement(&self) -> Rect {
+        Rect {
+            offset : self.offset,
+            size : (self.size.0 - self.offset.0, self.size.1 - self.offset.1)
+        }
+    }
+
+    /* Returns the vector pointing to the offset of this Plane,
+    assuming a cartesian plane startinig at the bottom-left
+    portion of the plane. */
+    pub fn point(&self) -> Option<Vector2<f32>> {
+        coord::coord_to_vec::<f32>(self.offset, self.size)
+    }
+
+    pub fn offset(&self, pt : &Vector2<f32>) -> Option<(usize, usize)> {
+        coord::point_to_coord(pt, self.size)
+    }
+
+}
+
+/* A rectangle with offset an size.  */
+#[derive(Debug, Clone)]
+pub struct Rect {
+    pub offset : (usize, usize),
+    pub size : (usize, usize)
+}
+
+impl Rect {
+
+    pub fn bottom_left(&self) -> (usize, usize) {
+        (self.offset.0 + self.size.0, 0)
+    }
+
+    // pub fn bottom_right(&self) -> (usize, usize) {
+    //    self.offset.0 +
+    // }
+}
+
+impl From<Rect> for Region {
+
+    fn from(r : Rect) -> Self {
+        Region {
+            rows : Range { start : r.offset.0, end : r.offset.0 + r.size.0 },
+            cols : Range { start : r.offset.1, end : r.offset.1 + r.size.1 }
+        }
+    }
+
+}
+
+impl From<Region> for Rect {
+
+    fn from(reg : Region) -> Self {
+        Rect {
+            offset : (reg.rows.start, reg.cols.start),
+            size : (reg.rows.end - reg.rows.start, reg.cols.end - reg.cols.start)
+        }
+    }
+
+}
+
 pub mod coord {
 
     use nalgebra::{Vector2, Scalar, Point2};
@@ -149,6 +255,7 @@ pub mod coord {
         }
         None
     }
+
 
 }
 
@@ -404,6 +511,7 @@ pub trait Quadrilateral {
 
 }
 
+/* The floating-point equivalent to Rect, where size happens to be symmetric. */
 pub struct Square {
 
     pub tl : Vector2<usize>,
@@ -424,7 +532,8 @@ impl Quadrilateral for Square {
 
 }
 
-pub struct Rect {
+/* The floating-point equivalent to Rect */
+pub struct Rectangle {
 
     pub tl : Vector2<usize>,
 
@@ -432,7 +541,7 @@ pub struct Rect {
 
 }
 
-impl Quadrilateral for Rect {
+impl Quadrilateral for Rectangle {
 
     fn top_left(&self) -> (usize, usize) {
         (self.tl[0], self.tl[1])
@@ -1044,6 +1153,34 @@ pub fn circle_contains(circle : &((usize, usize), f32), pt : (usize, usize)) -> 
     point_euclidian(circle.0, pt) < circle.1
 }
 
+pub trait OffsetOps {
+
+    fn midpoint(&self, other : &Self) -> Self;
+
+    fn half(&self) -> Self;
+
+    fn distance(&self, other : &Self) -> f32;
+
+}
+
+pub type Offset = (usize, usize);
+
+impl OffsetOps for Offset {
+
+    fn midpoint(&self, other : &Self) -> Offset {
+        ((self.0 + other.0) / 2, (self.1 + other.1) / 2)
+    }
+
+    fn half(&self) -> Offset {
+        (self.0 / 2, self.1 / 2)
+    }
+
+    fn distance(&self, other : &Self) -> f32 {
+        ((self.0 as f32 - other.0 as f32)).hypot((self.1 as f32 - other.1 as f32))
+    }
+
+}
+
 pub fn circle_from_diameter(a : (usize, usize), b : (usize, usize)) -> ((usize, usize), f32) {
     let r = point_euclidian(a, b) / 2.;
 
@@ -1395,7 +1532,7 @@ pub enum Proximity {
 
 /* Represents a cartesian plane with an origin (bottom-left point) and target
 (top-right point). This is the floating-point, cartesian plane counterpart
-of the image plane struct Region. */
+of the image plane struct Region and Plane. */
 #[derive(Clone, Copy)]
 pub struct Area {
     pub origin : Vector2<f32>,
@@ -1413,7 +1550,7 @@ impl Area {
         let bl = (size.0.checked_sub(self.origin[0] as usize)?, self.origin[1] as usize);
         let tr = (size.0.checked_sub(self.target[0] as usize)?, self.target[1] as usize);
         if tr.0 > bl.0 && tr.1 > bl.1 {
-            Some(crate::shape::Region { h : Range { start : bl.1, end : tr.1 }, v : Range { start : bl.0, end : tr.0 } })
+            Some(crate::shape::Region { cols : Range { start : bl.1, end : tr.1 }, rows : Range { start : bl.0, end : tr.0 } })
         } else {
             None
         }
@@ -1421,23 +1558,35 @@ impl Area {
 
 }
 
+/**
+Used to index images. This is equivalent to a rect, containing
+a pair of horizontal (h) and vertical (v) ranges.
+**/
 #[derive(Debug, Clone)]
 pub struct Region {
-    pub h : Range<usize>,
-    pub v : Range<usize>
+    pub rows : Range<usize>,
+    pub cols : Range<usize>
 }
 
 impl Region {
 
+    pub fn height(&self) -> usize {
+        self.rows.end - self.rows.start
+    }
+
+    pub fn width(&self) -> usize {
+        self.cols.end - self.cols.start
+    }
+
     pub fn from_rect_tuple(r : &(usize, usize, usize, usize)) -> Self {
         Self {
-            h : Range { start : r.1, end : r.1 + r.3 + 1 },
-            v : Range { start : r.0, end : r.0 + r.2 + 1 }
+            cols : Range { start : r.1, end : r.1 + r.3 + 1 },
+            rows : Range { start : r.0, end : r.0 + r.2 + 1 }
         }
     }
 
     pub fn to_rect_tuple(&self) -> (usize, usize, usize, usize) {
-        (self.v.start, self.h.start, self.v.end - self.v.start, self.h.end - self.h.start)
+        (self.rows.start, self.cols.start, self.rows.end - self.rows.start, self.cols.end - self.cols.start)
     }
 
 }
@@ -1456,15 +1605,15 @@ where
     }
 
     fn contains(&self, inner : &Self) -> bool {
-        HalfOpen::contains(&self.h, &inner.h) && HalfOpen::contains(&self.v, &inner.v)
+        HalfOpen::contains(&self.cols, &inner.cols) && HalfOpen::contains(&self.rows, &inner.rows)
     }
 
     fn contained(&self, outer : &Self) -> bool {
-        self.h.contained(&outer.h) && self.v.contained(&outer.v)
+        self.cols.contained(&outer.cols) && self.rows.contained(&outer.rows)
     }
 
     fn proximity(&self, other : &Self) -> Proximity {
-        match (self.h.proximity(&other.h), self.v.proximity(&other.v)) {
+        match (self.cols.proximity(&other.cols), self.rows.proximity(&other.rows)) {
             (Proximity::Exclude, _) | (_, Proximity::Exclude) => Proximity::Exclude,
             (Proximity::Overlap | Proximity::Contact, Proximity::Contact) => Proximity::Contact,
             (Proximity::Contact, Proximity::Overlap | Proximity::Contact) => Proximity::Contact,
@@ -2658,12 +2807,6 @@ pub mod cvellipse {
 // pub enum EllipseError {
 // }
 
-#[derive(Debug, Clone)]
-pub struct CircleFit {
-    pub center : Vector2<f32>,
-    pub radius : f32
-}
-
 pub fn rect_area(a : &(usize, usize, usize, usize)) -> usize {
     a.2 * a.3
 }
@@ -2675,7 +2818,64 @@ pub fn rect_intersection(a : &(usize, usize, usize, usize), b : &(usize, usize, 
     Some((vint.0, hint.0, vint.1 - vint.0, hint.1 - hint.0))
 }
 
-impl CircleFit {
+// cargo test --lib -- enclosing_circle --nocapture
+#[test]
+fn enclosing_circle() {
+    println!("{:?}", Circle::enclosing_from_points(&[Vector2::new(1.0, 0.0), Vector2::new(0.0, 1.0)]));
+}
+
+#[derive(Debug, Clone)]
+pub struct CircleCoords {
+    pub center : (usize, usize),
+    pub radius : usize
+}
+
+#[derive(Debug, Clone)]
+pub struct Circle {
+    pub center : Vector2<f32>,
+    pub radius : f32
+}
+
+impl Circle {
+
+    pub fn coords(&self, img_sz : (usize, usize)) -> Option<CircleCoords> {
+        if self.center[0] < 0.0 || self.center[1] < 0.0 {
+            return None;
+        }
+        let center = (img_sz.0.checked_sub(self.center[1] as usize)?, self.center[0] as usize);
+        let radius = self.radius as usize;
+        if center.0 + radius < img_sz.0 || center.1 + radius < img_sz.1 {
+            Some(CircleCoords { center, radius })
+        } else {
+            None
+        }
+    }
+
+    pub fn enclosing_from_points(pts : &[Vector2<f32>]) -> Option<Self> {
+        if pts.len() < 2 {
+            return None;
+        }
+        let mut farthest = ((0, 0), 0.0);
+        for (i, a) in pts.iter().enumerate() {
+            for (j, b) in pts[(i+1)..].iter().enumerate() {
+                let dist = (a.clone() - b).magnitude();
+                if dist > farthest.1 {
+                    farthest = ((i, i + 1 + j), dist);
+                }
+            }
+        }
+        let mut diff = pts[farthest.0.0].clone() - &pts[farthest.0.1];
+        let radius = diff.magnitude() / 2.0;
+        diff.scale_mut(0.5);
+        let center = diff + &pts[farthest.0.1];
+        Some(Circle { center, radius })
+    }
+
+    pub fn enclosing(pts : &[(usize, usize)], img_height : usize) -> Option<Self> {
+        let ptsf : Vec<Vector2<f32>> = pts.iter()
+            .map(|pt| Vector2::new(pt.1 as f32, (img_height - pt.0) as f32) ).collect();
+        Self::enclosing_from_points(&ptsf[..])
+    }
 
     pub fn calculate_from_points(ptsf : &[Vector2<f32>]) -> Option<Self> {
         let n = ptsf.len() as f32;
@@ -2726,4 +2926,13 @@ impl CircleFit {
     }
 
 }
+
+/* Packed interleaved indices (y, x, y, x, ... y, x) representation,
+useful for vectorized ops. */
+struct InterIndices(Vec<usize>);
+
+/* Sequential indices (y, y, y, ... x, x, x) representation,
+useful for vectorized ops. */
+struct SeqIndices(Vec<usize>);
+
 

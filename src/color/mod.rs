@@ -2,6 +2,19 @@ use crate::image::Image;
 use std::ops::Index;
 use std::marker::PhantomData;
 
+/*
+impl Image {
+
+    // Builds an interleaved version of the image (such as an RGB image from separate
+    // R, G, B monochrome images).
+    fn interleave_from(&mut self, channs : &[Image]);
+
+    // Builds a monochrome channel from an interleaved R, G, B image.
+    fn extract_channel(&mut self, img : &[Image], ch : usize);
+
+}
+*/
+
 #[derive(Debug, Clone, Copy)]
 pub enum RGB {
     Red,

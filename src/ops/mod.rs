@@ -1054,6 +1054,7 @@ where
     }
     
     // The not op is analogous to the gray::invert and float::invert ops.
+    // This is a bitwise op.
     pub fn not_mut(&mut self) {
 
         #[cfg(feature="ipp")]

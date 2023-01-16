@@ -69,3 +69,57 @@ impl<A> Parallel<A>
     
 }*/
 
+/* A RAII guard for data that is split and sent to multiple threads. The original
+value is blocked from being accessed until the destructor of all Part guards
+is called. It is up to the implementor to guarantee the safety of the split operation.
+The split cannot yield overlapping memory regions. The split is mostly useful with
+mutable memory regions, that can be moved to the split call without aliasing guaranteed
+by the compiler.
+pub struct Partition<T, P> {
+    counter : AtomicU32,
+    total : T,
+    pub parts : Vec<Part<T>>
+}
+
+impl<T, P> Partition<T, P> {
+
+    // Returns total when all part guards have been died.
+    pub fn wait_total(self) -> T {
+        loop {
+            if self.counter() == 0 {
+                return self.total;
+            }
+            thread::yield()
+        }
+    }
+
+}
+
+pub trait Split {
+
+    unsafe fn split(total : Self, parts : usize) -> Partition<Self>;
+
+}
+
+impl Split for ImagePtr<P> {
+
+}
+
+unsafe impl Send for Part<ImagePtr<P>>;
+
+pub struct Part<T> {
+    counter : AtomicU32
+    val : T
+}
+
+impl AsRef<T> for Part<T> { }
+
+impl AsMut<T> for Part<T> { }
+
+impl Drop for Part<T> {
+
+    fn drop(&mut self) {
+        self.counter -= 1;
+    }
+}
+

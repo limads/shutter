@@ -114,8 +114,6 @@ pub mod pyr;
 /// Common optical manipulations (calculation of focal depth, magnification, camera calibration, lens distortion correction),
 // pub mod optics;
 
-
-
 // pub mod warp;
 
 // pub mod edge;
@@ -338,7 +336,6 @@ IppStatus ippiFloodFill_4Con_<mod>(Ipp<datatype>* pImage, int imageStep, IppiSiz
 roiSize, IppiPoint seed, Ipp<datatype> newVal, IppiConnectedComp* pRegion, Ipp8u*
 pBuffer );
 */
-
 
 /// Contains utilities to represent dense pixel regions (lists of pixel coordinates)
 pub mod patch;

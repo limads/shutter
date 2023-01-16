@@ -5,6 +5,27 @@ use std::iter::FromIterator;
 use std::fmt::Debug;
 use std::mem;
 
+pub fn perspective_to() {
+
+    /*
+
+    IppStatus ippiWarpPerspectiveNearest_<mod>(const Ipp<datatype>* pSrc, int srcStep,
+    Ipp<datatype> pDst, int dstStep, IppiPoint dstRoiOffset, IppiSize dstRoiSize, const
+    IppiWarpSpec* pSpec, Ipp8u* pBuffer);
+
+    IppStatus ippiWarpPerspectiveCubic_<mod>(const Ipp<datatype>* pSrc, int srcStep,
+    Ipp<datatype> pDst, int dstStep, IppiPoint dstRoiOffset, IppiSize dstRoiSize, const
+    IppiWarpSpec* pSpec, Ipp8u* pBuffer);
+
+    IppStatus ippiWarpPerspectiveLinear_<mod>(const Ipp<datatype>* pSrc, int srcStep,
+    Ipp<datatype> pDst, int dstStep, IppiPoint dstRoiOffset, IppiSize dstRoiSize, const
+    IppiWarpSpec* pSpec, Ipp8u* pBuffer);
+
+    */
+
+
+}
+
 #[cfg(feature="ipp")]
 pub fn affine_to<N>(w : &Window<N>, m : &Matrix2x3<f64>, dst : &mut WindowMut<N>) 
 where

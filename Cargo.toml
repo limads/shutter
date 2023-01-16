@@ -58,7 +58,8 @@ tempfile = "*"
 # spade = "1.8.2"
 petgraph = { version = "0.6.0", default-features = false }
 rand = "0.8.5"
-vlfeat = { path = "deps/vlfeat", optional=true }
+# vlfeat = { path = "deps/vlfeat", optional=true }
+vlfeat = { path = "deps/vlfeat" }
 smallvec="1.10.0"
 
 # euclid = "0.2.6"

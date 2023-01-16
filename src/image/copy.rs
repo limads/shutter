@@ -28,6 +28,7 @@ use num_traits::bounds::Bounded;
 use std::clone::Clone;
 use std::any::{TypeId};
 use std::marker::PhantomData;
+use crate::shape::Region;
 
 impl<P> Clone for ImageBuf<P> 
 where
@@ -108,14 +109,20 @@ where
     S : StorageMut<P>
 {
 
+    /** Copies a sub-region of this image into a newly-allocated image buffer.
+    For alternative that avoids allocations, see Image::copy_from **/
+    pub fn crop(&self, region : Region) -> ImageBuf<P> {
+        let mut dst = unsafe { ImageBuf::<P>::new_empty(region.height(), region.width()) };
+        dst.copy_from(&self.region(&region).unwrap());
+        dst
+    }
+
     // Copies elements into self from other, assuming same dims.
     pub fn copy_from<T>(&mut self, other : &Image<P, T>) 
     where
         T : Storage<P>
     {
         assert!(self.same_size(other));
-        // TODO Assert pixel depth is same.
-
         #[cfg(feature="ipp")]
         unsafe {
             let (src_step, src_sz) = crate::image::ipputils::step_and_size_for_image(other);

@@ -33,18 +33,14 @@ pub struct PyrBitonalEncoder {
 impl PyrBitonalEncoder {
 
     pub fn new(height : usize, width : usize, levels : usize) -> Self {
-        assert!(levels > 0 && levels <= 8);
+        assert!(levels > 0 && levels <= 5);
         assert!(height / (2usize).pow(levels as u32) > 1);
         let strip_height = height / (2usize).pow(levels as u32);
         // assert!(strip_height == 16);
         Self { bit_img : BitonalImage::new(height, width / 8), pyr : Pyramid::new_vertical(height, width / 8), strip_height, levels }
     }
 
-    pub fn calculate<S>(&mut self, img : &Image<u8, S>) -> RunLengthCode
-    where
-        S : Storage<u8>
-    {
-        self.bit_img.update(&img);
+    fn update(&mut self) -> RunLengthCode {
         let bit : &ImageBuf<u8> = self.bit_img.as_ref();
         let (h, w) = self.bit_img.as_ref().size();
         let sh = self.strip_height;
@@ -52,44 +48,22 @@ impl PyrBitonalEncoder {
         let win_bottom = bit.window((sh, 0), (h - sh, w)).unwrap();
         let mut bottoms = win_bottom.windows((sh, w)).step_by(2);
         let mut dst_win = &mut self.pyr.as_mut()[0];
-        // bit.show();
 
         for ((top, bottom), mut dst) in tops.zip(bottoms).zip(dst_win.windows_mut((sh, w))) {
-            println!("win sizes = {:?} {:?} {:?}", top.size(), bottom.size(), dst.size());
             top.or_to(&bottom, &mut dst);
         }
 
-        // dst_win.show();
         // Use open range since first level has already been calculated from original image.
-
         for lvl in 1..self.levels {
             let PyramidStepMut { mut coarse, fine } = self.pyr.step_mut(lvl);
             let h = fine.height();
-            // let sh = self.strip_height / (2usize).pow(lvl as u32);
             let mut tops = fine.windows((sh, w)).step_by(2);
             let win_bottom = fine.window((sh, 0), (h - sh, w)).unwrap();
             let mut bottoms = win_bottom.windows((sh, w)).step_by(2);
-            println!("sh = {}", sh);
-            println!("coarse height = {}, coarse wins = {}", coarse.height(), coarse.windows_mut((sh, w)).count());
-            let mut niter = 0;
+            // let mut niter = 0;
             for ((top, bottom), mut dst) in tops.zip(bottoms).zip(coarse.windows_mut((sh, w))) {
-                println!("win sizes = {:?} {:?} {:?}", top.size(), bottom.size(), dst.size());
-                println!("offsets = {:?}, {:?}, {:?}", top.offset(), bottom.offset(), dst.offset());
                 top.or_to(&bottom, &mut dst);
-                niter += 1;
-                /*if lvl == 1 {
-                    println!("top");
-                    top.clone_owned().show();
-                    println!("bottom");
-                    bottom.clone_owned().show();
-                    println!("dst");
-                    dst.clone_owned().show();
-                }*/
-            }
-            // println!("level = {} niter = {}", lvl, niter);
-            if lvl == 1 {
-                println!("final");
-                coarse.show();
+                // niter += 1;
             }
         }
 
@@ -100,8 +74,6 @@ impl PyrBitonalEncoder {
         let pyr = &self.pyr.as_ref()[..self.levels];
         let last_pyr = pyr.last().unwrap();
 
-        // assert!(last_pyr.height() == 16);
-
         for r in 0..last_pyr.height() {
             for c in 0..last_pyr.width() {
                 lossy_encode_bitonal_pyr(
@@ -110,7 +82,6 @@ impl PyrBitonalEncoder {
                     self.levels-1,
                     (r, c),
                     self.bit_img.as_ref().width()-1,
-                    // self.strip_height / (2usize).pow((self.levels-1) as u32),
                     self.strip_height,
                     &mut accum_rles,
                     &mut curr_rles,
@@ -129,6 +100,76 @@ impl PyrBitonalEncoder {
         RunLengthCode::from_unsorted(std::mem::take(&mut fst_accum[0]))
     }
 
+    pub fn calculate<S>(&mut self, img : &Image<u8, S>) -> RunLengthCode
+    where
+        S : Storage<u8>
+    {
+        self.bit_img.update_from_binary(&img);
+        self.update()
+    }
+
+    pub fn calculate_from_gray<S>(&mut self, img : &Image<u8, S>, thr_above : u8) -> RunLengthCode
+    where
+        S : Storage<u8>
+    {
+        self.bit_img.update_from_gray(&img, thr_above);
+        self.update()
+    }
+
+    pub fn calculate_from_gray_inverted<S>(&mut self, img : &Image<u8, S>, thr_below : u8) -> RunLengthCode
+    where
+        S : Storage<u8>
+    {
+        self.bit_img.update_from_gray_inverted(&img, thr_below);
+        self.update()
+    }
+
+}
+
+const TOP_PYR_IXS_2 : [usize; 2048] = build_top_pyramid_indices(2);
+const BOTTOM_PYR_IXS_2 : [usize; 2048] = build_bottom_pyramid_indices(2);
+
+const TOP_PYR_IXS_4 : [usize; 2048] = build_top_pyramid_indices(4);
+const BOTTOM_PYR_IXS_4 : [usize; 2048] = build_bottom_pyramid_indices(4);
+
+const TOP_PYR_IXS_8 : [usize; 2048] = build_top_pyramid_indices(8);
+const BOTTOM_PYR_IXS_8 : [usize; 2048] = build_bottom_pyramid_indices(8);
+
+const TOP_PYR_IXS_16 : [usize; 2048] = build_top_pyramid_indices(16);
+const BOTTOM_PYR_IXS_16 : [usize; 2048] = build_bottom_pyramid_indices(16);
+
+const TOP_PYR_IXS_32 : [usize; 2048] = build_top_pyramid_indices(32);
+const BOTTOM_PYR_IXS_32 : [usize; 2048] = build_bottom_pyramid_indices(32);
+
+const TOP_PYR_IXS_64 : [usize; 2048] = build_top_pyramid_indices(64);
+const BOTTOM_PYR_IXS_64 : [usize; 2048] = build_bottom_pyramid_indices(64);
+
+const fn build_top_pyramid_indices(strip_height : usize) -> [usize; 2048] {
+    let mut dst = [0; 2048];
+    let mut ix = 0;
+    while ix < 2048 {
+        dst[ix] = top_index_at_next_level(ix, strip_height);
+        ix += 1;
+    }
+    dst
+}
+
+const fn build_bottom_pyramid_indices(strip_height : usize) -> [usize; 2048] {
+    let mut dst = [0; 2048];
+    let mut ix = 0;
+    while ix < 2048 {
+        dst[ix] = bottom_index_at_next_level(ix, strip_height);
+        ix += 1;
+    }
+    dst
+}
+
+const fn top_index_at_next_level(ix : usize, strip_height : usize) -> usize {
+    (ix / strip_height) * (2*strip_height) + ix % strip_height
+}
+
+const fn bottom_index_at_next_level(ix : usize, strip_height : usize) -> usize {
+    top_index_at_next_level(ix, strip_height) + strip_height
 }
 
 // the strip height is always the same; it is just the number of
@@ -144,17 +185,17 @@ pub fn lossy_encode_bitonal_pyr(
     accum_rles : &mut [Vec<RunLength>],
     curr_rles : &mut [Option<RunLength>]
 ) {
-    // println!("Level = {:?}; Index = {:?}", level, ix);
-    // if level == 1 {
-    //    println!("{:?} = {:?}", ix, pyr[level][ix] != 0);
-    // }
     if pyr[level][ix] != 0 {
+
         let top_ix = ((ix.0 / strip_height) * (2*strip_height) + ix.0 % strip_height, ix.1);
-        // let top_ix = ix;
         let bottom_ix = (top_ix.0 + strip_height, ix.1);
+
+        // The indices can be read from a constant, but there isn't a lot of difference in performance..
+        // let top_ix = (unsafe { *TOP_PYR_IXS_16.get_unchecked(ix.0) }, ix.1);
+        // let bottom_ix = (unsafe { *BOTTOM_PYR_IXS_16.get_unchecked(ix.0) }, ix.1);
+
         if level > 0 {
             let prev_lvl = level-1;
-            // let prev_strip_height = strip_height * 2;
             lossy_encode_bitonal_pyr(
                 pyr,
                 coarse,
@@ -215,11 +256,7 @@ impl BitonalEncoder {
         Self { bit_img : BitonalImage::new(height, width / 8) }
     }
 
-    pub fn calculate<S>(&mut self, img : &Image<u8, S>) -> RunLengthCode
-    where
-        S : Storage<u8>
-    {
-        self.bit_img.update(&img);
+    fn update(&mut self) -> RunLengthCode {
         let bit : &ImageBuf<u8> = self.bit_img.as_ref();
         let mut rles = Vec::new();
         let mut rows = Vec::new();
@@ -233,6 +270,31 @@ impl BitonalEncoder {
         }
         RunLengthCode { rles, rows }
     }
+
+    pub fn calculate<S>(&mut self, img : &Image<u8, S>) -> RunLengthCode
+    where
+        S : Storage<u8>
+    {
+        self.bit_img.update_from_binary(&img);
+        self.update()
+    }
+
+    pub fn calculate_from_gray<S>(&mut self, img : &Image<u8, S>, above_thr : u8) -> RunLengthCode
+    where
+        S : Storage<u8>
+    {
+        self.bit_img.update_from_gray(&img, above_thr);
+        self.update()
+    }
+
+    pub fn calculate_from_gray_inverted<S>(&mut self, img : &Image<u8, S>, thr_below : u8) -> RunLengthCode
+    where
+        S : Storage<u8>
+    {
+        self.bit_img.update_from_gray_inverted(&img, thr_below);
+        self.update()
+    }
+
 
 }
 
@@ -262,8 +324,21 @@ fn lossy_encode_bitonal_pixel(
             }
         } else {
             let trailing = px.trailing_zeros() as usize;
+            let leading = px.leading_zeros() as usize;
             let col_start = col_ix * 8 + trailing;
-            *curr_rle = Some(RunLength { start : (row_ix, col_start), length : (8 - trailing) });
+            // *curr_rle = Some(RunLength { start : (row_ix, col_start), length : (8 - trailing) });
+            let new_rle = RunLength { start : (row_ix, col_start), length : (8 - trailing - leading) };
+
+            let must_push = leading > 0 ||
+                col_ix == max_ix ||
+                row[col_ix+1].trailing_zeros() > 0;
+            if must_push {
+                // RLE starts and ends here: Push it instead of setting as current.
+                rles.push(new_rle);
+            } else {
+                // RLE might continue
+                *curr_rle = Some(new_rle);
+            }
         }
     }
 }
@@ -298,8 +373,8 @@ fn bitonal_encoder() {
     t.time("chain code");*/
 
     // let mut enc = BitEncoder::new(img.height(), img.width());
-    // let mut enc = BitonalEncoder::new(img.height(), img.width());
-    let mut enc = PyrBitonalEncoder::new(img.height(), img.width(), 3);
+    let mut enc = BitonalEncoder::new(img.height(), img.width());
+    // let mut enc = PyrBitonalEncoder::new(img.height(), img.width(), 3);
 
     let mut t = Timer::start();
     let rles = enc.calculate(&img);
@@ -2280,7 +2355,6 @@ impl ChainEncoder {
         let mut open_chains = BumpVecOpen::new_in(&self.bump);
         let mut row_chains = BumpVecOpen::new_in(&self.bump);
 
-
         // Holds indices of open_chains that matched the current row.
         let mut open_matched = bumpalo::collections::Vec::new_in(&self.bump);
 
@@ -3487,6 +3561,24 @@ fn rows_for_sorted_rles(rles : &[RunLength], rows : &mut Vec<Range<usize>>) {
 
 impl RunLengthCode {
 
+    /** Distance between last and first row of this RLE. This is
+    calculated in constant time. RLEs might not be connected.
+    When this RLE is connected, this is the height of the outer
+    rect. Returns None when RLE is empty. **/
+    pub fn height(&self) -> Option<usize> {
+        Some(self.rles.last()?.start.0 - self.rles.first()?.start.0 + 1)
+    }
+
+    pub fn outer_rect(&self) -> Option<(usize, usize, usize, usize)> {
+        let mut rect = self.rles.first()?.as_rect();
+        if self.rles.len() > 1 {
+            for rl in &self.rles[1..] {
+                extend_rect_with_sorted_rle(&mut rect, rl);
+            }
+        }
+        Some(rect)
+    }
+
     pub fn from_sorted(rles : Vec<RunLength>) -> Self {
         let rows = rle_rows_from_sorted(&rles);
         Self { rles, rows }
@@ -3701,7 +3793,7 @@ impl RunLengthCode {
     }
     
     // Find RLEs by bisecting over running sum over rows only (each new row
-    // start at zero, and goess up to 256 at the final column if we are at a u8 image).
+    // start at zero, and goes up to 256 at the final column if we are at a u8 image).
     // Although slower than bisecting over a full accumulated image, since there is still
     // a linear search over rows, this can operate over u8 images directly if the
     // binary image uses 1 to represent foreground values. This fails if any rows
@@ -3945,6 +4037,39 @@ impl RunLengthCode {
 
         RunLengthGraph { graph, uf }
     }
+
+    /// Returns all points from the first and last row
+    /// of points. If the first row is the same as the
+    /// last row, returns all points of this row.
+    pub fn extremal_points(&self) -> Vec<(usize, usize)> {
+        let mut pts = Vec::new();
+        if let Some(top_row) = self.rows.first() {
+            for rle in &self.rles[top_row.clone()] {
+                pts.extend(rle.points());
+            }
+            if let Some(bottom_row) = self.rows.last() {
+                if bottom_row != top_row {
+                    for rle in &self.rles[bottom_row.clone()] {
+                        pts.extend(rle.points());
+                    }
+                }
+            }
+        }
+        pts
+    }
+
+    /// Returns the RLE lateral points (left points occupy even indices,
+    /// right points occupy odd indices).
+    pub fn lateral_points(&self) -> Vec<(usize, usize)> {
+        let mut pts = Vec::new();
+        for r in &self.rles {
+            let (left, right) = r.bounds();
+            pts.push(left);
+            pts.push(right);
+        }
+        pts
+    }
+
 }
 
 // cargo test --lib -- rle_split --nocapture
@@ -4108,6 +4233,26 @@ fn extend_extremities(ps : &mut Vec<(usize, usize)>, i : usize) {
     finished.clear();
 }*/
 
+// If RLEs are in raster order, the TL of the rect is defined by the first
+// rle.as_rect(). The following RLEs might affect the rect only by changes
+// made through this function.
+fn extend_rect_with_sorted_rle(r: &mut (usize, usize, usize, usize), rle : &RunLength) {
+    let intv = rle.interval();
+
+    // Update left
+    if intv.0 < r.1 {
+        r.1 = intv.0;
+    }
+
+    // Update width
+    if intv.1 > r.1+r.3 {
+        r.3 = intv.1 - r.1;
+    }
+
+    // Update height
+    r.2 = (rle.start.0 - r.0);
+}
+
 impl RunLengthGraph {
 
     // Since the graph is in raster order, the index of all labels in the union find distinct
@@ -4218,19 +4363,7 @@ impl RunLengthGraph {
 
                 // Since raster order is preserved as we iterate over graph indices,
                 // only update the sides and the bottom regions of rect.
-                let intv = rle.interval();
-
-                // Update left
-                if intv.0 < r.1 {
-                    r.1 = intv.0;
-                }
-
-                // Update width
-                if intv.1 > r.1+r.3 {
-                    r.3 = intv.1 - r.1;
-                }
-
-                r.2 = (rle.start.0 - r.0);
+                extend_rect_with_sorted_rle(&mut r, &rle);
             } else {
                 rects.insert(parent, rle.as_rect());
             }

@@ -1030,3 +1030,42 @@ where
 
 }
 
+/*
+
+IppStatus ippiFilterBilateralInit(IppiFilterBilateralType filter, IppiSize dstRoiSize,
+int kernelWidthHeight, IppDataType dataType, int numChannels, IppiDistanceMethodType
+distMethod, Ipp64f valSquareSigma, Ipp64f posSquareSigma, IppiFilterBilateralSpec*
+pSpec);
+
+IppStatus ippiFilterBilateralBorderInit(IppiFilterBilateralType filter, IppiSize
+dstRoiSize, int radius, IppDataType dataType, int numChannels, IppiDistanceMethodType
+distMethod, Ipp32f valSquareSigma, Ipp32f posSquareSigma, IppiFilterBilateralSpec*
+pSpec);
+
+ippiFilterBilateralBorder_<mod>(const
+
+IppStatus ippiFilterBoxBorder_<mod>(const Ipp<datatype>* pSrc, int srcStep,
+Ipp<datatype>* pDst, int dstStep, IppiSize roiSize, IppiSize maskSize, IppiBorderType
+border, const Ipp<datatype>* borderValue, Ipp8u* pBuffer);
+
+IppStatus ippiFilterGaussianBorder_<mod>(const Ipp<datatype>* pSrc, int srcStep,
+Ipp<datatype>* pDst, int dstStep, IppiSize roiSize, Ipp<datatype> borderValue,
+IppFilterGaussianSpec* pSpec, Ipp8u* pBuffer);
+
+IppStatus ippiFilterMaxBorderGetBufferSize(IppiSize dstRoiSize, IppiSize maskSize,
+IppDataType dataType, int numChannels, int* pBufferSize);
+
+IppStatus ippiFilterMinBorderGetBufferSize(IppiSize dstRoiSize, IppiSize maskSize,
+IppDataType dataType, int numChannels, int* pBufferSize);
+
+IppStatus ippiFilterMaxBorder_8u_C1R(const Ipp8u* pSrc, int srcStep, Ipp8u* pDst, int
+dstStep, IppiSize dstRoiSize, IppiSize maskSize, IppiBorderType borderType, Ipp8u
+borderValue, Ipp8u* pBuffer);
+
+IppStatus ippiDecimateFilterRow_8u_C1R(const Ipp8u* pSrc, int srcStep, IppiSize
+srcRoiSize, Ipp8u* pDst, int dstStep, IppiFraction fraction);
+
+IppStatus ippiDecimateFilterColumn_8u_C1R(const Ipp8u* pSrc, int srcStep, IppiSize
+srcRoiSize, Ipp8u* pDst, int dstStep, IppiFraction fraction);
+
+*/

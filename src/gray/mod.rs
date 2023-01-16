@@ -156,6 +156,33 @@ where
     S : Storage<u8>
 {
 
+    /* Count pixels in the interval [low, high]. */
+    pub fn count_pixels(&self, low : u8, high : u8) -> u32 {
+
+        #[cfg(feature="ipp")]
+        unsafe {
+            let mut count : i32 = 0;
+            let ans = crate::foreign::ipp::ippi::ippiCountInRange_8u_C1R(
+                self.as_ptr(),
+                self.byte_stride() as i32,
+                self.size().into(),
+                &mut count as *mut _,
+                low,
+                high
+            );
+            assert!(ans == 0);
+            return count as u32;
+        }
+
+        let mut n = 0u32;
+        for px in self.pixels(1) {
+            if *px >= low && *px <= high {
+                n += 1;
+            }
+        }
+        n
+    }
+
     pub fn iter_foreground<'a>(&'a self, fg : Foreground) -> Box<(dyn Iterator<Item=&'a u8> + 'a)> {
         match fg {
             Foreground::Exactly(px) => {
@@ -510,26 +537,6 @@ where
 
 }*/
 
-pub fn count_range(win : &Window<'_, u8>, low : u8, high : u8) -> usize {
-
-    #[cfg(feature="ipp")]
-    unsafe {
-        let (step, sz) = crate::image::ipputils::step_and_size_for_window(win);
-        let mut count : i32 = 0;
-        let ans = crate::foreign::ipp::ippi::ippiCountInRange_8u_C1R(
-            win.as_ptr(),
-            step,
-            sz,
-            &mut count as *mut _,
-            low,
-            high
-        );
-        assert!(ans == 0);
-        return count as usize;
-    }
-
-    unimplemented!()
-}
 
 #[cfg(feature="opencv")]
 pub fn equalize_inplace(win : &mut WindowMut<'_, u8>) {
@@ -676,6 +683,28 @@ impl Truncate for Image<u8> {
     }
 
 }*/
+
+impl<S> Image<i16, S>
+where
+    S : StorageMut<i16>
+{
+
+    pub fn truncate_negative_inplace(&mut self) {
+        let threshold = 0i16;
+        let fg_val = 0i16;
+        unsafe {
+            let ans = crate::foreign::ipp::ippi::ippiThreshold_LTVal_16s_C1IR(
+                self.as_mut_ptr(),
+                self.byte_stride() as i32,
+                self.size().into(),
+                threshold,
+                fg_val,
+            );
+            assert!(ans == 0);
+        }
+    }
+
+}
 
 // If desired operation is inplace, pass None to source and Some(w) to src/dst.
 // Else pass Some(src) and the destination.

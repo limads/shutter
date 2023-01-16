@@ -73,8 +73,8 @@ pub type Size = (usize, usize);
 /// Represents a rectangle via its size and offset.
 pub type Rect = (Coord, Size);
 
-/// Represents a circle via its center and radius.
-pub type Circle = (Coord, usize);
+// Represents a circle via its center and radius.
+// pub type Circle = (Coord, usize);
 
 /* Perhaps use those type wrappers over slice<T> and box<[T]> */
 pub struct Borrowed<'a, T>(&'a [T]);
@@ -330,12 +330,50 @@ impl<P, S> Image<P, S> {
     
 }
 
-impl<P, S> Image<P, S> 
+#[derive(Debug, Clone, Copy)]
+pub enum Flip {
+    Horizontal,
+    Vertical,
+    Both
+}
+
+impl<P, S> Image<P, S>
 where
     S : Storage<P>,
     P : Pixel
 {
     
+    pub fn is_empty(&self) -> bool {
+        self.slice.as_ref().is_empty()
+    }
+
+    pub fn flip_to<T>(&self, flip : Flip, dst : &mut Image<P, T>)
+    where
+        T : StorageMut<P>
+    {
+        #[cfg(feature="ipp")]
+        unsafe {
+            if self.pixel_is::<u8>() {
+                let flip_op = match flip {
+                    Flip::Vertical => crate::foreign::ipp::ippi::IppiAxis_ippAxsVertical,
+                    Flip::Horizontal => crate::foreign::ipp::ippi::IppiAxis_ippAxsHorizontal,
+                    Flip::Both => crate::foreign::ipp::ippi::IppiAxis_ippAxsBoth
+                };
+                let ans = crate::foreign::ipp::ippi::ippiMirror_8u_C1R(
+                    mem::transmute(self.as_ptr()),
+                    self.byte_stride() as i32,
+                    mem::transmute(dst.as_mut_ptr()),
+                    dst.byte_stride() as i32,
+                    self.size().into(),
+                    flip_op
+                );
+                assert!(ans == 0);
+                return;
+            }
+        }
+        unimplemented!()
+    }
+
     pub fn get(&self, index : (usize, usize)) -> Option<&P> {
         if index.0 < self.height() && index.1 < self.width() {
             unsafe { Some(self.get_unchecked(index)) }
@@ -479,6 +517,32 @@ where
         &self[(0usize,0usize)] as *const _
     }
     
+}
+
+impl<P, S> Image<P, S>
+where
+    S : UnsafeStorage<P>,
+    P : Pixel
+{
+
+    pub unsafe fn raw_ptr(&self) -> *const P {
+        // self.slice.as_pointer().as_ptr()
+        unimplemented!()
+    }
+
+}
+
+impl<P, S> Image<P, S>
+where
+    S : UnsafeStorageMut<P>,
+    P : Pixel
+{
+
+    pub unsafe fn raw_mut_ptr(&mut self) -> *mut P {
+        // self.slice.as_mut_pointer().as_mut_ptr()
+        unimplemented!()
+    }
+
 }
 
 /*impl<N, S> Borrow<ImageRef<N>> for Image<S>
@@ -642,6 +706,20 @@ mod storage {
     
     impl<T> Storage<T> for Box<[T]> where T : Pixel { }
 
+    pub trait UnsafeStorage<T> {
+
+        fn as_pointer(&self) -> *const [T];
+
+    }
+
+    impl<T> UnsafeStorage<T> for *const [T] where T : Pixel {
+
+        fn as_pointer(&self) -> *const [T] {
+            *self
+        }
+
+    }
+
 }
 
 mod storage_mut {
@@ -661,6 +739,20 @@ mod storage_mut {
     
     impl<'a, T> StorageMut<T> for Box<[T]> where T : Pixel,
     Box<[T]> : Storage<T> { }
+
+    pub trait UnsafeStorageMut<T> {
+
+        fn as_mut_pointer(&mut self) -> *mut [T];
+
+    }
+
+    impl<T> UnsafeStorageMut<T> for *mut [T] where T : Pixel {
+
+        fn as_mut_pointer(&mut self) -> *mut [T] {
+            *self
+        }
+
+    }
 
 }
 
@@ -750,6 +842,22 @@ where
     N : Pixel 
 {
     
+}
+
+impl<N> ImageBuf<N>
+where
+    N : Pixel,
+    Box<[N]> : Storage<N>
+{
+
+    pub fn to_boxed_slice(self) -> Box<[N]> {
+        self.slice
+    }
+
+    pub fn to_vec(self) -> Vec<N> {
+        self.slice.into()
+    }
+
 }
 
 impl<N> ImageBuf<N>
