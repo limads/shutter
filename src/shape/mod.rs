@@ -2103,6 +2103,9 @@ fn vertex_opening() {
     // println!("{:?}", vertex_angle((1, 0), (0, 1), (1, 2)));
 }
 
+// TODO polygon contains line
+// https://www.geeksforgeeks.org/how-to-check-if-a-given-point-lies-inside-a-polygon/
+
 /// Calculate line intersection
 /// Reference https://mathworld.wolfram.com/Line-LineIntersection.html
 /// m1 = [x1 y1; x2 y2]
@@ -2923,6 +2926,10 @@ impl Circle {
         let ptsf : Vec<Vector2<f32>> = pts.iter().map(|pt| Vector2::new(pt.1 as f32, (img_height - pt.0) as f32) ).collect();
         let n = ptsf.len() as f32;
         ptsf.iter().fold(0.0, |acc, pt| acc + ((pt - &self.center).magnitude() - self.radius).powf(2.)  ) / n
+    }
+
+    pub fn circumference_at(&self, deg_rad : f32) -> Vector2<f32> {
+       self.center.clone() + (Vector2::new(deg_rad.cos(), deg_rad.sin()) * self.radius)
     }
 
 }

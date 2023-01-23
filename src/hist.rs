@@ -267,7 +267,7 @@ impl GrayHistogram {
         let mut p = 0.0;
         let mut ix = 0;
         let sum = self.sum as f64;
-        while p < q {
+        while p < q && ix < 255 {
             p += self.hist[ix] as f64 / sum;
             ix += 1;
         }
@@ -361,6 +361,7 @@ impl GrayHistogram {
 
 }
 
+#[derive(Clone, Debug)]
 #[cfg(feature="ipp")]
 pub struct IppHistogram {
     spec : Vec<u8>,
@@ -371,6 +372,17 @@ pub struct IppHistogram {
 
 #[cfg(feature="ipp")]
 impl IppHistogram {
+
+    pub fn quantile(&self, q : f64) -> u8 {
+        let mut p = 0.0;
+        let mut ix = 0;
+        let sum = self.sum as f64;
+        while p < q && ix < 255 {
+            p += self.hist[ix] as f64 / sum;
+            ix += 1;
+        }
+        ix as u8
+    }
 
     pub fn accumulate_inplace(&mut self) {
         for i in 1..256 {

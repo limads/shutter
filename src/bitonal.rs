@@ -66,6 +66,31 @@ impl BitonalImage {
         }
     }
 
+    pub fn to_binary<T>(&self, dst : &mut Image<u8, T>)
+    where
+        T : StorageMut<u8>
+    {
+        assert!(dst.width() % 8 == 0);
+        assert!(self.0.height() == dst.height());
+        assert!(self.0.width() == dst.width() / 8);
+        let src_bit_offset = 0;
+        let low_val : u8 = 0;
+        let high_val : u8 = 255;
+        unsafe {
+            let ans = crate::foreign::ipp::ippi::ippiBinToGray_1u8u_C1R(
+                self.0.as_ptr(),
+                self.0.byte_stride() as i32,
+                src_bit_offset,
+                dst.as_mut_ptr(),
+                dst.byte_stride() as i32,
+                dst.size().into(),
+                low_val,
+                high_val
+            );
+            assert!(ans == 0);
+        }
+    }
+
 }
 
 

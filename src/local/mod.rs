@@ -649,12 +649,155 @@ pub struct AvgPool {
 
 }
 
-pub fn local_min(src : Window<'_, u8>, dst : WindowMut<'_, u8>, kernel_sz : usize) -> ImageBuf<u8> {
-    unimplemented!()
+#[cfg(feature="ipp")]
+#[derive(Debug, Clone)]
+pub struct IppiFilterBox {
+    buf : Vec<u8>,
+    mask_sz : (usize, usize)
 }
 
-pub fn local_max(src : Window<'_, u8>, dst : WindowMut<'_, u8>, kernel_sz : usize) -> ImageBuf<u8> {
-    unimplemented!()
+#[cfg(feature="ipp")]
+impl IppiFilterBox {
+
+    pub fn new(height : usize, width : usize, mask_sz : (usize, usize)) -> Self {
+        let dst_size = crate::foreign::ipp::ippi::IppiSize::from((height, width));
+        let mask_size = crate::foreign::ipp::ippi::IppiSize::from(mask_sz);
+        let num_channels = 1;
+        let data_ty = crate::foreign::ipp::ippi::IppDataType_ipp8u;
+        let mut buf_sz = 0;
+        unsafe {
+            let ans = crate::foreign::ipp::ippi::ippiFilterBoxBorderGetBufferSize(
+                dst_size,
+                mask_size,
+                data_ty,
+                num_channels,
+                &mut buf_sz as *mut _
+            );
+            assert!(buf_sz > 0);
+            assert!(ans == 0);
+            let mut buf = Vec::<u8>::with_capacity(buf_sz as usize);
+            buf.set_len(buf_sz as usize);
+            Self { buf, mask_sz }
+        }
+    }
+
+    pub fn apply<S, T>(&mut self, src : &Image<u8, S>, dst : &mut Image<u8, T>)
+    where
+        S : Storage<u8>,
+        T : StorageMut<u8>
+    {
+        let border_val : u8 = 0;
+        let border_ty = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderConst;
+        // let border_ty = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderRepl;
+        unsafe {
+            let ans = crate::foreign::ipp::ippi::ippiFilterBoxBorder_8u_C1R(
+                src.as_ptr(),
+                src.byte_stride() as i32,
+                dst.as_mut_ptr(),
+                dst.byte_stride() as i32,
+                dst.size().into(),
+                self.mask_sz.into(),
+                border_ty,
+                &border_val as *const _,
+                self.buf.as_mut_ptr() as *mut _
+            );
+            assert!(ans == 0);
+        }
+    }
+
+}
+
+#[cfg(feature="ipp")]
+#[derive(Debug, Clone)]
+pub struct IppiFilterMinMax {
+    buf : Vec<u8>,
+    mask_sz : (usize, usize),
+    is_min : bool
+}
+
+#[cfg(feature="ipp")]
+impl IppiFilterMinMax {
+
+    pub fn new(height : usize, width : usize, mask_sz : (usize, usize), is_min : bool) -> Self {
+        let dst_size = crate::foreign::ipp::ippi::IppiSize::from((height, width));
+        let mask_size = crate::foreign::ipp::ippi::IppiSize::from(mask_sz);
+        let num_channels = 1;
+        let data_ty = crate::foreign::ipp::ippi::IppDataType_ipp8u;
+        let mut buf_sz = 0;
+        unsafe {
+            let ans = if is_min {
+                crate::foreign::ipp::ippi::ippiFilterMinBorderGetBufferSize(
+                    dst_size,
+                    mask_size,
+                    data_ty,
+                    num_channels,
+                    &mut buf_sz as *mut _
+                )
+            } else {
+                crate::foreign::ipp::ippi::ippiFilterMaxBorderGetBufferSize(
+                    dst_size,
+                    mask_size,
+                    data_ty,
+                    num_channels,
+                    &mut buf_sz as *mut _
+                )
+            };
+            assert!(buf_sz > 0);
+            assert!(ans == 0);
+            let mut buf = Vec::<u8>::with_capacity(buf_sz as usize);
+            buf.set_len(buf_sz as usize);
+            Self { buf, mask_sz, is_min }
+        }
+    }
+
+    pub fn apply<S, T>(&mut self, src : &Image<u8, S>, dst : &mut Image<u8, T>)
+    where
+        S : Storage<u8>,
+        T : StorageMut<u8>
+    {
+        let border_val : u8 = 0;
+        // let border_ty = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderConst;
+        let border_ty = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderRepl;
+        unsafe {
+            let ans = if self.is_min {
+                crate::foreign::ipp::ippi::ippiFilterMinBorder_8u_C1R(
+                    src.as_ptr(),
+                    src.byte_stride() as i32,
+                    dst.as_mut_ptr(),
+                    dst.byte_stride() as i32,
+                    dst.size().into(),
+                    self.mask_sz.into(),
+                    border_ty,
+                    border_val,
+                    self.buf.as_mut_ptr() as *mut _
+                )
+            } else {
+                crate::foreign::ipp::ippi::ippiFilterMaxBorder_8u_C1R(
+                    src.as_ptr(),
+                    src.byte_stride() as i32,
+                    dst.as_mut_ptr(),
+                    dst.byte_stride() as i32,
+                    dst.size().into(),
+                    self.mask_sz.into(),
+                    border_ty,
+                    border_val,
+                    self.buf.as_mut_ptr() as *mut _
+                )
+            };
+            assert!(ans == 0);
+        }
+    }
+
+}
+
+#[cfg(feature="ipp")]
+pub fn local_min_filter(src : &Window<'_, u8>, dst : &mut WindowMut<'_, u8>, kernel_sz : (usize, usize)) {
+    IppiFilterMinMax::new(src.height(), src.width(), kernel_sz, true).apply(src, dst);
+}
+
+#[cfg(feature="ipp")]
+pub fn local_max_filter(src : &Window<'_, u8>, dst : &mut WindowMut<'_, u8>, kernel_sz : (usize, usize)) {
+    IppiFilterMinMax::new(src.height(), src.width(), kernel_sz, false).apply(src, dst);
 }
 
 /* cv2::sepFilter2D */
@@ -692,7 +835,8 @@ pub fn median_filter(src : &Window<u8>, dst : &mut WindowMut<u8>, mask_sz : usiz
 
         let anchor = crate::foreign::ipp::ippi::IppiPoint { x : mask_sz.width/2, y : mask_sz.height/2 };
         let border_val = 0;
-        let border_ty = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderConst;
+        // let border_ty = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderConst;
+        let border_ty = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderRepl;
         let ans = crate::foreign::ipp::ippi::ippiFilterMedianBorder_8u_C1R(
             src.as_ptr(),
             src_step,
@@ -711,12 +855,164 @@ pub fn median_filter(src : &Window<u8>, dst : &mut WindowMut<u8>, mask_sz : usiz
     unimplemented!()
 }
 
-/*IppStatus ippiFilterBilateral_<mod>(const Ipp<srcdatatype>* pSrc, int srcStep,
-Ipp<dstdatatype>* pDst, int dstStep, IppiSize dstRoiSize, IppiBorderType borderType,
-const Ipp<datatype> pBorderValue[1], const IppiFilterBilateralSpec* pSpec, Ipp8u*
-pBuffer );
+#[cfg(feature="ipp")]
+pub struct IppiFilterGauss {
+    spec : Vec<u8>,
+    buffer : Vec<u8>
+}
 
-IppStatus ippiFilterBox_64f_C1R(const Ipp<datatype>* pSrc, int srcStep, Ipp<datatype>*
+#[cfg(feature="ipp")]
+impl IppiFilterGauss {
+
+    // range_sq: Smooth based on pixel intensity difference
+    // geom_sq : Smooth based on distance between pixels.
+    pub fn new(height : usize, width : usize, kernel_side : usize, sigma : f32) -> Self {
+        let mut buf_sz : i32 = 0;
+        let mut spec_sz : i32 = 0;
+        let num_channels = 1;
+        let data_ty = crate::foreign::ipp::ippi::IppDataType_ipp8u;
+        unsafe {
+            let ans = crate::foreign::ipp::ippcv::ippiFilterGaussianGetBufferSize(
+                (height, width).into(),
+                kernel_side as u32,
+                data_ty,
+                num_channels,
+                &mut spec_sz as *mut _,
+                &mut buf_sz as *mut _,
+            );
+            assert!(ans == 0);
+            assert!(spec_sz > 0);
+            assert!(buf_sz > 0);
+            let mut buffer = Vec::<u8>::with_capacity(buf_sz as usize);
+            buffer.set_len(buf_sz as usize);
+            let mut spec = Vec::<u8>::with_capacity(spec_sz as usize);
+            spec.set_len(spec_sz as usize);
+            let border_val : u8 = 0;
+            let border_ty = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderConst;
+            let ans = crate::foreign::ipp::ippcv::ippiFilterGaussianInit(
+                (height, width).into(),
+                kernel_side as u32,
+                sigma,
+                border_ty,
+                data_ty,
+                num_channels,
+                spec.as_mut_ptr() as *mut _,
+                buffer.as_mut_ptr() as *mut _
+            );
+            assert!(ans == 0);
+            Self { spec, buffer }
+        }
+    }
+
+    pub fn apply<S, T>(&mut self, src : &Image<u8, S>, dst : &mut Image<u8, T>)
+    where
+        S : Storage<u8>,
+        T : StorageMut<u8>
+    {
+        unsafe {
+            let border_val : u8 = 0;
+            let border_ty = crate::foreign::ipp::ippcv::_IppiBorderType_ippBorderConst;
+            let ans = crate::foreign::ipp::ippcv::ippiFilterGaussianBorder_8u_C1R(
+                src.as_ptr(),
+                src.byte_stride() as i32,
+                dst.as_mut_ptr(),
+                dst.byte_stride() as i32,
+                src.size().into(),
+                border_val,
+                self.spec.as_mut_ptr() as *mut _,
+                self.buffer.as_mut_ptr() as *mut _
+            );
+            assert!(ans == 0);
+        }
+    }
+
+}
+
+
+#[cfg(feature="ipp")]
+pub struct IppiFilterBilateral {
+    spec : Vec<u8>,
+    buffer : Vec<u8>
+}
+
+#[cfg(feature="ipp")]
+impl IppiFilterBilateral {
+
+    // range_sq: Smooth based on pixel intensity difference
+    // geom_sq : Smooth based on distance between pixels.
+    pub fn new(height : usize, width : usize, kernel_side : usize, range_sq : f64, geom_sq : f64) -> Self {
+        // let filt_ty = crate::foreign::ipp::ippi::IppiFilterBilateralType_ippiFilterBilateralGaussFast;
+        let filt_ty = crate::foreign::ipp::ippi::IppiFilterBilateralType_ippiFilterBilateralGauss;
+        let mut buf_sz : i32 = 0;
+        let mut spec_sz : i32 = 0;
+        let num_channels = 1;
+        let data_ty = crate::foreign::ipp::ippi::IppDataType_ipp8u;
+        let dst_size = crate::foreign::ipp::ippi::IppiSize::from((height, width));
+        let dist_method = crate::foreign::ipp::ippi::IppiDistanceMethodType_ippDistNormL1;
+        unsafe {
+            let ans = crate::foreign::ipp::ippi::ippiFilterBilateralGetBufferSize(
+                filt_ty,
+                dst_size,
+                kernel_side as i32,
+                data_ty,
+                num_channels,
+                dist_method,
+                &mut spec_sz as *mut _,
+                &mut buf_sz as *mut _,
+            );
+            assert!(ans == 0);
+            assert!(spec_sz > 0);
+            assert!(buf_sz > 0);
+            let mut buffer = Vec::<u8>::with_capacity(buf_sz as usize);
+            buffer.set_len(buf_sz as usize);
+            let mut spec = Vec::<u8>::with_capacity(spec_sz as usize);
+            spec.set_len(spec_sz as usize);
+            let ans = crate::foreign::ipp::ippi::ippiFilterBilateralInit(
+                filt_ty,
+                dst_size,
+                kernel_side as i32,
+                data_ty,
+                num_channels,
+                dist_method,
+                range_sq,
+                geom_sq,
+                spec.as_mut_ptr() as *mut _
+            );
+            assert!(ans == 0);
+            Self { spec, buffer }
+        }
+    }
+
+    pub fn apply<S, T>(&mut self, src : &Image<u8, S>, dst : &mut Image<u8, T>)
+    where
+        S : Storage<u8>,
+        T : StorageMut<u8>
+    {
+        unsafe {
+            let border_val : u8 = 0;
+            let border_ty = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderConst;
+            let ans = crate::foreign::ipp::ippi::ippiFilterBilateral_8u_C1R(
+                src.as_ptr(),
+                src.byte_stride() as i32,
+                dst.as_mut_ptr(),
+                dst.byte_stride() as i32,
+                src.size().into(),
+                border_ty,
+                &border_val as *const _,
+                self.spec.as_mut_ptr() as *mut _,
+                self.buffer.as_mut_ptr() as *mut _
+            );
+            assert!(ans == 0);
+        }
+    }
+
+}
+
+pub fn bilateral_filter(src : &Window<u8>, dst : &mut WindowMut<u8>, mask_sz : usize) {
+    IppiFilterBilateral::new(src.height(), src.width(), mask_sz, 1.0, 1.0).apply(src, dst);
+}
+
+/*IppStatus ippiFilterBox_64f_C1R(const Ipp<datatype>* pSrc, int srcStep, Ipp<datatype>*
 pDst, int dstStep, IppiSize dstRoiSize, IppiSize maskSize, IppiPoint anchor );
 
 IppStatus ippiFilterSeparable_<mod>(const Ipp<datatype>* pSrc, int srcStep,

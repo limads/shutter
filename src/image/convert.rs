@@ -16,6 +16,23 @@ use std::mem;
 use num_traits::Signed;
 use std::ops::Sub;
 
+pub use base::*;
+
+pub use mul::*;
+
+pub use abs::*;
+
+/*
+Integer <-> Float conversion is done by the mul_convert and div_convert
+methods. mul_convert maps [-1.0-1.0] or [0.0-1.0] to [Integer::Min-Integer::MAX].
+
+There is also norm_max_convert that maps integers to floats in [0.0-1.0].
+
+Unsigned Integer <-> Signed integer conversion is done by the abs_convert methods.
+
+Signed integer <-> Float conversion is one by the convert_to methods.
+*/
+
 impl<P, S> Image<P, S>
 where
     P : Pixel,
@@ -1370,7 +1387,13 @@ where
                 _ => unimplemented!()
             }
         } else if dst.pixel_is::<f32>() {
-            return false;
+            status = Some(crate::foreign::ipp::ippi::ippiConvert_32s32f_C1R(
+                src_ptr as *const i32,
+                src_step,
+                dst_ptr as *mut f32,
+                dst_step,
+                size
+            ));
         } else {
             return false;
         }

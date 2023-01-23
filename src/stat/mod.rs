@@ -144,6 +144,7 @@ where
     {
         let (step, roi) = crate::image::ipputils::step_and_size_for_image(self);
         unsafe {
+            // No option for i32.
             match self.depth() {
                 Depth::U8 => {
                     let (mut min, mut max) = (0u8, 0u8);

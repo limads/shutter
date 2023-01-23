@@ -1824,4 +1824,126 @@ where
     img.scalar_sub_mut(254);
 }
 
+// Output: px > (local avg - delta)
+#[cfg(feature="ipp")]
+#[derive(Debug, Clone)]
+pub struct IppiThrAdaptBox {
+    buffer : Vec<u8>,
+    mask : (usize, usize),
+    delta : f32
+}
 
+#[cfg(feature="ipp")]
+impl IppiThrAdaptBox {
+
+    pub fn new(height : usize, width : usize, mask_side : usize, delta : f32) -> Self {
+        let data_ty = crate::foreign::ipp::ippi::IppDataType_ipp8u;
+        let n_channels = 1;
+        let mut buf_sz = 0;
+        assert!(mask_side % 2 != 0);
+        let mask = (mask_side, mask_side);
+        unsafe {
+            let status = crate::foreign::ipp::ippi::ippiThresholdAdaptiveBoxGetBufferSize(
+                (height, width).into(),
+                mask.into(),
+                data_ty,
+                n_channels,
+                &mut buf_sz as *mut _
+            );
+            assert!(status == 0);
+            assert!(buf_sz > 0);
+            let mut buffer = Vec::with_capacity(buf_sz as usize);
+            buffer.set_len(buf_sz as usize);
+            Self { buffer, mask, delta }
+        }
+    }
+
+    pub fn apply<S, T>(&mut self, img : &Image<u8, S>, dst : &mut Image<u8, T>)
+    where
+        S : Storage<u8>,
+        T : StorageMut<u8>
+    {
+        let border_val : u8 = 0;
+        // let border_ty = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderConst;
+        let border_ty = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderRepl;
+        let val_gt = 255;
+        let val_le = 0;
+        unsafe {
+            let status = crate::foreign::ipp::ippi::ippiThresholdAdaptiveBox_8u_C1R(
+                img.as_ptr(),
+                img.byte_stride() as i32,
+                dst.as_mut_ptr(),
+                dst.byte_stride() as i32,
+                img.size().into(),
+                self.mask.into(),
+                self.delta,
+                val_gt,
+                val_le,
+                border_ty,
+                border_val,
+                self.buffer.as_mut_ptr()
+            );
+            assert!(status == 0);
+        }
+    }
+}
+
+#[cfg(feature="ipp")]
+#[derive(Debug, Clone)]
+pub struct IppiSAD {
+    buffer : Vec<u8>
+}
+
+#[cfg(feature="ipp")]
+impl IppiSAD {
+
+    pub fn new(img_sz : (usize, usize), templ_sz : (usize, usize)) -> Self {
+        let data_ty = crate::foreign::ipp::ippi::IppDataType_ipp8u;
+        let num_channels = 1;
+        let roi_shape = crate::foreign::ipp::ippi::IppiROIShape_ippiROIValid;
+        unsafe {
+            let mut buf_sz = 0;
+            let status = crate::foreign::ipp::ippi::ippiSADGetBufferSize(
+                img_sz.into(),
+                templ_sz.into(),
+                data_ty,
+                num_channels,
+                roi_shape,
+                &mut buf_sz as *mut _
+            );
+            assert!(status == 0);
+            // assert!(buf_sz > 0);
+            let mut buffer = Vec::with_capacity(buf_sz as usize);
+            buffer.set_len(buf_sz as usize);
+            Self { buffer }
+        }
+    }
+
+    pub fn calculate<R, S, T>(&mut self, src : &Image<u8, R>, template : &Image<u8, S>, dst : &mut Image<i32, T>)
+    where
+        R : Storage<u8>,
+        S : Storage<u8>,
+        T : StorageMut<i32>
+    {
+        let roi_shape = crate::foreign::ipp::ippi::IppiROIShape_ippiROIValid;
+        let scale = 1;
+        assert!(dst.height() == src.height() - template.height() + 1);
+        assert!(dst.width() == src.width() - template.width() + 1);
+        unsafe {
+            let status = crate::foreign::ipp::ippi::ippiSAD_8u32s_C1RSfs(
+                src.as_ptr(),
+                src.byte_stride() as i32,
+                src.size().into(),
+                template.as_ptr(),
+                template.byte_stride() as i32,
+                template.size().into(),
+                dst.as_mut_ptr(),
+                dst.byte_stride() as i32,
+                roi_shape,
+                scale,
+                self.buffer.as_mut_ptr()
+            );
+            assert!(status == 0);
+        }
+    }
+}

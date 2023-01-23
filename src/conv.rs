@@ -1052,16 +1052,6 @@ IppStatus ippiFilterGaussianBorder_<mod>(const Ipp<datatype>* pSrc, int srcStep,
 Ipp<datatype>* pDst, int dstStep, IppiSize roiSize, Ipp<datatype> borderValue,
 IppFilterGaussianSpec* pSpec, Ipp8u* pBuffer);
 
-IppStatus ippiFilterMaxBorderGetBufferSize(IppiSize dstRoiSize, IppiSize maskSize,
-IppDataType dataType, int numChannels, int* pBufferSize);
-
-IppStatus ippiFilterMinBorderGetBufferSize(IppiSize dstRoiSize, IppiSize maskSize,
-IppDataType dataType, int numChannels, int* pBufferSize);
-
-IppStatus ippiFilterMaxBorder_8u_C1R(const Ipp8u* pSrc, int srcStep, Ipp8u* pDst, int
-dstStep, IppiSize dstRoiSize, IppiSize maskSize, IppiBorderType borderType, Ipp8u
-borderValue, Ipp8u* pBuffer);
-
 IppStatus ippiDecimateFilterRow_8u_C1R(const Ipp8u* pSrc, int srcStep, IppiSize
 srcRoiSize, Ipp8u* pDst, int dstStep, IppiFraction fraction);
 

@@ -252,6 +252,10 @@ pub struct BitonalEncoder {
 
 impl BitonalEncoder {
 
+    pub fn bitonal_image(&self) -> &BitonalImage {
+        &self.bit_img
+    }
+
     pub fn new(height : usize, width : usize) -> Self {
         Self { bit_img : BitonalImage::new(height, width / 8) }
     }
@@ -4070,6 +4074,16 @@ impl RunLengthCode {
         pts
     }
 
+    // Total area represented by the RunLength (sum of all lengths).
+    // Calculated in linear time.
+    pub fn area(&self) -> usize {
+        self.rles.iter().fold(0, |area, rle| area + rle.length )
+    }
+
+    // pub fn hole_area(&self) -> usize {
+    //
+    // }
+
 }
 
 // cargo test --lib -- rle_split --nocapture
@@ -4241,12 +4255,14 @@ fn extend_rect_with_sorted_rle(r: &mut (usize, usize, usize, usize), rle : &RunL
 
     // Update left
     if intv.0 < r.1 {
+        r.3 = (r.1 + r.3) - intv.0;
         r.1 = intv.0;
     }
 
     // Update width
-    if intv.1 > r.1+r.3 {
-        r.3 = intv.1 - r.1;
+    let dist_left = intv.1 - r.1;
+    if dist_left > r.3 {
+        r.3 = dist_left;
     }
 
     // Update height
@@ -4568,7 +4584,7 @@ pub struct RectEncoder {
 
 }
 
-pub enum Region {
+pub enum RegionCompleteness {
 
     // A dense region (rect).
     Complete((usize, usize, usize, usize)),
@@ -4580,7 +4596,7 @@ pub enum Region {
 
 pub struct RegionEncoding {
 
-    graph : UnGraph<Region, ()>
+    graph : UnGraph<RegionCompleteness, ()>
 
 }
 

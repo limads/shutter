@@ -59,6 +59,27 @@ where
         unimplemented!()
     }
 
+    /*pub fn scalar_abs_diff_to<T>(&self, by : P, dst : &mut Image<u8, T>)
+    where
+        T : StorageMut<u8>
+    {
+        unsafe {
+            if self.pixel_is::<u8>() {
+                let ans = crate::foreign::ipp::ippcv::ippiAbsDiffC_8u_C1R(
+                    mem::transmute(self.as_ptr()),
+                    self.byte_stride() as i32,
+                    mem::transmute(dst.full_window_mut().as_mut_ptr()),
+                    dst.byte_stride() as i32,
+                    self.size.into(),
+                    *mem::transmute::<_, &u8>(&by)
+                );
+                assert!(ans == 0);
+                return;
+            }
+        }
+        unimplemented!()
+    }*/
+
     pub fn scalar_abs_diff_mut(&mut self, by : P) {
 
         #[cfg(feature="ipp")]
@@ -67,6 +88,7 @@ where
             let mut dst = self.clone_owned();
             let (byte_stride, roi) = crate::image::ipputils::step_and_size_for_image(self);
             let (dst_byte_stride, dst_roi) = crate::image::ipputils::step_and_size_for_image(&dst.full_window_mut());
+
             if self.pixel_is::<f32>() {
                 let ans = crate::foreign::ipp::ippcv::ippiAbsDiffC_32f_C1R(
                     mem::transmute(self.as_ptr()),
