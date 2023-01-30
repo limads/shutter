@@ -85,20 +85,33 @@ pub trait MulTo { }
 unsafe fn ippi_compare_to<P, S, T, U>(
     a : &Image<P, S>,
     b : &Image<P, T>,
-    dst : &mut Image<P, U>,
+    dst : &mut Image<u8, U>,
     op : crate::foreign::ipp::ippi::IppCmpOp
 ) -> bool
 where
     P : Pixel,
     S : Storage<P>,
     T : Storage<P>,
-    U : StorageMut<P>
+    U : StorageMut<u8>
 {
+    let (a_stride, a_roi) = crate::image::ipputils::step_and_size_for_image(a);
+    let (b_stride, b_roi) = crate::image::ipputils::step_and_size_for_image(b);
+    let (dst_stride, dst_roi) = crate::image::ipputils::step_and_size_for_image(dst);
     if a.pixel_is::<u8>() {
-        let (a_stride, a_roi) = crate::image::ipputils::step_and_size_for_image(a);
-        let (b_stride, b_roi) = crate::image::ipputils::step_and_size_for_image(b);
-        let (dst_stride, dst_roi) = crate::image::ipputils::step_and_size_for_image(dst);
         let ans = crate::foreign::ipp::ippi::ippiCompare_8u_C1R(
+            mem::transmute(a.as_ptr()),
+            a_stride,
+            mem::transmute(b.as_ptr()),
+            b_stride,
+            mem::transmute(dst.as_mut_ptr()),
+            dst_stride,
+            a_roi,
+            op
+        );
+        assert!(ans == 0);
+        return true;
+    } else if a.pixel_is::<u16>() {
+        let ans = crate::foreign::ipp::ippi::ippiCompare_16u_C1R(
             mem::transmute(a.as_ptr()),
             a_stride,
             mem::transmute(b.as_ptr()),
@@ -121,10 +134,10 @@ where
 {
 
     // a < b ? 255 else 0
-    pub fn is_smaller_to<T, U>(&self, b : &Image<P, T>, dst : &mut Image<P, U>) 
+    pub fn is_smaller_to<T, U>(&self, b : &Image<P, T>, dst : &mut Image<u8, U>)
     where
         T : Storage<P>,
-        U : StorageMut<P>
+        U : StorageMut<u8>
     {
 
         #[cfg(feature="ipp")]
@@ -134,16 +147,24 @@ where
             }
         }
 
-        unimplemented!()
+        self.pixels(1).zip(b.pixels(1)).zip(dst.pixels_mut(1))
+            .for_each(|((a, b), dst)| if *a < *b { *dst = 255 } else { *dst = 0 });
     }
 
     // a > b ? 255 else 0
-    pub fn is_greater_to<T, U>(&self, b : &Image<P, T>, dst : &mut Image<P, U>)
+    pub fn is_greater_to<T, U>(&self, b : &Image<P, T>, dst : &mut Image<u8, U>)
     where
         T : Storage<P>,
-        U : StorageMut<P>
+        U : StorageMut<u8>
     {
+        #[cfg(feature="ipp")]
+        unsafe {
+            if ippi_compare_to(self, b, dst, crate::foreign::ipp::ippi::IppCmpOp_ippCmpGreater) {
+                return;
+            }
+        }
 
+        unimplemented!()
     }
 
     // a > b ? a else b
@@ -369,6 +390,23 @@ where
         let (rhs_stride, rhs_roi) = crate::image::ipputils::step_and_size_for_image(rhs);
         let (dst_stride, dst_roi) = crate::image::ipputils::step_and_size_for_image(dst);
         unsafe {
+
+            let scale_factor = 0;
+            if lhs.pixel_is::<u8>() {
+                let ans = crate::foreign::ipp::ippi::ippiAdd_8u_C1RSfs(
+                    mem::transmute(lhs.as_ptr()),
+                    lhs_stride,
+                    mem::transmute(rhs.as_ptr()),
+                    rhs_stride,
+                    mem::transmute(dst.as_mut_ptr()),
+                    dst_stride,
+                    lhs_roi,
+                    scale_factor
+                );
+                assert!(ans == 0);
+                return;
+            }
+
             if lhs.pixel_is::<f32>() {
                 let ans = crate::foreign::ipp::ippi::ippiAdd_32f_C1R(
                     mem::transmute(lhs.as_ptr()),

@@ -135,7 +135,77 @@ mod base {
         
     }
 
-    /* Bidirectional float to signed implementations */ 
+    /* Truncating unsigned to unsigned conversion */
+    impl<S, T> Convert<Image<u8, T>> for Image<u16, S>
+    where
+        S : Storage<u16>,
+        T : StorageMut<u8>,
+    {
+
+        fn convert_to(&self, dst : &mut Image<u8, T>) {
+            convert_to(self, dst);
+        }
+
+    }
+    impl<S, T> Convert<Image<u8, T>> for Image<u32, S>
+    where
+        S : Storage<u32>,
+        T : StorageMut<u8>,
+    {
+
+        fn convert_to(&self, dst : &mut Image<u8, T>) {
+            convert_to(self, dst);
+        }
+
+    }
+    impl<S, T> Convert<Image<u16, T>> for Image<u32, S>
+    where
+        S : Storage<u32>,
+        T : StorageMut<u16>,
+    {
+
+        fn convert_to(&self, dst : &mut Image<u16, T>) {
+            convert_to(self, dst);
+        }
+
+    }
+
+    /* Preserving unsigned to unsigned conversion */
+    impl<S, T> Convert<Image<u16, T>> for Image<u8, S>
+    where
+        S : Storage<u8>,
+        T : StorageMut<u16>,
+    {
+
+        fn convert_to(&self, dst : &mut Image<u16, T>) {
+            convert_to(self, dst);
+        }
+
+    }
+    impl<S, T> Convert<Image<u32, T>> for Image<u8, S>
+    where
+        S : Storage<u8>,
+        T : StorageMut<u32>,
+    {
+
+        fn convert_to(&self, dst : &mut Image<u32, T>) {
+            convert_to(self, dst);
+        }
+
+    }
+    impl<S, T> Convert<Image<u32, T>> for Image<u16, S>
+    where
+        S : Storage<u16>,
+        T : StorageMut<u32>,
+    {
+
+        fn convert_to(&self, dst : &mut Image<u32, T>) {
+            convert_to(self, dst);
+        }
+
+    }
+
+    /* Bidirectional float to signed implementations */
     
     // f32 -> i32
     impl<S, T> Convert<Image<f32, T>> for Image<i32, S> 
@@ -261,8 +331,8 @@ mod base {
                 return;
             } 
         }
-        // b.pixels_mut(1).zip(a.pixels(1)).for_each(|(dst, src)| *dst = src.as_() );
-        unimplemented!()
+        b.pixels_mut(1).zip(a.pixels(1)).for_each(|(dst, src)| *dst = src.as_() );
+        // unimplemented!()
     }
 
 }
@@ -1198,8 +1268,40 @@ where
                     return false;
                 }
             }
+        } else if dst.pixel_is::<u16>() {
+            match conv {
+                Conversion::Preserve => {
+                     status = Some(crate::foreign::ipp::ippi::ippiConvert_8u16u_C1R(
+                        src_ptr as *const u8,
+                        src_step,
+                        dst_ptr as *mut u16,
+                        dst_step,
+                        size
+                    ));
+                },
+                _ => {
+                    return false;
+                }
+            }
         } else {
             return false;
+        }
+    }
+
+    if src.pixel_is::<u16>() {
+        if dst.pixel_is::<u8>() {
+            match conv {
+                Conversion::Preserve => {
+                     status = Some(crate::foreign::ipp::ippi::ippiConvert_16u8u_C1R(
+                        src_ptr as *const u16,
+                        src_step,
+                        dst_ptr as *mut u8,
+                        dst_step,
+                        size
+                    ));
+                },
+                _ => { return false; }
+            }
         }
     }
 
@@ -1394,6 +1496,28 @@ where
                 dst_step,
                 size
             ));
+        } else {
+            return false;
+        }
+    }
+
+    if src.pixel_is::<u32>() {
+        if dst.pixel_is::<u16>() {
+            let scale = 0;
+            match conv {
+                Conversion::Preserve => {
+                    status = Some(crate::foreign::ipp::ippi::ippiConvert_32u16u_C1RSfs(
+                        src_ptr as *const u32,
+                        src_step,
+                        dst_ptr as *mut u16,
+                        dst_step,
+                        size,
+                        crate::foreign::ipp::ippcore::IppRoundMode_ippRndNear,
+                        scale
+                    ));
+                },
+                _ => { return false; }
+            }
         } else {
             return false;
         }

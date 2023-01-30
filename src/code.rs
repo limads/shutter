@@ -4066,10 +4066,11 @@ impl RunLengthCode {
     /// right points occupy odd indices).
     pub fn lateral_points(&self) -> Vec<(usize, usize)> {
         let mut pts = Vec::new();
-        for r in &self.rles {
-            let (left, right) = r.bounds();
-            pts.push(left);
-            pts.push(right);
+        for row in &self.rows {
+            if let (Some(fst), Some(lst)) = (self.rles[row.clone()].first(), self.rles[row.clone()].last()) {
+                pts.push(fst.start);
+                pts.push(lst.end());
+            }
         }
         pts
     }

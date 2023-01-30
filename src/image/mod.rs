@@ -176,6 +176,14 @@ impl Pixel for f32 {
     
 }
 
+impl Pixel for u32 {
+
+    fn depth() -> Depth {
+        Depth::U32
+    }
+
+}
+
 /*impl Pixel for Complex<f32> {
 
     fn depth() -> Depth {
@@ -208,13 +216,7 @@ impl BinaryPixel for bool {
 pixel buffer. The pixel buffer should always implement Pixels. 
 If the buffer is mutable (&mut [P]) or AsMut<[P]>, it will also
 implement PixelsMut. */
-pub struct Image<P, S> 
-//where
-//    P : Pixel,
- //   S : Storage<P>
- //where
- //   S : AsRef<[P]>
-{
+pub struct Image<P, S> {
     offset : Coord,
     sz : Size,
     width : usize,
@@ -778,6 +780,7 @@ pub enum Depth {
     U16,
     I16,
     I32,
+    U32,
     F32
 }
 
@@ -3257,5 +3260,63 @@ pub fn coords_across_line(
             (y_pos, x_pos)
         }))
     }
+}
+
+impl ImageBuf<u8> {
+
+    pub fn filter_max(&self, height : usize, width : usize) -> Self {
+        let mut dst = ImageBuf::new_constant_like(&self, 0);
+        crate::local::IppiFilterMinMax::new(self.height(), self.width(), (height, width), false)
+            .apply(&self, &mut dst);
+        dst
+    }
+
+    pub fn filter_box(&self, height : usize, width : usize) -> Self {
+        let mut dst = ImageBuf::new_constant_like(&self, 0);
+        crate::local::IppiFilterBox::new(self.height(), self.width(), (height, width))
+            .apply(&self, &mut dst);
+        dst
+    }
+
+}
+
+impl rhai::CustomType for ImageBuf<u8> {
+
+    fn build(mut builder: rhai::TypeBuilder<'_, Self>) {
+
+        type Result<T> = std::result::Result<T, Box<rhai::EvalAltResult>>;
+
+        builder.with_name("image")
+            .with_fn("window", |img : &mut Self, y : i64, x : i64, height : i64, width : i64| -> Result<Self> {
+                let win = img.window((y as usize, x as usize), (height as usize, width as usize))
+                    .ok_or("Invalid bounds")?;
+                Ok(win.clone_owned())
+            })
+            .with_fn("show", |img : &mut Self| img.show() )
+            .with_fn("paste", |img : &mut Self, other : Self, y : i64, x : i64| -> Result<Self> {
+                let dst = img.paste(&other, (y as usize, x as usize))
+                    .ok_or("Invalid bounds")?;
+                Ok(dst)
+            })
+            .with_fn("filter_max", |img : &mut Self, height : i64, width : i64| -> Self {
+                img.filter_max(height as usize, width as usize)
+            })
+            .with_fn("filter_box", |img : &mut Self, height : i64, width : i64| -> Self {
+                img.filter_box(height as usize, width as usize)
+            })
+            .with_fn("scalar_add", |img : &mut Self, by : i64| -> Self {
+                img.scalar_add(by as u8)
+            })
+            .with_fn("scalar_sub", |img : &mut Self, by : i64| -> Self {
+                img.scalar_sub(by as u8)
+            })
+            .with_fn("scalar_mul", |img : &mut Self, by : i64| -> Self {
+                img.scalar_mul(by as u8)
+            })
+            .with_fn("scalar_div", |img : &mut Self, by : i64| -> Self {
+                img.scalar_div(by as u8)
+            });
+    }
+
 }
 

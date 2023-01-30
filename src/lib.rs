@@ -353,3 +353,16 @@ pub mod point;
 
 */
 
+pub fn module() -> rhai::Module {
+
+    use crate::image::*;
+
+    type Result<T> = std::result::Result<T, Box<rhai::EvalAltResult>>;
+
+    let mut module = rhai::Module::new();
+    module.set_native_fn(
+        "open",
+        |path : &str| -> Result<ImageBuf<u8>> { Ok(crate::io::decode_from_file(path)?) }
+    );
+    module
+}

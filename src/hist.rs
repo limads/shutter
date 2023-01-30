@@ -242,6 +242,7 @@ impl GrayHistogram {
             self.hist[i] += self.hist[i-1];
             // assert!(self.hist[i] >= self.hist[i-1]);
         }
+        self.sum = self.hist[255];
         // assert!(self.hist[255] == self.sum, "{} vs. {}", self.hist[255], self.sum);
     }
 
@@ -373,6 +374,30 @@ pub struct IppHistogram {
 #[cfg(feature="ipp")]
 impl IppHistogram {
 
+    pub fn as_slice(&self) -> &[u32] {
+        &self.hist[..]
+    }
+
+    pub fn draw(&self, win : &mut WindowMut<'_, u8>, color : u8) {
+        assert!(win.width() % 256 == 0);
+        assert!(win.width() >= 256);
+        let max = self.hist.iter().copied().max().unwrap() as f32;
+        let col_w = win.width() / 256;
+        for ix in 0..256 {
+            let h = ((self.hist[ix] as f32 / max) * win.height() as f32) as usize;
+            let h_compl = win.height() - h;
+            if h > 0 {
+                win.apply_to_sub((h_compl, ix*col_w), (h, col_w), |mut w| { w.fill(color); } );
+            }
+        }
+    }
+
+    pub fn show(&self, shape : (usize, usize)) {
+        let mut img = Image::new_constant(shape.0, shape.1, 0);
+        self.draw(&mut img.full_window_mut(), 255);
+        img.show();
+    }
+
     pub fn quantile(&self, q : f64) -> u8 {
         let mut p = 0.0;
         let mut ix = 0;
@@ -388,6 +413,7 @@ impl IppHistogram {
         for i in 1..256 {
             self.hist[i] += self.hist[i-1];
         }
+        self.sum = self.hist[255];
     }
 
     pub fn quantile_when_accumulated(&self, q : f32) -> u8 {
@@ -438,7 +464,8 @@ impl IppHistogram {
         S : Storage<u8>
     {
         // TODO Maybe IPP already does this step?
-        self.hist.iter_mut().for_each(|bin| *bin = 0 );
+        // self.hist.iter_mut().for_each(|bin| *bin = 0 );
+        self.hist.fill(0);
 
         unsafe {
             let (step, sz) = crate::image::ipputils::step_and_size_for_image(win);

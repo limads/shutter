@@ -811,46 +811,73 @@ pub fn sobel(img : &Window<u8>, dst : WindowMut<'_, i16>, sz : usize, dx : i32, 
     opencv::imgproc::sobel(&src, &mut dst, core::CV_16S, dx, dy, sz as i32, 1.0, 0.0, core::BORDER_DEFAULT).unwrap();
 }
 
+#[cfg(feature="ipp")]
+#[derive(Debug, Clone)]
+pub struct IppFilterMedian {
+    buffer : Vec<u8>,
+    mask_sz : (usize, usize)
+}
+
+#[cfg(feature="ipp")]
+impl IppFilterMedian {
+
+    pub fn new(height : usize, width : usize, mask_sz : (usize, usize)) -> Self {
+        let mut buf_sz : i32 = 0;
+        let num_channels = 1;
+        unsafe {
+            let ans = crate::foreign::ipp::ippi::ippiFilterMedianBorderGetBufferSize(
+                (height, width).into(),
+                mask_sz.into(),
+                crate::foreign::ipp::ippi::IppDataType_ipp8u,
+                num_channels,
+                &mut buf_sz as *mut _
+            );
+            assert!(ans == 0);
+            let mut buffer = Vec::<u8>::with_capacity(buf_sz as usize);
+            buffer.set_len(buf_sz as usize);
+            Self { buffer, mask_sz }
+        }
+    }
+
+    pub fn apply<S, T>(&mut self, src : &Image<u8, S>, dst : &mut Image<u8, T>)
+    where
+        S : Storage<u8>,
+        T : StorageMut<u8>
+    {
+        assert_eq!(src.shape(), dst.shape());
+        let anchor = crate::foreign::ipp::ippi::IppiPoint { x : (self.mask_sz.1 as i32)/2, y : (self.mask_sz.0 as i32) / 2 };
+        let border_val = 0;
+        // let border_ty = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderConst;
+        let border_ty = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderRepl;
+        unsafe {
+            let ans = crate::foreign::ipp::ippi::ippiFilterMedianBorder_8u_C1R(
+                src.as_ptr(),
+                src.byte_stride() as i32,
+                dst.as_mut_ptr(),
+                dst.byte_stride() as i32,
+                src.size().into(),
+                self.mask_sz.into(),
+                border_ty,
+                border_val,
+                self.buffer.as_mut_ptr()
+            );
+            assert!(ans == 0);
+        }
+    }
+
+}
+
 pub fn median_filter(src : &Window<u8>, dst : &mut WindowMut<u8>, mask_sz : usize) {
 
-    assert_eq!(src.shape(), dst.shape());
+    /*assert_eq!(src.shape(), dst.shape());
 
     #[cfg(feature="ipp")]
     unsafe {
         let (src_step, roi_sz) = crate::image::ipputils::step_and_size_for_window(src);
         let (dst_step, _) = crate::image::ipputils::step_and_size_for_window_mut(&dst);
         let mask_sz = crate::foreign::ipp::ippi::IppiSize { width : mask_sz as i32, height : mask_sz as i32 };
-        let mut buf_sz : i32 = 0;
-        let num_channels = 1;
-        let ans = crate::foreign::ipp::ippi::ippiFilterMedianBorderGetBufferSize(
-            roi_sz,
-            mask_sz,
-            crate::foreign::ipp::ippi::IppDataType_ipp8u,
-            num_channels,
-            &mut buf_sz as *mut _
-        );
-        assert!(ans == 0);
-        let mut buffer = Vec::<u8>::with_capacity(buf_sz as usize);
-        buffer.set_len(buf_sz as usize);
-
-        let anchor = crate::foreign::ipp::ippi::IppiPoint { x : mask_sz.width/2, y : mask_sz.height/2 };
-        let border_val = 0;
-        // let border_ty = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderConst;
-        let border_ty = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderRepl;
-        let ans = crate::foreign::ipp::ippi::ippiFilterMedianBorder_8u_C1R(
-            src.as_ptr(),
-            src_step,
-            dst.as_mut_ptr(),
-            dst_step,
-            roi_sz,
-            mask_sz,
-            border_ty,
-            border_val,
-            buffer.as_mut_ptr()
-        );
-        assert!(ans == 0);
         return;
-    }
+    }*/
 
     unimplemented!()
 }
@@ -888,7 +915,8 @@ impl IppiFilterGauss {
             let mut spec = Vec::<u8>::with_capacity(spec_sz as usize);
             spec.set_len(spec_sz as usize);
             let border_val : u8 = 0;
-            let border_ty = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderConst;
+            // let border_ty = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderConst;
+            let border_ty = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderRepl;
             let ans = crate::foreign::ipp::ippcv::ippiFilterGaussianInit(
                 (height, width).into(),
                 kernel_side as u32,
@@ -928,7 +956,7 @@ impl IppiFilterGauss {
 
 }
 
-
+#[derive(Debug, Clone)]
 #[cfg(feature="ipp")]
 pub struct IppiFilterBilateral {
     spec : Vec<u8>,

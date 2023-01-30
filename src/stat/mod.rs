@@ -239,19 +239,60 @@ where
     }
     
     #[cfg(feature="ipp")]
+    pub fn masked_mean_stddev<T>(&self, mask : &Image<P, T>) -> (f32, f32)
+    where
+        T : Storage<P>
+    {
+        let (stride, roi) = crate::image::ipputils::step_and_size_for_image(self);
+        unsafe {
+            if self.pixel_is::<u8>() {
+                let (mut mean, mut stddev) : (f64, f64) = (0. ,0.);
+                let ans = crate::foreign::ipp::ippcv::ippiMean_StdDev_8u_C1MR(
+                    mem::transmute(self.as_ptr()),
+                    self.byte_stride() as i32,
+                    mem::transmute(mask.as_ptr()),
+                    mask.byte_stride() as i32,
+                    self.size().into(),
+                    &mut mean as *mut _,
+                    &mut stddev as *mut _
+                );
+                assert!(ans == 0);
+                return (mean as f32, stddev as f32);
+            }
+        }
+        unimplemented!()
+    }
+
+    #[cfg(feature="ipp")]
     pub fn mean_stddev(&self) -> (f32, f32) {
         let (stride, roi) = crate::image::ipputils::step_and_size_for_image(self);
         unsafe {
-            let (mut mean, mut stddev) : (f64, f64) = (0. ,0.);
-            let ans = crate::foreign::ipp::ippcv::ippiMean_StdDev_32f_C1R(
-                mem::transmute(self.as_ptr()),
-                stride,
-                mem::transmute(roi),
-                &mut mean as *mut _,
-                &mut stddev as *mut _
-            );
-            assert!(ans == 0);
-            return (mean as f32, stddev as f32);
+
+            if self.pixel_is::<u8>() {
+                let (mut mean, mut stddev) : (f64, f64) = (0. ,0.);
+                let ans = crate::foreign::ipp::ippcv::ippiMean_StdDev_8u_C1R(
+                    mem::transmute(self.as_ptr()),
+                    stride,
+                    mem::transmute(roi),
+                    &mut mean as *mut _,
+                    &mut stddev as *mut _
+                );
+                assert!(ans == 0);
+                return (mean as f32, stddev as f32);
+            }
+
+            if self.pixel_is::<f32>() {
+                let (mut mean, mut stddev) : (f64, f64) = (0. ,0.);
+                let ans = crate::foreign::ipp::ippcv::ippiMean_StdDev_32f_C1R(
+                    mem::transmute(self.as_ptr()),
+                    stride,
+                    mem::transmute(roi),
+                    &mut mean as *mut _,
+                    &mut stddev as *mut _
+                );
+                assert!(ans == 0);
+                return (mean as f32, stddev as f32);
+            }
         }
         unimplemented!()
     }

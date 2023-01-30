@@ -117,6 +117,17 @@ where
         dst
     }
 
+    /** Copies content into original image at the given offset, returning the result into
+    a newly-allocated buffer. */
+    pub fn paste<T>(&self, content : &Image<P, T>, offset : (usize, usize)) -> Option<ImageBuf<P>>
+    where
+        T : Storage<P>
+    {
+        let mut dst = self.clone_owned();
+        dst.window_mut(offset, content.size())?.copy_from(content);
+        Some(dst)
+    }
+
     // Copies elements into self from other, assuming same dims.
     pub fn copy_from<T>(&mut self, other : &Image<P, T>) 
     where

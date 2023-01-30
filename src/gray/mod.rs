@@ -1035,6 +1035,24 @@ pub fn binarize_bytes_mut(win : &Window<'_, u8>, out : &mut WindowMut<'_, u8>, v
 
 // use crate::feature::patch::ColorProfile;
 
+#[cfg(feature="ipp")]
+pub fn ipp_otsu<S>(img : &Image<u8, S>) -> u8
+where
+    S : Storage<u8>
+{
+    let mut thr : u8 = 0;
+    unsafe {
+        let status = crate::foreign::ipp::ippi::ippiComputeThreshold_Otsu_8u_C1R(
+            img.as_ptr(),
+            img.byte_stride() as i32,
+            img.size().into(),
+            &mut thr as *mut _
+        );
+        assert!(status == 0);
+    }
+    thr
+}
+
 /// Otsu's method determine the best discriminant for a bimodal intensity distribution.
 /// It explores the fact that for 2 classes, minimizing intra-class variance is the same
 /// as maximizing inter-class variance.
@@ -1664,24 +1682,64 @@ IppiLUT_Spec* pSpec);
 }*/
 
 #[cfg(feature="ipp")]
-unsafe fn ipp_lut_palette<S, T>(src : &Image<u8, S>, dst : &mut Image<u8, T>, table : &[u8]) 
+pub unsafe fn ipp_lut_palette<P, Q, S, T>(src : &Image<P, S>, dst : &mut Image<Q, T>, table : &[Q])
 where
-    S : Storage<u8>,
-    T : StorageMut<u8>
+    P : Pixel,
+    Q : Pixel,
+    S : Storage<P>,
+    T : StorageMut<Q>
 {
     let (src_step, sz) = crate::image::ipputils::step_and_size_for_image(src);
     let (dst_step, _) = crate::image::ipputils::step_and_size_for_image(dst);
-    let bit_sz = 8;
-    let ans = crate::foreign::ipp::ippi::ippiLUTPalette_8u_C1R(
-        src.as_ptr(), 
-        src_step,
-        dst.as_mut_ptr(), 
-        dst_step, 
-        sz, 
-        table.as_ptr(),
-        bit_sz
-    );
-    assert!(ans == 0);
+
+    // assert!(tbl.len() == (2).pow(bit_sz));
+    let bit_sz = (table.len() as f32).log(2.0) as i32;
+    if src.pixel_is::<u8>() && dst.pixel_is::<u8>() {
+        // let bit_sz = 8;
+        let ans = crate::foreign::ipp::ippi::ippiLUTPalette_8u_C1R(
+            std::mem::transmute(src.as_ptr()),
+            src_step,
+            std::mem::transmute(dst.as_mut_ptr()),
+            dst_step,
+            sz,
+            std::mem::transmute(table.as_ptr()),
+            bit_sz
+        );
+        assert!(ans == 0);
+        return;
+    }
+
+    if src.pixel_is::<u16>() && dst.pixel_is::<u16>() {
+        // let bit_sz = 16;
+        let ans = crate::foreign::ipp::ippi::ippiLUTPalette_16u_C1R(
+            std::mem::transmute(src.as_ptr()),
+            src_step,
+            std::mem::transmute(dst.as_mut_ptr()),
+            dst_step,
+            sz,
+            std::mem::transmute(table.as_ptr()),
+            bit_sz
+        );
+        assert!(ans == 0);
+        return;
+    }
+
+    if src.pixel_is::<u8>() && dst.pixel_is::<u32>() {
+        // let bit_sz = 32;
+        let ans = crate::foreign::ipp::ippi::ippiLUTPalette_8u32u_C1R(
+            std::mem::transmute(src.as_ptr()),
+            src_step,
+            std::mem::transmute(dst.as_mut_ptr()),
+            dst_step,
+            sz,
+            std::mem::transmute(table.as_ptr()),
+            bit_sz
+        );
+        assert!(ans == 0);
+        return;
+    }
+
+    unimplemented!()
 }
 
 /// Represents a lookup index. Colors in a test image should be used as indices to the colors 
@@ -1947,3 +2005,60 @@ impl IppiSAD {
         }
     }
 }
+
+// Histogram stretching/equalization.
+
+// Important! Image cannot contain zero values (call scalar_add(1) first)
+pub fn log_to<S, T>(src : &Image<u8, S>, dst : &mut Image<u8, T>)
+where
+    S : Storage<u8>,
+    T : StorageMut<u8>
+{
+    let scale_factor = 1;
+    unsafe {
+        let status = crate::foreign::ipp::ippi::ippiLn_8u_C1RSfs(
+            src.as_ptr(),
+            src.byte_stride() as i32,
+            dst.as_mut_ptr(),
+            dst.byte_stride() as i32,
+            src.size().into(),
+            scale_factor
+        );
+        assert!(status == 0);
+    }
+}
+
+// Moeslund (2012)
+pub fn enhance_range() {
+    // Maps range [low-high] to the whole integer domain of the image.
+    // Truncate values below low to 0 and values above high to 255.
+    // let ampl = 255 / (high - low);
+    // a.scalar_mul_to(&mut dst, ampl);
+    // dst.scalar_sub_mut(ampl * low);
+}
+
+// Moeslund (2012)
+fn image_log() {
+    // Brings detail from dark images
+    // c = 255 / (log(1 + max))
+    // img.scalar_mul_mut(c * log(1 + px))
+}
+
+// Moeslund (2012)
+fn image_exp() {
+    // Brings detail from bright images
+    // c = 255 / (k^max - 1)
+    // img.scalar_mul_mut(c * k^px - 1)
+}
+
+fn histogram_stretch() {
+    // Call enhance_range with histogram minimum and maximum.
+}
+
+fn histogram_equalize() {
+    // Divide cumulative histogram by total number of pixels
+    // Multiply resulting ratio by 255
+    // Use histogram as a LUT to lookup each y corresponding to each x.
+}
+
+

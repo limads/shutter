@@ -3,14 +3,224 @@ use crate::image::*;
 use std::mem;
 use num_traits::ToPrimitive;
 
+fn apply_to<P, S>(src : &Image<P, S>, f : impl Fn(&Image<P, S>, &mut ImageBuf<P>)) -> ImageBuf<P>
+where
+    P : Pixel,
+    S : Storage<P>
+{
+    let mut dst = unsafe { ImageBuf::<P>::new_empty_like(src) };
+    f(src, &mut dst);
+    dst
+}
+
+fn apply_to_by<P, S>(src : &Image<P, S>, by : P, f : impl Fn(&Image<P, S>, P, &mut ImageBuf<P>)) -> ImageBuf<P>
+where
+    P : Pixel,
+    S : Storage<P>
+{
+    let mut dst = unsafe { ImageBuf::<P>::new_empty_like(src) };
+    f(src, by, &mut dst);
+    dst
+}
+
+
+impl<P, S> Image<P, S>
+where
+    S : Storage<P>,
+    P : Pixel + MulAssign + DivAssign + AddAssign + MulAssign + Add<Output=P> + Div<Output=P> + Mul<Output=P> + Sub<Output=P>,
+{
+
+    pub fn abs_to<T>(&self, dst : &mut Image<P, T>)
+    where
+        T : StorageMut<P>
+    {
+
+        #[cfg(feature="ipp")]
+        unsafe {
+
+            if self.pixel_is::<u8>() || self.pixel_is::<u64>() {
+                dst.copy_from(&self);
+            }
+
+            let (byte_stride, roi) = crate::image::ipputils::step_and_size_for_image(self);
+
+            if self.pixel_is::<f32>() {
+                let ans = crate::foreign::ipp::ippi::ippiAbs_32f_C1R(
+                    mem::transmute(self.as_ptr()),
+                    self.byte_stride() as i32,
+                    mem::transmute(dst.as_mut_ptr()),
+                    dst.byte_stride() as i32,
+                    roi
+                );
+                assert!(ans == 0);
+                return;
+            }
+
+            if self.pixel_is::<i16>() {
+                let ans = crate::foreign::ipp::ippi::ippiAbs_16s_C1R(
+                    mem::transmute(self.as_ptr()),
+                    self.byte_stride() as i32,
+                    mem::transmute(dst.as_mut_ptr()),
+                    dst.byte_stride() as i32,
+                    roi
+                );
+                assert!(ans == 0);
+                return;
+            }
+        }
+
+        unimplemented!()
+    }
+
+    pub fn abs(&self) -> ImageBuf<P> {
+        apply_to(self, Self::abs_to)
+    }
+
+    pub fn scalar_add_to<T>(&self, by : P, dst : &mut Image<P, T>)
+    where
+        T : StorageMut<P>,
+    {
+        #[cfg(feature="ipp")]
+        unsafe {
+            let scale_factor = 0;
+            let (byte_stride, roi) = crate::image::ipputils::step_and_size_for_image(self);
+            if self.pixel_is::<u8>() {
+                let ans = crate::foreign::ipp::ippi::ippiAddC_8u_C1RSfs(
+                    mem::transmute(self.as_ptr()),
+                    self.byte_stride() as i32,
+                    *mem::transmute::<_, &u8>(&by),
+                    mem::transmute(dst.as_mut_ptr()),
+                    dst.byte_stride() as i32,
+                    roi,
+                    scale_factor
+                );
+                assert!(ans == 0);
+                return;
+            }
+            if self.pixel_is::<i16>() {
+                let ans = crate::foreign::ipp::ippi::ippiAddC_16s_C1RSfs(
+                    mem::transmute(self.as_ptr()),
+                    self.byte_stride() as i32,
+                    *mem::transmute::<_, &i16>(&by),
+                    mem::transmute(dst.as_mut_ptr()),
+                    dst.byte_stride() as i32,
+                    roi,
+                    scale_factor
+                );
+                assert!(ans == 0);
+                return;
+            }
+            if self.pixel_is::<f32>() {
+                let ans = crate::foreign::ipp::ippi::ippiAddC_32f_C1R(
+                    mem::transmute(self.as_ptr()),
+                    self.byte_stride() as i32,
+                    *mem::transmute::<_, &f32>(&by),
+                    mem::transmute(dst.as_mut_ptr()),
+                    dst.byte_stride() as i32,
+                    roi
+                );
+                assert!(ans == 0);
+                return;
+            }
+        }
+        dst.pixels_mut(1).zip(self.pixels(1)).for_each(|(dst, src)| *dst = *src + by );
+    }
+
+    pub fn scalar_add(&self, by : P) -> ImageBuf<P> {
+        apply_to_by(self, by, Self::scalar_add_to)
+    }
+
+    pub fn scalar_sub_to<T>(&self, by : P, dst : &mut Image<P, T>)
+    where
+        T : StorageMut<P>,
+    {
+        #[cfg(feature="ipp")]
+        unsafe {
+            let scale_factor = 0;
+            let (byte_stride, roi) = crate::image::ipputils::step_and_size_for_image(self);
+            if self.pixel_is::<u8>() {
+                let ans = crate::foreign::ipp::ippi::ippiSubC_8u_C1RSfs(
+                    mem::transmute(self.as_ptr()),
+                    self.byte_stride() as i32,
+                    *mem::transmute::<_, &u8>(&by),
+                    mem::transmute(dst.as_mut_ptr()),
+                    dst.byte_stride() as i32,
+                    roi,
+                    scale_factor
+                );
+                assert!(ans == 0);
+                return;
+            }
+            if self.pixel_is::<i16>() {
+                let ans = crate::foreign::ipp::ippi::ippiSubC_16s_C1RSfs(
+                    mem::transmute(self.as_ptr()),
+                    self.byte_stride() as i32,
+                    *mem::transmute::<_, &i16>(&by),
+                    mem::transmute(dst.as_mut_ptr()),
+                    dst.byte_stride() as i32,
+                    roi,
+                    scale_factor
+                );
+                assert!(ans == 0);
+                return;
+            }
+
+            if self.pixel_is::<f32>() {
+                let ans = crate::foreign::ipp::ippi::ippiSubC_32f_C1R(
+                    mem::transmute(self.as_ptr()),
+                    self.byte_stride() as i32,
+                    *mem::transmute::<_, &f32>(&by),
+                    mem::transmute(dst.as_mut_ptr()),
+                    dst.byte_stride() as i32,
+                    roi
+                );
+                assert!(ans == 0);
+                return;
+            }
+        }
+        dst.pixels_mut(1).zip(self.pixels(1)).for_each(|(dst, src)| *dst = *src - by );
+    }
+
+    pub fn scalar_sub(&self, by : P) -> ImageBuf<P> {
+        apply_to_by(self, by, Self::scalar_sub_to)
+    }
+
+    pub fn scalar_div_to<T>(&self, by : P, dst : &mut Image<P, T>)
+    where
+        T : StorageMut<P>,
+    {
+        dst.pixels_mut(1).zip(self.pixels(1)).for_each(|(dst, src)| *dst = *src / by );
+    }
+
+    pub fn scalar_div(&self, by : P) -> ImageBuf<P> {
+        apply_to_by(self, by, Self::scalar_div_to)
+    }
+
+    pub fn scalar_mul_to<T>(&self, by : P, dst : &mut Image<P, T>)
+    where
+        T : StorageMut<P>,
+    {
+        dst.pixels_mut(1).zip(self.pixels(1)).for_each(|(dst, src)| *dst = *src * by );
+    }
+
+    pub fn scalar_mul(&self, by : P) -> ImageBuf<P> {
+        apply_to_by(self, by, Self::scalar_mul_to)
+    }
+
+}
+
 impl<P, S> Image<P, S>
 where
     S : StorageMut<P>,
     P : Pixel + MulAssign + DivAssign + AddAssign + MulAssign,
-    //Box<[P]> : StorageMut<P>,
-    //for<'a> &'a [P] : Storage<P>,
-    //for<'a> &'a mut [P] : StorageMut<P>,
 {
+
+    pub fn negative_mut(&mut self)
+    where
+        P : UnsignedPixel + Sub<Output=P>
+    {
+        self.invert_mut();
+    }
 
     pub fn invert_mut(&mut self)
     where
@@ -125,6 +335,17 @@ where
                 assert!(ans == 0);
                 return;
             }
+            if self.pixel_is::<i16>() {
+                let ans = crate::foreign::ipp::ippi::ippiAddC_16s_C1IRSfs(
+                    *mem::transmute::<_, &i16>(&by),
+                    mem::transmute(self.as_mut_ptr()),
+                    byte_stride,
+                    roi,
+                    scale_factor
+                );
+                assert!(ans == 0);
+                return;
+            }
 
             if self.pixel_is::<f32>() {
                 let ans = crate::foreign::ipp::ippi::ippiAddC_32f_C1IR(
@@ -161,6 +382,17 @@ where
                 assert!(ans == 0);
                 return;
             }
+            if self.pixel_is::<i16>() {
+                let ans = crate::foreign::ipp::ippi::ippiSubC_16s_C1IRSfs(
+                    *mem::transmute::<_, &i16>(&by),
+                    mem::transmute(self.as_mut_ptr()),
+                    byte_stride,
+                    roi,
+                    scale_factor
+                );
+                assert!(ans == 0);
+                return;
+            }
 
             if self.pixel_is::<f32>() {
                 let ans = crate::foreign::ipp::ippi::ippiSubC_32f_C1IR(
@@ -186,6 +418,17 @@ where
             if self.pixel_is::<u8>() {
                 let ans = crate::foreign::ipp::ippi::ippiMulC_8u_C1IRSfs(
                     *mem::transmute::<_, &u8>(&by),
+                    mem::transmute(self.as_mut_ptr()),
+                    byte_stride,
+                    roi,
+                    scale_factor
+                );
+                assert!(ans == 0);
+                return;
+            }
+            if self.pixel_is::<i16>() {
+                let ans = crate::foreign::ipp::ippi::ippiMulC_16s_C1IRSfs(
+                    *mem::transmute::<_, &i16>(&by),
                     mem::transmute(self.as_mut_ptr()),
                     byte_stride,
                     roi,
@@ -231,10 +474,22 @@ where
             let (byte_stride, roi) = crate::image::ipputils::step_and_size_for_image(&self);
             // let scale_factor = -2;
             let scale_factor = 0;
+            // let scale_factor = 1;
 
             if self.pixel_is::<u8>() {
                 let ans = crate::foreign::ipp::ippi::ippiDivC_8u_C1IRSfs(
                     *mem::transmute::<_, &u8>(&by),
+                    mem::transmute(self.as_mut_ptr()),
+                    byte_stride,
+                    roi,
+                    scale_factor
+                );
+                assert!(ans == 0);
+                return;
+            }
+            if self.pixel_is::<i16>() {
+                let ans = crate::foreign::ipp::ippi::ippiDivC_16s_C1IRSfs(
+                    *mem::transmute::<_, &i16>(&by),
                     mem::transmute(self.as_mut_ptr()),
                     byte_stride,
                     roi,
@@ -313,9 +568,6 @@ impl<P, S> Image<P, S>
 where
     S : Storage<P>,
     P : Pixel + MulAssign + DivAssign + Div<Output=P>,
-    //Box<[P]> : StorageMut<P>,
-    //for<'a> &'a [P] : Storage<P>,
-    //for<'a> &'a mut [P] : StorageMut<P>,
 {
 
     pub fn invert_to<T>(&self, dst : &mut Image<P, T>) 
@@ -357,13 +609,6 @@ where
         }
     }
     
-    pub fn scalar_div_to<T>(&self, by : P, dst : &mut Image<P, T>)
-    where
-        T : StorageMut<P>
-    {
-        dst.pixels_mut(1).zip(self.pixels(1)).for_each(|(dst, src)| *dst = *src / by );
-    }
-
 }
 
 #[cfg(feature="ipp")]
