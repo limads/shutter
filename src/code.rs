@@ -3053,6 +3053,10 @@ impl RunLength {
         ((self.start.1+1)..(self.end().1.saturating_sub(1))).map(move |c| (self.start.0, c) )
     }
 
+    pub fn start_col(&self) -> usize {
+        self.start.1
+    }
+
     pub fn end_col(&self) -> usize {
         self.start.1 + self.length-1
     }
@@ -3068,6 +3072,10 @@ impl RunLength {
     /// Represents a closed interval covered by this run-length
     pub fn interval(&self) -> Interval<usize> {
         Interval(self.start.1, self.start.1+self.length-1)
+    }
+
+    pub fn range(&self) -> Range<usize> {
+        Range { start : self.start.1, end : self.start.1+self.length }
     }
 
     pub fn intersect(&self, other : &Self) -> Option<RunLength> {
@@ -3565,12 +3573,37 @@ fn rows_for_sorted_rles(rles : &[RunLength], rows : &mut Vec<Range<usize>>) {
 
 impl RunLengthCode {
 
+    // Unity measures the average number of run lenghs per row in a connected RLC.
+    // Solidity 1.0 means a single RunLength per row, signalling a fully connected object
+    // without holes. Greater values means objects full of holes.
+    pub fn unity(&self) -> f32 {
+        let mut s = 0.0;
+        for row in &self.rows {
+            s += (row.end - row.start) as f32;
+        }
+        s /= self.rows.len() as f32;
+        s
+    }
+
     /** Distance between last and first row of this RLE. This is
     calculated in constant time. RLEs might not be connected.
     When this RLE is connected, this is the height of the outer
-    rect. Returns None when RLE is empty. **/
+    rect. Returns None when RLE is empty. This equals self.rows.len()
+    when the RLE is connected. **/
     pub fn height(&self) -> Option<usize> {
         Some(self.rles.last()?.start.0 - self.rles.first()?.start.0 + 1)
+    }
+
+    // Returns the width of the longest RunLength. This serves as a lower
+    // bound for the width of the outer rect.
+    pub fn best_width(&self) -> usize {
+        let mut max_w = 0;
+        for rl in &self.rles {
+            if rl.length > max_w {
+                max_w = rl.length;
+            }
+        }
+        max_w
     }
 
     pub fn outer_rect(&self) -> Option<(usize, usize, usize, usize)> {
@@ -3916,6 +3949,62 @@ impl RunLengthCode {
         encoding
     }
 
+    // Assuming this RLE is connected, splits this RLE vertically at rows
+    // that have a small horizontal overlap, based on a percentage of the largest row
+    // that is covered by its overlap with the smallest row. If no rows satisfy the
+    // condition, returns a vector with the unique RunLength unchanged.
+    pub fn split_vertically(mut self, ratio : f32) -> SmallVec<[RunLengthCode;4]> {
+        use crate::shape::HalfOpen;
+        let nrows = self.rows.len();
+        let mut split_points : SmallVec<[usize; 4]> = SmallVec::new();
+        let row_pair_iter = self.rows[0..(nrows-1)].iter()
+            .zip(self.rows[1..nrows].iter());
+        for (ix, (row_above, row_below)) in row_pair_iter.enumerate() {
+            let start_above = self.rles[row_above.clone()].first().unwrap().start.1;
+            let start_below = self.rles[row_below.clone()].first().unwrap().start.1;
+            let end_above = self.rles[row_above.clone()].last().unwrap().end_col();
+            let end_below = self.rles[row_below.clone()].last().unwrap().end_col();
+            let range_above = Range { start : start_above, end : end_above };
+            let range_below = Range { start : start_below, end : end_below };
+            if let Some(overlap) = range_above.overlap(&range_below) {
+                let overlap_len = overlap.end - overlap.start;
+                let max_len = (range_above.end - range_above.start).max(range_below.end - range_below.start);
+                if (overlap_len as f32 / max_len as f32) < ratio {
+                    split_points.push(ix + 1);
+                }
+            }
+        }
+        let mut dst = SmallVec::new();
+        for pt in split_points.drain(..).rev() {
+            let mut offset = 0;
+            let mut new_rows = Vec::new();
+            for len in self.rows[pt..].iter().map(|row| row.end - row.start ) {
+                new_rows.push(Range { start : offset, end : offset + len });
+                offset += len;
+            }
+            let new_rles = self.rles.split_off(offset);
+            self.rows.truncate(pt-1);
+            dst.push(RunLengthCode { rles : new_rles, rows : new_rows });
+        }
+        dst.push(self);
+        dst
+    }
+
+    pub fn row_mass(&self) -> Vec<usize> {
+        let mut mass = Vec::with_capacity(self.rows.len());
+        for r in &self.rows {
+            let row_mass = self.rles[r.clone()].iter().fold(0, |m, r| m + r.length );
+            mass.push(row_mass);
+        }
+        mass
+    }
+
+    pub fn mass(&self) -> usize {
+        self.rles.iter().fold(0, |m, r| m + r.length )
+    }
+
+    // Split this RLE into others based on 4-connectivity
+    // of the pixels inside them.
     pub fn split(&self) -> BTreeMap<usize, RunLengthCode> {
         let nrows = self.rows.len();
         let mut uf = UnionFind::new(self.rles.len());
@@ -3932,13 +4021,14 @@ impl RunLengthCode {
                     // Iterate over overlapping top RLEs (since they are ordered, there is no
                     // need to check the overlap of intermediate elements:
                     // only the start and end matching RLEs).
-                    let below_last = rl_below.start.1+rl_below.length-1;
                     let iter_above = self.rles[row_above.clone()].iter().enumerate();
-                    for (local_above_ix, above) in iter_above {
-                        if (above.start.1+above.length-1) >= rl_below.start.1 {
-                            if above.start.1 <= below_last {
-                                uf.union(local_above_ix + row_above.start, local_ix_below + row_below.start );
+                    for (local_ix_above, above) in iter_above {
+                        if above.end_col() >= rl_below.start.1 {
+                            if above.start.1 <= rl_below.end_col() {
+                                uf.union(row_above.start + local_ix_above, row_below.start + local_ix_below);
                             } else {
+                                // If above start col > below end col, there is
+                                // no point in iterating in the top row for this RLE further.
                                 break;
                             }
                         }
@@ -4004,7 +4094,7 @@ impl RunLengthCode {
                 let below_ix = graph.add_node(*rl_below);
                 curr_ixs.push(below_ix);
 
-                /* Decide on the RunLenght connectivity strategy: If the strict overlap
+                /* Decide on the RunLength connectivity strategy: If the strict overlap
                 is desired, we are working with 4-neighborhood; If diagonal linking (8-neighborhood)
                 is desired, the diagonally-connecting intervals will not share an overlap */
 
@@ -4062,10 +4152,65 @@ impl RunLengthCode {
         pts
     }
 
+    // Behaves like lateral_points, but ignore rows that have a gap greater than tol.
+    pub fn lateral_points_with_tol(&self, tol : usize) -> Vec<(usize, usize)> {
+        let mut pts = Vec::with_capacity(self.rows.len() * 2);
+        'outer : for row in &self.rows {
+            if row.end - row.start == 1 {
+                pts.push(self.rles[row.start].start);
+                pts.push(self.rles[row.start].end());
+            } else {
+
+                // Gap tolerance check: Skip to next row when gap > tol
+                let rles = &self.rles[row.clone()];
+                'inner : for (left, right) in rles.iter().take(rles.len()-1).zip(rles.iter().skip(1)) {
+                    if right.start_col() - left.end_col() > tol {
+                        continue 'outer;
+                    }
+                }
+
+                if let (Some(fst), Some(lst)) = (self.rles[row.clone()].first(), self.rles[row.clone()].last()) {
+                    pts.push(fst.start);
+                    pts.push(lst.end());
+                }
+            }
+        }
+        pts
+    }
+
+    // Gets lateral points, ignoring rows with more than a single RLE.
+    // This guarantees points are connected.
+    pub fn solid_lateral_points(&self) -> Vec<(usize, usize)> {
+        let mut pts = Vec::with_capacity(self.rows.len() * 2);
+        for row in &self.rows {
+            if row.end - row.start == 1 {
+                pts.push(self.rles[row.start].start);
+                pts.push(self.rles[row.start].end());
+            }
+        }
+        pts
+    }
+
+    // If there is more than one RLE per row, get the lateral points of the largest RLE at the row,
+    // ignoring the remaining ones. This makes sure the lateral points are connected, BUT parts
+    // of a connected object might be ignored.
+    pub fn maximal_lateral_points(&self) -> Vec<(usize, usize)> {
+        let mut pts = Vec::with_capacity(self.rows.len() * 2);
+        for row in &self.rows {
+            if let Some(largest) = self.rles[row.clone()].iter().max_by(|a, b| a.length.cmp(&b.length) ) {
+                pts.push(largest.start);
+                pts.push(largest.end());
+            }
+        }
+        pts
+    }
+
     /// Returns the RLE lateral points (left points occupy even indices,
-    /// right points occupy odd indices).
+    /// right points occupy odd indices). If each row contains more than
+    /// one RLE, returns the most extreme points at different RLEs. This
+    /// means the (start, end) points might not be connected.
     pub fn lateral_points(&self) -> Vec<(usize, usize)> {
-        let mut pts = Vec::new();
+        let mut pts = Vec::with_capacity(self.rows.len() * 2);
         for row in &self.rows {
             if let (Some(fst), Some(lst)) = (self.rles[row.clone()].first(), self.rles[row.clone()].last()) {
                 pts.push(fst.start);
@@ -4081,10 +4226,93 @@ impl RunLengthCode {
         self.rles.iter().fold(0, |area, rle| area + rle.length )
     }
 
+    // Measures how RLE length varies away from center.
+    pub fn convexity(&self) -> Option<f32> {
+        let half_f = self.height()? / 2;
+        let mut cvx = 0.0;
+        for (i, r) in self.rows.iter().enumerate() {
+            let row = &self.rles[r.clone()];
+            if let (Some(fst), Some(lst)) = (row.first(), row.last()) {
+                let row_len = lst.end().1 - fst.start.1;
+                cvx += ((row_len * i.abs_diff(half_f)) as f32).ln();
+            }
+        }
+        cvx /= self.height()? as f32;
+        Some(cvx)
+    }
+
+    pub fn hole_area(&self) -> usize {
+        let mut area = 0;
+        for r in &self.rows {
+            let row = &self.rles[r.clone()];
+            for (left, right) in row.iter().take(row.len()-1).zip(row.iter().skip(1)) {
+                area += right.start.1 - left.end().1;
+            }
+        }
+        area
+    }
+
+    pub fn empty_outer_area(&self, outer_rect : &(usize, usize, usize, usize)) -> usize {
+        let last_col = outer_rect.1 + outer_rect.3;
+        let mut area = 0;
+        for r in &self.rows {
+            let row = &self.rles[r.clone()];
+            if let Some(fst) = row.first() {
+                area += fst.start.1 - outer_rect.1;
+            }
+            if let Some(lst) = row.last() {
+                area += last_col - lst.end().1;
+            }
+        }
+        area
+    }
+
+    // Returns the complement of this runlength (with the same number of rows as original.)
+    // The rows not encoded at original RLE are ignored (i.e. it is assumed to be an connected RLE).
+    pub fn connected_complement(&self, outer_rect : &(usize, usize, usize, usize)) -> RunLengthCode {
+        let mut rows = Vec::new();
+        let mut rles = Vec::new();
+        let tr_row = outer_rect.1 + outer_rect.3;
+        for r in &self.rows {
+            let n_before = rles.len();
+            let curr_rles = &self.rles[r.clone()];
+            if let Some(fst) = curr_rles.first() {
+                if fst.start.1 > outer_rect.1 {
+                    rles.push(RunLength { start : (fst.start.0, 0), length : fst.start.1 - outer_rect.1 });
+                }
+            }
+            for (left, right) in curr_rles.iter().zip(curr_rles.iter().skip(1)) {
+                rles.push(RunLength { start : left.end(), length : right.start.1 - left.end().1 });
+            }
+            if let Some(lst) = curr_rles.last() {
+                let tr_rl = lst.start.1+lst.length;
+                if tr_rl  < tr_row {
+                    rles.push(RunLength { start : (lst.start.0, lst.start.1), length : tr_row - tr_rl });
+                }
+            }
+            rows.push(Range { start : n_before, end : n_before + rles.len() });
+        }
+        RunLengthCode { rows, rles }
+    }
+
     // pub fn hole_area(&self) -> usize {
     //
     // }
 
+}
+
+// cargo test --lib -- rle_split_vert --nocapture
+#[test]
+fn rle_split_vert() {
+    let mut buf = ImageBuf::<u8>::new_constant(128, 128, 0);
+    buf.window_mut((32,32),(32,32)).unwrap().fill(255);
+    buf.window_mut((64,32),(32,8)).unwrap().fill(255);
+    let mut rle = RunLengthCode::encode(&buf.full_window());
+    let splits = rle.split_vertically(0.5);
+    for s in splits {
+        println!("{:?}", s);
+    }
+    buf.show();
 }
 
 // cargo test --lib -- rle_split --nocapture

@@ -520,6 +520,35 @@ where
         }
     }
 
+    /*pub fn border_mut<'a>(
+        &'a mut self
+    ) -> Box<dyn Iterator<Item=&'a mut P> + 'a>
+    {
+        let (h, w) = self.size();
+        let stride = self.stride();
+        let lst_row = stride*(h - 1);
+        let iter = (0..w)
+            .chain((0..h).map(move |r| stride*r + w ) )
+            .chain((0..w).map(move |c| lst_row + c ))
+            .chain((0..h).map(move |r| stride*r ))
+            .map(move |lin_ix| self.linear_index_mut(lin_ix) );
+        Box::new(iter)
+    }*/
+    pub fn apply_to_border(
+        mut self,
+        mut f : impl FnMut(&mut P)
+    ) {
+        let (h, w) = self.size();
+        let stride = self.stride();
+        let lst_row = stride*(h - 1);
+        for lin_ix in (0..w)
+            .chain((0..h).map(move |r| stride*r + w ) )
+            .chain((0..w).map(move |c| lst_row + c ))
+            .chain((0..h).map(move |r| stride*r )) {
+            f(self.linear_index_mut(lin_ix));
+        }
+    }
+
     pub fn pixels_mut<'a, 'b>(
         &'b mut self, 
         spacing : usize

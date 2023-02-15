@@ -449,6 +449,27 @@ where
         self.window((y, x), (h, w))
     }
 
+    /* Gets window centered at the given point. If outside bounds, gets
+    the window closest to this center also satisfying the bounds. The only
+    way this fails is if the dims are smaller than the parent window dims. */
+    pub fn centered_bounded_window(
+        &self,
+        center : (usize, usize),
+        dims : (usize, usize)
+    ) -> Option<Window<P>> {
+        if dims.0 < self.height() || dims.1 < self.width() {
+            return None;
+        }
+        let half_dims = (dims.0 / 2, dims.1 / 2);
+        let tl = (center.0.saturating_sub(half_dims.0), center.1.saturating_sub(half_dims.1));
+        let br = (tl.0 + dims.0, tl.1 + dims.1);
+        let off_tl = (
+            tl.0.saturating_sub(br.0.saturating_sub(self.height())),
+            tl.1.saturating_sub(br.1.saturating_sub(self.width()))
+        );
+        self.window(off_tl, dims)
+    }
+
     pub fn window(
         &self, 
         offset : (usize, usize), 
@@ -648,7 +669,7 @@ where
     }
     
     pub fn linear_index_mut(&mut self, ix : usize) -> &mut P {
-        assert!(ix < self.width() * self.height());
+        // assert!(ix < self.width() * self.height());
         // let (row, col) = (ix / self.width(), ix % self.width());
         // unsafe { &mut *self.as_mut_ptr().offset((self.width * row + col) as isize) as &mut P }
         unsafe { &mut *self.as_mut_ptr().offset(ix as isize) as &mut P }
@@ -1402,6 +1423,10 @@ where
         let height = shrink_to_divisor(self.height(), by)?;
         let width = shrink_to_divisor(self.width(), by)?;
         self.window((0, 0), (height, width))
+    }
+
+    pub fn stride(&self) -> usize {
+        self.width
     }
 
     pub fn byte_stride(&self) -> usize {

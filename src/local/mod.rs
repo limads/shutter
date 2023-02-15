@@ -687,8 +687,8 @@ impl IppiFilterBox {
         T : StorageMut<u8>
     {
         let border_val : u8 = 0;
-        let border_ty = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderConst;
-        // let border_ty = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderRepl;
+        // let border_ty = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderConst;
+        let border_ty = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderRepl;
         unsafe {
             let ans = crate::foreign::ipp::ippi::ippiFilterBoxBorder_8u_C1R(
                 src.as_ptr(),
@@ -1106,3 +1106,73 @@ Median filter can be considered as misnomer, because it does not imply convoluti
 Therefore a better API would be calling it "median pooling", for the pooling parameter
 being 1 actually means no pooling is applied (image size is preserved).
 */
+
+// Laplace filter
+#[cfg(feature="ipp")]
+#[derive(Debug, Clone)]
+pub struct IppFilterLaplace {
+    buffer : Vec<u8>,
+    mask_sz : usize,
+}
+
+#[cfg(feature="ipp")]
+impl IppFilterLaplace {
+
+    pub fn new(height : usize, width : usize, mask_sz : usize) -> Self {
+        let mut buf_sz : i32 = 0;
+        let num_channels = 1;
+        assert!(mask_sz == 3 || mask_sz == 5);
+        let mask = if mask_sz == 3 {
+            crate::foreign::ipp::ippi::_IppiMaskSize_ippMskSize3x3
+        } else {
+            crate::foreign::ipp::ippi::_IppiMaskSize_ippMskSize5x5
+        };
+        unsafe {
+            let ans = crate::foreign::ipp::ippi::ippiFilterLaplaceBorderGetBufferSize(
+                (height, width).into(),
+                mask,
+                crate::foreign::ipp::ippi::IppDataType_ipp8u,
+                crate::foreign::ipp::ippi::IppDataType_ipp8u,
+                num_channels,
+                &mut buf_sz as *mut _
+            );
+            assert!(ans == 0);
+            let mut buffer = Vec::<u8>::with_capacity(buf_sz as usize);
+            buffer.set_len(buf_sz as usize);
+            Self { buffer, mask_sz }
+        }
+    }
+
+    pub fn apply<S, T>(&mut self, src : &Image<u8, S>, dst : &mut Image<u8, T>)
+    where
+        S : Storage<u8>,
+        T : StorageMut<u8>
+    {
+        assert_eq!(src.shape(), dst.shape());
+        // let anchor = crate::foreign::ipp::ippi::IppiPoint { x : (self.mask_sz.1 as i32)/2, y : (self.mask_sz.0 as i32) / 2 };
+        let border_val = 0;
+        // let border_ty = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderConst;
+        let border_ty = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderRepl;
+        let mask = if self.mask_sz == 3 {
+            crate::foreign::ipp::ippi::_IppiMaskSize_ippMskSize3x3
+        } else {
+            crate::foreign::ipp::ippi::_IppiMaskSize_ippMskSize5x5
+        };
+        unsafe {
+            let ans = crate::foreign::ipp::ippi::ippiFilterLaplaceBorder_8u_C1R(
+                src.as_ptr(),
+                src.byte_stride() as i32,
+                dst.as_mut_ptr(),
+                dst.byte_stride() as i32,
+                src.size().into(),
+                mask,
+                border_ty,
+                border_val,
+                self.buffer.as_mut_ptr()
+            );
+            assert!(ans == 0);
+        }
+    }
+
+}
+

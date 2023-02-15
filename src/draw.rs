@@ -7,6 +7,7 @@ use serde::{Serialize, Deserialize};
 use crate::shape::*;
 use crate::shape::ellipse::EllipseCoords;
 use crate::shape::ellipse::OrientedEllipse;
+use nalgebra::Vector2;
 
 pub const DARK : u8 = 0;
 
@@ -243,6 +244,16 @@ where
                 self.draw(Mark::Arrow(coords.center, coords.major, 1), color);
                 self.draw(Mark::Arrow(coords.center, coords.minor, 1), color);
             },
+            Mark::FilledEllipse(el) => {
+                for r in 0..self.height() {
+                    for c in 0..self.width() {
+                        let pt = Vector2::new(c as f32, (self.height() - r) as f32);
+                        if crate::shape::ellipse::contains(&el, &pt) {
+                            self[(r, c)] = color;
+                        }
+                    }
+                }
+            },
             Mark::Ellipse(el, n) => {
                 let pts = crate::shape::ellipse::generate_ellipse_points(&el, n);
                 for n in 0..(pts.len()-1) {
@@ -258,7 +269,7 @@ where
 
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub enum Mark {
 
     // Position, square lenght and color
@@ -293,6 +304,8 @@ pub enum Mark {
     Arrow((usize, usize), (usize, usize), usize),
 
     EllipseArrows(EllipseCoords),
+
+    FilledEllipse(crate::shape::ellipse::Ellipse),
 
     Ellipse(OrientedEllipse, usize)
 

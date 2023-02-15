@@ -1318,6 +1318,12 @@ where
     Self : Sized
 {
 
+    // If segments overlap, return their joint area (A || B).
+    fn joint(&self, other : &Self) -> Option<Self>;
+
+    // If segments overlap, return their common area (A && B).
+    fn overlap(&self, other : &Self) -> Option<Self>;
+
     fn proximity(&self, other : &Self) -> Proximity;
 
     // perhaps rename to enclose so as to not conflict with std::ops::Range::contains
@@ -1338,6 +1344,23 @@ impl HalfOpen for Range<usize>
 where
     Self : Sized
 {
+
+    fn joint(&self, other : &Self) -> Option<Self> {
+        if self.proximity(other) == Proximity::Exclude {
+            None
+        } else {
+            Some(Range { start : self.start.min(other.start), end : self.end.max(other.end) })
+        }
+    }
+
+    fn overlap(&self, other : &Self) -> Option<Self> {
+        let joint = self.joint(other)?;
+        let ovlp_start = self.start.max(other.start);
+        let ovlp_len = joint.end.checked_sub(joint.start)?
+            .checked_sub(self.start.abs_diff(other.start))?
+            .checked_sub(self.end.abs_diff(other.end))?;
+        Some(Range { start : ovlp_start, end : ovlp_start + ovlp_len })
+    }
 
     fn overlapping_range(&self, b_ranges : &[Range<usize>]) -> Option<RangeInclusive<usize>> {
         // Bottom is not partitioned (will return false for all entries, all b greater than a)
@@ -1397,6 +1420,13 @@ where
     }
 
     fn proximity(&self, other : &Self) -> Proximity {
+
+        if (self.start < other.start && self.end < other.start) ||
+            (self.start > other.end && self.end > other.end)
+        {
+            return Proximity::Exclude;
+        }
+
         match (self.start.cmp(&other.end), self.end.cmp(&other.start)) {
 
             // Contacts from left
@@ -1448,64 +1478,64 @@ fn proximity() {
 
         // Same region overlaps
         (
-            Region { h : Range { start : 0, end : 10 }, v : Range { start : 0, end : 10 } },
-            Region { h : Range { start : 0, end : 10 }, v : Range { start : 0, end : 10 } },
+            Region { cols : Range { start : 0, end : 10 }, rows : Range { start : 0, end : 10 } },
+            Region { cols : Range { start : 0, end : 10 }, rows : Range { start : 0, end : 10 } },
             Proximity::Overlap
         ),
 
         // Half width overlap
         (
-            Region { h : Range { start : 0, end : 10 }, v : Range { start : 0, end : 10 } },
-            Region { h : Range { start : 5, end : 15 }, v : Range { start : 0, end : 10 } },
+            Region { cols : Range { start : 0, end : 10 }, rows : Range { start : 0, end : 10 } },
+            Region { cols : Range { start : 5, end : 15 }, rows : Range { start : 0, end : 10 } },
             Proximity::Overlap
         ),
 
         // Half height overlap
         (
-            Region { h : Range { start : 0, end : 10 }, v : Range { start : 0, end : 10 } },
-            Region { h : Range { start : 0, end : 10 }, v : Range { start : 5, end : 15 } },
+            Region { cols : Range { start : 0, end : 10 }, rows : Range { start : 0, end : 10 } },
+            Region { cols : Range { start : 0, end : 10 }, rows : Range { start : 5, end : 15 } },
             Proximity::Overlap
         ),
 
         // Horizontal exclude
         (
-            Region { h : Range { start : 0, end : 10 }, v : Range { start : 0, end : 10 } },
-            Region { h : Range { start : 30, end : 40 }, v : Range { start : 0, end : 10 } },
+            Region { cols : Range { start : 0, end : 10 }, rows : Range { start : 0, end : 10 } },
+            Region { cols : Range { start : 30, end : 40 }, rows : Range { start : 0, end : 10 } },
             Proximity::Exclude
         ),
 
         // Vertical exclude
         (
-            Region { h : Range { start : 0, end : 10 }, v : Range { start : 0, end : 10 } },
-            Region { h : Range { start : 0, end : 10 }, v : Range { start : 30, end : 40 } },
+            Region { cols : Range { start : 0, end : 10 }, rows : Range { start : 0, end : 10 } },
+            Region { cols : Range { start : 0, end : 10 }, rows : Range { start : 30, end : 40 } },
             Proximity::Exclude
         ),
 
         // Both exclude
         (
-            Region { h : Range { start : 0, end : 10 }, v : Range { start : 0, end : 10 } },
-            Region { h : Range { start : 30, end : 40 }, v : Range { start : 30, end : 40 } },
+            Region { cols : Range { start : 0, end : 10 }, rows : Range { start : 0, end : 10 } },
+            Region { cols : Range { start : 30, end : 40 }, rows : Range { start : 30, end : 40 } },
             Proximity::Exclude
         ),
 
         // Horizontal contact (other overlap)
         (
-            Region { h : Range { start : 0, end : 10 }, v : Range { start : 0, end : 10 } },
-            Region { h : Range { start : 10, end : 20 }, v : Range { start : 0, end : 10 } },
+            Region { cols : Range { start : 0, end : 10 }, rows : Range { start : 0, end : 10 } },
+            Region { cols : Range { start : 10, end : 20 }, rows : Range { start : 0, end : 10 } },
             Proximity::Contact
         ),
 
         // Vertical contact (other overlap)
         (
-            Region { h : Range { start : 0, end : 10 }, v : Range { start : 0, end : 10 } },
-            Region { h : Range { start : 0, end : 10 }, v : Range { start : 10, end : 20 } },
+            Region { cols : Range { start : 0, end : 10 }, rows : Range { start : 0, end : 10 } },
+            Region { cols : Range { start : 0, end : 10 }, rows : Range { start : 10, end : 20 } },
             Proximity::Contact
         ),
 
         // Corner contact
         (
-            Region { h : Range { start : 0, end : 10 }, v : Range { start : 0, end : 10 } },
-            Region { h : Range { start : 10, end : 20 }, v : Range { start : 10, end : 20 } },
+            Region { cols : Range { start : 0, end : 10 }, rows : Range { start : 0, end : 10 } },
+            Region { cols : Range { start : 10, end : 20 }, rows : Range { start : 10, end : 20 } },
             Proximity::Contact
         ),
 
@@ -1570,6 +1600,10 @@ pub struct Region {
 
 impl Region {
 
+    pub fn area(&self) -> usize {
+        self.height() * self.width()
+    }
+
     pub fn height(&self) -> usize {
         self.rows.end - self.rows.start
     }
@@ -1595,6 +1629,18 @@ impl HalfOpen for Region
 where
     Self : Sized
 {
+
+    fn overlap(&self, other : &Self) -> Option<Self> {
+        let rows = self.rows.overlap(&other.rows)?;
+        let cols = self.cols.overlap(&other.cols)?;
+        Some(Region { rows, cols })
+    }
+
+    fn joint(&self, other : &Self) -> Option<Self> {
+        let rows = self.rows.joint(&other.rows)?;
+        let cols = self.cols.joint(&other.cols)?;
+        Some(Region { rows, cols })
+    }
 
     fn overlapping_range(&self, b_ranges : &[Self]) -> Option<RangeInclusive<usize>> {
         unimplemented!()
@@ -2839,6 +2885,76 @@ pub struct Circle {
     pub radius : f32
 }
 
+pub fn centroid(ptsf : &[Vector2<f32>]) -> Vector2<f32> {
+    let n = ptsf.len() as f32;
+    let mut center = Vector2::new(0.0, 0.0);
+    for pt in ptsf {
+        center += pt;
+    }
+    center[0] /= n;
+    center[1] /= n;
+    center
+}
+
+#[derive(Debug, Clone)]
+pub struct CircleEstimator {
+    centered_ptsf : Vec<Vector2<f32>>,
+    x_sq : Vec<f32>,
+    y_sq : Vec<f32>
+}
+
+impl CircleEstimator {
+
+    pub fn new() -> Self {
+        Self {
+            centered_ptsf : Vec::with_capacity(32),
+            x_sq : Vec::with_capacity(32),
+            y_sq : Vec::with_capacity(32),
+        }
+    }
+
+    pub fn estimate(&mut self, ptsf : &[Vector2<f32>]) -> Option<Circle> {
+        let center = centroid(ptsf);
+        self.estimate_with_centroid(ptsf, &center)
+    }
+
+    pub fn estimate_with_centroid(&mut self, ptsf : &[Vector2<f32>], centroid : &Vector2<f32>) -> Option<Circle> {
+        self.centered_ptsf.clear();
+        self.x_sq.clear();
+        self.y_sq.clear();
+
+        self.centered_ptsf.extend(ptsf.iter().map(|pt| pt.clone() - centroid ));
+        self.x_sq.extend(self.centered_ptsf.iter().map(|pt| pt[0].powf(2.) ));
+        self.y_sq.extend(self.centered_ptsf.iter().map(|pt| pt[1].powf(2.) ));
+
+        let (mut x_sq, mut y_sq, mut x_cub, mut y_cub, mut xy, mut yyx, mut xxy) = (0., 0., 0., 0., 0., 0., 0.);
+        for i in 0..self.centered_ptsf.len() {
+            let x = self.centered_ptsf[i][0];
+            let y = self.centered_ptsf[i][1];
+            x_sq += self.x_sq[i];
+            y_sq += self.y_sq[i];
+            x_cub += x * self.x_sq[i];
+            y_cub += y * self.y_sq[i];
+            xy += x * y;
+            yyx += x * self.y_sq[i];
+            xxy += self.x_sq[i] * y;
+        }
+
+        let m = Matrix2::from_rows(&[RowVector2::new(x_sq, xy), RowVector2::new(xy, y_sq)]);
+        let b = Vector2::new(
+            0.5 * (x_cub + yyx),
+            0.5 * (y_cub + xxy)
+        );
+        let ans = LU::new(m).solve(&b)?;
+        // let center = Vector2::new(ans[0] + center_x, ans[1] + center_y);
+        let center = ans + centroid;
+        let n = ptsf.len() as f32;
+        let radius = (ans[0].powf(2.) + ans[1].powf(2.) + (x_sq + y_sq) / n).sqrt();
+        Some(Circle { center, radius })
+    }
+
+}
+
 impl Circle {
 
     pub fn coords(&self, img_sz : (usize, usize)) -> Option<CircleCoords> {
@@ -2880,37 +2996,14 @@ impl Circle {
         Self::enclosing_from_points(&ptsf[..])
     }
 
-    pub fn calculate_from_points(ptsf : &[Vector2<f32>]) -> Option<Self> {
-        let n = ptsf.len() as f32;
-        let (mut center_x, mut center_y) = ptsf.iter().fold((0.0, 0.0), |acc, pt| (acc.0 + pt[0], acc.1 + pt[1]) );
-        center_x /= n;
-        center_y /= n;
-        let centered_ptsf : Vec<_> = ptsf.iter().map(|pt| Vector2::new(pt[0] - center_x, pt[1] - center_y)).collect();
-        let x_sq = centered_ptsf.iter().fold(0., |acc, pt| acc + pt[0].powf(2.) );
-        let y_sq = centered_ptsf.iter().fold(0., |acc, pt| acc + pt[1].powf(2.) );
-        let x_cub = centered_ptsf.iter().fold(0., |acc, pt| acc + pt[0].powf(3.) );
-        let y_cub = centered_ptsf.iter().fold(0., |acc, pt| acc + pt[1].powf(3.) );
-        let xy = centered_ptsf.iter().fold(0., |acc, pt| acc + pt[0] * pt[1] );
-        let yyx = centered_ptsf.iter().fold(0., |acc, pt| acc + pt[0] * pt[1].powf(2.) );
-        let xxy = centered_ptsf.iter().fold(0., |acc, pt| acc + pt[0].powf(2.) * pt[1] );
-        let m = Matrix2::from_rows(&[RowVector2::new(x_sq, xy), RowVector2::new(xy, y_sq)]);
-        let b = Vector2::new(
-            0.5 * (x_cub + yyx),
-            0.5 * (y_cub + xxy)
-        );
-        let ans = LU::new(m).solve(&b)?;
-        let center = Vector2::new(ans[0] + center_x, ans[1] + center_y);
-        let radius = (ans[0].powf(2.) + ans[1].powf(2.) + (x_sq + y_sq) / n).sqrt();
-        Some(Self { center, radius })
-    }
-
     pub fn calculate(
         pts : &[(usize, usize)], 
         img_height : usize
     ) -> Option<Self> {
-        let ptsf : Vec<Vector2<f32>> = pts.iter()
+        /*let ptsf : Vec<Vector2<f32>> = pts.iter()
             .map(|pt| Vector2::new(pt.1 as f32, (img_height - pt.0) as f32) ).collect();
-        Self::calculate_from_points(&ptsf[..])
+        Self::calculate_from_points(&ptsf[..])*/
+        unimplemented!()
     }
 
     pub fn center_coord(&self, img_height : usize) -> Option<(usize, usize)> {
@@ -2921,11 +3014,20 @@ impl Circle {
         }
     }
 
+    pub fn radius_variance_from_pts(&self, ptsf : &[Vector2<f32>]) -> f32 {
+        let n = ptsf.len() as f32;
+        ptsf.iter().fold(0.0, |acc, pt| acc + ((pt - &self.center).magnitude() - self.radius).powf(2.)  ) / n
+    }
+
+    pub fn avg_abs_error(&self, ptsf : &[Vector2<f32>]) -> f32 {
+        let n = ptsf.len() as f32;
+        ptsf.iter().fold(0.0, |acc, pt| acc + ((pt - &self.center).magnitude() - self.radius).abs()  ) / n
+    }
+
     // variance of the random variable (dist(pt, center) - radius), which is a measure of fit quality.
     pub fn radius_variance(&self, pts : &[(u16, u16)], img_height : u16) -> f32 {
         let ptsf : Vec<Vector2<f32>> = pts.iter().map(|pt| Vector2::new(pt.1 as f32, (img_height - pt.0) as f32) ).collect();
-        let n = ptsf.len() as f32;
-        ptsf.iter().fold(0.0, |acc, pt| acc + ((pt - &self.center).magnitude() - self.radius).powf(2.)  ) / n
+        self.radius_variance_from_pts(&ptsf[..])
     }
 
     pub fn circumference_at(&self, deg_rad : f32) -> Vector2<f32> {

@@ -223,6 +223,18 @@ where
         out.out.and_assign(&out.high_eroded);
     }
     
+    pub fn local_area_to<T>(&self, dst : &mut Image<u8, T>)
+    where
+        T : StorageMut<u8>
+    {
+        assert!(self.height() % dst.height() == 0);
+        assert!(self.width() % dst.width() == 0);
+        let wins = self.windows((self.height() / dst.height(), self.width() / dst.width()));
+        for (w, mut px) in wins.zip(dst.pixels_mut(1)) {
+            *px = w.count_pixels(254, 255) as u8;
+        }
+    }
+
     /* Binarizes a bit image, setting all unmatched pixels to zero, and matched pixels
     to a foreground value. */
     pub fn threshold_to<T>(&self, fg : Foreground, out : &mut Image<u8, T>) 
@@ -1581,7 +1593,7 @@ impl IppReduceBits {
 
     pub fn new(height : usize, width : usize, noise : i32, levels : u32) -> Self {
         // This is actually in ippcc
-        /*assert!(noise >= 0 && noise <= 100);
+        assert!(noise >= 0 && noise <= 100);
         let chan = crate::foreign::ipp::ippi::IppChannels_ippC1;
         let dither = crate::foreign::ipp::ippi::IppiDitherType_ippDitherNone;
         let mut sz : i32 = 0;
@@ -1597,8 +1609,7 @@ impl IppReduceBits {
             assert!(sz > 0);
             let buf : Vec<_> = (0..sz).map(|_| 0u8 ).collect();
             Self { buf, noise, dither, levels }
-        }*/
-        unimplemented!()
+        }
     }
 
     pub fn calculate<S, T>(&mut self, src : &Image<u8, S>, dst : &mut Image<u8, T>)
@@ -1607,7 +1618,7 @@ impl IppReduceBits {
         T : StorageMut<u8>
     {
         // This is actually in ippcc
-        /*unsafe {
+        unsafe {
             let ans = crate::foreign::ipp::ippcv::ippiReduceBits_8u_C1R(
                 src.as_ptr(),
                 src.byte_stride() as i32,
@@ -1620,7 +1631,7 @@ impl IppReduceBits {
                 self.buf.as_mut_ptr()
             );
             assert!(ans == 0);
-        }*/
+        }
     }
 
 }
@@ -1778,7 +1789,7 @@ impl Lookup {
         Self(dst)
     }
     
-    pub fn lookup_inplace<T>(&self, img : &mut Image<u8, T>) 
+    pub fn lookup_inplace<T>(&self, img : &mut Image<u8, T>)
     where
         T : StorageMut<u8>
     {

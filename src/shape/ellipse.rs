@@ -155,6 +155,14 @@ impl Default for Ellipse {
     
 }
 
+impl From<crate::shape::Circle> for Ellipse {
+
+    fn from(c : crate::shape::Circle) -> Self {
+        Ellipse { center : c.center, major : Vector2::new(c.radius, 0.0), minor : Vector2::new(0.0, c.radius) }
+    }
+
+}
+
 impl From<AlignedEllipse> for OrientedEllipse {
 
     fn from(aligned : AlignedEllipse) -> Self {
