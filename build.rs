@@ -25,6 +25,7 @@ fn try_link_ippi() {
         println!("cargo:rustc-link-lib=ipps");
         println!("cargo:rustc-link-lib=ippi");
         println!("cargo:rustc-link-lib=ippcv");
+        println!("cargo:rustc-link-lib=ippcc");
     }
 }
 

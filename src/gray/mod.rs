@@ -1580,6 +1580,7 @@ impl MedianCutQuantization {
     
 }
 
+#[derive(Clone)]
 #[cfg(feature="ipp")]
 pub struct IppReduceBits {
     noise : i32,
@@ -1591,24 +1592,30 @@ pub struct IppReduceBits {
 #[cfg(feature="ipp")]
 impl IppReduceBits {
 
-    pub fn new(height : usize, width : usize, noise : i32, levels : u32) -> Self {
+    pub fn new(height : usize, width : usize, noise : Option<i32>, levels : u32) -> Self {
         // This is actually in ippcc
-        assert!(noise >= 0 && noise <= 100);
+        if let Some(noise) = noise {
+            assert!(noise >= 0 && noise <= 100);
+        }
         let chan = crate::foreign::ipp::ippi::IppChannels_ippC1;
-        let dither = crate::foreign::ipp::ippi::IppiDitherType_ippDitherNone;
+        let dither = if noise.is_some() {
+            crate::foreign::ipp::ippi::IppiDitherType_ippDitherStucki
+        } else {
+            crate::foreign::ipp::ippi::IppiDitherType_ippDitherNone
+        };
         let mut sz : i32 = 0;
         unsafe {
-            let ans = crate::foreign::ipp::ippi::ippcvReduceBitsGetBufferSize(
+            let ans = crate::foreign::ipp::ippcc::ippiReduceBitsGetBufferSize(
                 chan,
-                crate::foreign::ipp::ippi::IppiSize::from((height, width)),
-                noise,
+                std::mem::transmute(crate::foreign::ipp::ippi::IppiSize::from((height, width))),
+                noise.unwrap_or(0),
                 dither,
                 &mut sz as *mut _
             );
             assert!(ans == 0);
-            assert!(sz > 0);
+            // assert!(sz > 0);
             let buf : Vec<_> = (0..sz).map(|_| 0u8 ).collect();
-            Self { buf, noise, dither, levels }
+            Self { buf, noise : noise.unwrap_or(0), dither, levels }
         }
     }
 
@@ -1619,12 +1626,12 @@ impl IppReduceBits {
     {
         // This is actually in ippcc
         unsafe {
-            let ans = crate::foreign::ipp::ippcv::ippiReduceBits_8u_C1R(
+            let ans = crate::foreign::ipp::ippcc::ippiReduceBits_8u_C1R(
                 src.as_ptr(),
                 src.byte_stride() as i32,
                 dst.as_mut_ptr(),
                 dst.byte_stride() as i32,
-                crate::foreign::ipp::ippi::IppiSize::from(src.size()),
+                std::mem::transmute(crate::foreign::ipp::ippi::IppiSize::from(src.size())),
                 self.noise,
                 self.dither,
                 self.levels as i32,
