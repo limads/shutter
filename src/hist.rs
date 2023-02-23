@@ -374,6 +374,16 @@ pub struct IppHistogram {
 #[cfg(feature="ipp")]
 impl IppHistogram {
 
+    pub fn nonzero(&self) -> Vec<usize> {
+        let mut nz = Vec::with_capacity(32);
+        for i in 0..256 {
+            if self.hist[i] > 0 {
+                nz.push(i);
+            }
+        }
+        nz
+    }
+
     pub fn as_slice(&self) -> &[u32] {
         &self.hist[..]
     }
@@ -419,6 +429,12 @@ impl IppHistogram {
     pub fn quantile_when_accumulated(&self, q : f32) -> u8 {
         let target = (self.hist[255] as f32 * q) as u32;
         self.hist.partition_point(|px| *px < target ) as u8
+    }
+
+    pub fn calculate(img : &Image<u8, impl Storage<u8>>) -> Self {
+        let mut gh = Self::new(img.height(), img.width());
+        gh.update(img);
+        gh
     }
 
     pub fn new(height : usize, width : usize) -> Self {
