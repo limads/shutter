@@ -299,9 +299,17 @@ impl BitonalEncoder {
         self.update()
     }
 
-
 }
 
+/* A good characteristic of the bitonal encoder is that no computation
+is performed on the non-match branch (which should improve performance
+for sparser binary images). The current RLE is pushed at either a neighboring
+match with zero trailing zeros or the current RLE at leading zeros, or the
+last column. The short-circuit leads to only one of those conditions being
+evaluated. The representation is "lossy" by omitting isolated positive pixels,
+and never proposing positive pixels where there should be none, so that
+connectivity analysis of the RunLengths never join shapes that wouldn't
+be joined in the lossless representation (alhtough it might separate them). */
 #[inline(always)]
 fn lossy_encode_bitonal_pixel(
     row_ix : usize,
@@ -314,7 +322,22 @@ fn lossy_encode_bitonal_pixel(
     let px = unsafe { row.get_unchecked(col_ix) };
     if *px > 0 {
         if let Some(rle) = curr_rle.as_mut() {
+
+            // Note: At this point, it is known that column>0 (or curr_rle would be empty) or
+            // trailing_zeros is 0 (because trailing_zeros of previous column > 0
+            // empties the curr_rle variable) So falling here means the two RLEs are connected.
             let length_incr = 8 - px.leading_zeros() as usize;
+
+            // Ignore non-contiguous RLEs. The lossy representation
+            // will always be zero when not contiguous, not messing with connectivity
+            // analysis.
+            let is_contiguous = length_incr == px.count_ones() as usize;
+            if !is_contiguous {
+                rles.push(rle.clone());
+                *curr_rle = None;
+                return;
+            }
+
             rle.length += length_incr;
 
             // The last condition is never evaluated at last column due to short circuit,
@@ -329,9 +352,15 @@ fn lossy_encode_bitonal_pixel(
         } else {
             let trailing = px.trailing_zeros() as usize;
             let leading = px.leading_zeros() as usize;
+
+            let is_contiguous = 8 - leading - trailing == px.count_ones() as usize;
+            if !is_contiguous {
+                return;
+            }
+
             let col_start = col_ix * 8 + trailing;
-            // *curr_rle = Some(RunLength { start : (row_ix, col_start), length : (8 - trailing) });
-            let new_rle = RunLength { start : (row_ix, col_start), length : (8 - trailing - leading) };
+            let length = 8 - trailing - leading;
+            let new_rle = RunLength { start : (row_ix, col_start), length };
 
             let must_push = leading > 0 ||
                 col_ix == max_ix ||
@@ -359,6 +388,7 @@ fn lossy_encode_bitonal_row(row : &[u8], row_ix : usize, rles : &mut Vec<RunLeng
     for col_ix in 0..row.len() {
         lossy_encode_bitonal_pixel(row_ix, col_ix, max_ix, row, &mut curr_rle, rles);
     }
+    // assert!(curr_rle.is_none());
 }
 
 // cargo test --lib -- bitonal_encoder --nocapture
@@ -370,6 +400,11 @@ fn bitonal_encoder() {
 
     let mut img = ImageBuf::<u8>::new_constant(128, 128, 0);
     img.draw(Mark::Dot((64, 64), 32), 255);
+    // img.window_mut((64 - 16, 64 - 16), (32, 32)).unwrap().fill(0);
+    /*img.window_mut((10, 10), (20, 20)).unwrap().fill(255);
+    img.window_mut((10, 35), (20, 20)).unwrap().fill(255);
+    img.window_mut((10, 100), (20, 20)).unwrap().fill(255);
+    img.window_mut((100, 10), (20, 20)).unwrap().fill(255);*/
 
     /*let mut t = Timer::start();
     let mut enc = ChainEncoder::new(img.height(), img.width());
@@ -3036,6 +3071,10 @@ pub struct RunLength {
 
 impl RunLength {
 
+    pub fn contains(&self, pt : (usize, usize)) -> bool {
+        pt.0 == self.start.0 && pt.1 >= self.start.1 && pt.1 < self.start.1 + self.length
+    }
+
     pub fn bounds(&self) -> ((usize, usize), (usize, usize)) {
         (self.start, self.end())
     }
@@ -3573,6 +3612,17 @@ fn rows_for_sorted_rles(rles : &[RunLength], rows : &mut Vec<Range<usize>>) {
 
 impl RunLengthCode {
 
+    pub fn contains(&self, pt : (usize, usize)) -> bool {
+        match self.rows.binary_search_by(|r| self.rles[r.clone()][0].start.0.cmp(&pt.0) ) {
+            Ok(row) => {
+                self.rles[self.rows[row].clone()]
+                    .binary_search_by(|rle| if rle.contains(pt) { Ordering::Equal } else { rle.start.1.cmp(&pt.1) } )
+                    .is_ok()
+            },
+            Err(_) => false
+        }
+    }
+
     // Unity measures the average number of run lenghs per row in a connected RLC.
     // Solidity 1.0 means a single RunLength per row, signalling a fully connected object
     // without holes. Greater values means objects full of holes.
@@ -3606,6 +3656,10 @@ impl RunLengthCode {
         max_w
     }
 
+    pub fn region(&self) -> Option<crate::shape::Region> {
+        self.outer_rect().as_ref().map(|r| crate::shape::Region::from_rect_tuple(r) )
+    }
+
     pub fn outer_rect(&self) -> Option<(usize, usize, usize, usize)> {
         let mut rect = self.rles.first()?.as_rect();
         if self.rles.len() > 1 {
@@ -3636,7 +3690,9 @@ impl RunLengthCode {
             a.start.0.cmp(&b.start.0).then(a.start.1.cmp(&b.start.1)) 
         );
         rows_for_sorted_rles(&self.rles[..], &mut self.rows);
-        self
+        // self
+        // todo use connectivity to decide new runlenght size
+        unimplemented!()
     }
     
     pub fn preserve_larger(&self, min_len : usize) -> RunLengthCode {

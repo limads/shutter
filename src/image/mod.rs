@@ -345,6 +345,10 @@ where
     P : Pixel
 {
     
+    pub fn as_slice(&self) -> &[P] {
+        self.slice.as_ref()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.slice.as_ref().is_empty()
     }
@@ -894,14 +898,6 @@ where
     //for<'b> &'b [N] : Storage<N>
 {
 
-    pub fn as_slice(&self) -> &[N] {
-        &self.slice[..]
-    }
-
-    pub fn as_mut_slice(&mut self) -> &mut [N] {
-        &mut self.slice[..]
-    }
-
     pub fn leak(self) {
         Box::leak(self.slice);
     }
@@ -1042,18 +1038,21 @@ where
         img
     }
 
-    pub fn new_from_slice(source : &[N], width : usize) -> Self {
-        let mut buf = Vec::with_capacity(source.len());
-        let height = buf.len() / width;
-        unsafe { buf.set_len(source.len()); }
-        buf.copy_from_slice(&source);
-        Self{ 
-            slice : buf.into_boxed_slice(), 
+    pub fn new_from_slice(source : &[N], width : usize) -> Option<Self> {
+        if source.len() % width != 0 {
+            return None;
+        }
+        // let mut buf = Vec::with_capacity(source.len());
+        let height = source.len() / width;
+        // unsafe { buf.set_len(source.len()); }
+        // buf.copy_from_slice(&source);
+        Some(Self {
+            slice : source.to_owned().into(),
             width, 
             offset : (0, 0), 
             sz : (height, width),
             _px : PhantomData
-        }
+        })
     }
 
     pub fn from_vec(slice : Vec<N>, width : usize) -> Self {
@@ -2052,6 +2051,10 @@ where
     P : Pixel,
     S : StorageMut<P>,
 {
+
+    pub fn as_mut_slice(&mut self) -> &mut [P] {
+        self.slice.as_mut()
+    }
 
     /// Returns a mutably borrowed view over the whole window. Note the current mutable reference
     /// to the window is invalidated when this view enters into scope. Same as self.as_mut(). But is

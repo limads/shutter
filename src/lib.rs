@@ -101,6 +101,8 @@ pub mod stereo;
 
 // pub mod motion;
 
+pub mod polar;
+
 pub mod resample;
 
 pub mod edge;

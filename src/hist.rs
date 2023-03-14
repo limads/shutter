@@ -265,14 +265,15 @@ impl GrayHistogram {
     // Accumulates histogram values until a given probability is reached. Iterates
     // the histogram only up to the desired point.
     pub fn quantile(&self, q : f64) -> u8 {
-        let mut p = 0.0;
-        let mut ix = 0;
         let sum = self.sum as f64;
-        while p < q && ix < 255 {
+        let mut p = 0.0;
+        for ix in 0..=255 {
             p += self.hist[ix] as f64 / sum;
-            ix += 1;
+            if p >= q {
+                return ix as u8;
+            }
         }
-        ix as u8
+        255
     }
 
     pub fn new() -> Self {
@@ -409,14 +410,16 @@ impl IppHistogram {
     }
 
     pub fn quantile(&self, q : f64) -> u8 {
-        let mut p = 0.0;
-        let mut ix = 0;
         let sum = self.sum as f64;
-        while p < q && ix < 255 {
+        let mut p = 0.0;
+        for ix in 0..=255 {
             p += self.hist[ix] as f64 / sum;
-            ix += 1;
+            println!("{} = {}", ix, p);
+            if p >= q {
+                return ix as u8;
+            }
         }
-        ix as u8
+        255
     }
 
     pub fn accumulate_inplace(&mut self) {
@@ -842,5 +845,6 @@ fn find_modes() {
     //println!("{:?}", hist);
     //println!("{:?}", hist.modes(2, 2));
 }
+
 
 

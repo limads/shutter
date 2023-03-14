@@ -453,6 +453,96 @@ pub fn block_min_or_max<N>(
 
 }
 
+pub fn masked_min_max_idx<N, S, T>(
+    win : &Image<N, S>,
+    mask : &Image<u8, T>,
+    // min : bool,
+    // max : bool
+) -> (Option<(usize, usize, N)>, Option<(usize, usize, N)>)
+where
+    N : Pixel + AsPrimitive<f32>,
+    f32 : AsPrimitive<N>,
+    S : Storage<N>,
+    T : Storage<u8>
+{
+    #[cfg(feature="ipp")]
+    unsafe {
+        use crate::foreign::ipp::ippcv::IppiPoint;
+        let (step, sz) = crate::image::ipputils::step_and_size_for_image(win);
+        // if min && max {
+        let (mut min, mut max) : (f32, f32) = (0., 0.);
+        let (mut min_ix, mut max_ix) : (IppiPoint, IppiPoint) = (
+            IppiPoint { x : 0, y : 0 },
+            IppiPoint { x : 0, y : 0 }
+        );
+        if win.pixel_is::<u8>() {
+            let ans = crate::foreign::ipp::ippcv::ippiMinMaxIndx_8u_C1MR(
+                mem::transmute(win.as_ptr()),
+                win.byte_stride() as i32,
+                mask.as_ptr(),
+                mask.byte_stride() as i32,
+                mem::transmute(sz),
+                &mut min as *mut _,
+                &mut max as *mut _,
+                &mut min_ix as *mut _,
+                &mut max_ix as *mut _
+            );
+            // assert!(ans == 0, "{}", ans);
+            return (
+                Some((min_ix.y as usize, min_ix.x as usize, min.as_())),
+                Some((max_ix.y as usize, max_ix.x as usize, max.as_()))
+            );
+        } else {
+            unimplemented!()
+        }
+        /*} else if min {
+            let mut min_x : i32 = 0;
+            let mut min_y : i32 = 0;
+            if win.pixel_is::<u8>() {
+                let mut min : u8 = 0;
+                let ans = crate::foreign::ipp::ippi::ippiMinIndx_8u_C1MR(
+                    mem::transmute(win.as_ptr()),
+                    step,
+                    mask.as_ptr(),
+                    mask.byte_stride() as i32,
+                    mem::transmute(sz),
+                    &mut min as *mut _,
+                    &mut min_x as *mut _,
+                    &mut min_y as *mut _
+                );
+                assert!(ans == 0);
+                let min_f : f32 = min.as_();
+                return (Some((min_y as usize, min_x as usize, min_f.as_())), None);
+            } else {
+                unimplemented!()
+            }
+        } else if max {
+            let mut max_x : i32 = 0;
+            let mut max_y : i32 = 0;
+            if win.pixel_is::<u8>() {
+                let mut max : u8 = 0;
+                let ans = crate::foreign::ipp::ippi::ippiMaxIndx_8u_C1MR(
+                    mem::transmute(win.as_ptr()),
+                    step,
+                    mask.as_ptr(),
+                    mask.byte_stride() as i32,
+                    mem::transmute(sz),
+                    &mut max as *mut _,
+                    &mut max_x as *mut _,
+                    &mut max_y as *mut _
+                );
+                assert!(ans == 0);
+                let max_f : f32 = max.as_();
+                return (None, Some((max_y as usize, max_x as usize, max_f.as_())));
+            } else {
+                unimplemented!()
+            }
+        } else {
+            panic!("Invalid operation");
+        }*/
+    }
+}
+
 // This returns the minimum and maximum values and indices.
 // Can be applied block-wise to get indices at many points.
 pub fn min_max_idx<N>(

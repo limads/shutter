@@ -1311,8 +1311,27 @@ pub fn inner_circle(pts : &[(usize, usize)]) -> Option<((usize, usize), f32)> {
 
 }
 
+pub trait Set
+where
+    Self : Sized
+{
+
+    type Item;
+
+    fn contains(&self, it : &Self::Item) -> bool;
+
+    fn intersect(&self, other : &Self) -> Option<Self>;
+
+    fn unite(&self, other : &Self) -> Self;
+
+}
+
 use std::ops::RangeInclusive;
 
+// TODO rename to OrdSet, which satisfies Self : Set with the same Item. Move
+// everything to top-level set module. RunLength code should satisfy set and ordset
+// as well. Perhaps have associated Proximity type (1D or 2D spatial relationships).
+// Where Region has Direction { vertical : Proximity, horizontal : Proximity }.
 pub trait HalfOpen
 where
     Self : Sized
@@ -1596,6 +1615,14 @@ a pair of horizontal (h) and vertical (v) ranges.
 pub struct Region {
     pub rows : Range<usize>,
     pub cols : Range<usize>
+}
+
+impl From<(usize, usize, usize, usize)> for Region {
+
+    fn from(r : (usize, usize, usize, usize)) -> Self {
+        Self::from_rect_tuple(&r)
+    }
+
 }
 
 impl Region {
