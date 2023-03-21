@@ -1627,6 +1627,13 @@ impl From<(usize, usize, usize, usize)> for Region {
 
 impl Region {
 
+    pub fn center(&self) -> (usize, usize) {
+        (
+            self.rows.start + (self.rows.end - self.rows.start) / 2,
+            self.cols.start + (self.cols.end - self.cols.start) / 2
+        )
+    }
+
     pub fn area(&self) -> usize {
         self.height() * self.width()
     }
@@ -2988,8 +2995,8 @@ impl Circle {
         if self.center[0] < 0.0 || self.center[1] < 0.0 {
             return None;
         }
-        let center = (img_sz.0.checked_sub(self.center[1] as usize)?, self.center[0] as usize);
-        let radius = self.radius as usize;
+        let center = (img_sz.0.checked_sub(self.center[1].round() as usize)?, self.center[0].round() as usize);
+        let radius = self.radius.round() as usize;
         if center.0 + radius < img_sz.0 || center.1 + radius < img_sz.1 {
             Some(CircleCoords { center, radius })
         } else {
@@ -3070,5 +3077,6 @@ struct InterIndices(Vec<usize>);
 /* Sequential indices (y, y, y, ... x, x, x) representation,
 useful for vectorized ops. */
 struct SeqIndices(Vec<usize>);
+
 
 

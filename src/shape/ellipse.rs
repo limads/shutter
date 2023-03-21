@@ -445,14 +445,14 @@ impl Ellipse {
             return None;
         }
         
-        let c = ((size.0 as f32 - self.center[1]) as usize, self.center[0] as usize);
+        let c = ((size.0 as f32 - self.center[1]).round() as usize, self.center[0].round() as usize);
         let dst_major = (
-            (size.0 as f32 - (c.0 as f32 + self.major[1])) as usize,
-            (c.1 as f32 + self.major[0]) as usize
+            (size.0 as f32 - (c.0 as f32 + self.major[1])).round() as usize,
+            (c.1 as f32 + self.major[0]).round() as usize
         );
         let dst_minor = (
-            (size.0 as f32 - (c.0 as f32 + self.minor[1])) as usize,
-            (c.1 as f32 + self.minor[0]) as usize
+            (size.0 as f32 - (c.0 as f32 + self.minor[1])).round() as usize,
+            (c.1 as f32 + self.minor[0]).round() as usize
         );
         Some(EllipseCoords { center : c, major : dst_major, minor : dst_minor })
     }

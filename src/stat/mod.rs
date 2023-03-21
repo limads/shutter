@@ -206,8 +206,8 @@ impl<P, S> Image<P, S>
 where
     P : Pixel + Add<Output=P>,
     S : Storage<P>,
-    Box<[P]> : Storage<P>,
-    for<'a> &'a [P] : Storage<P>
+    //Box<[P]> : Storage<P>,
+    //for<'a> &'a [P] : Storage<P>
 {
 
     /*

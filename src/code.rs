@@ -283,6 +283,13 @@ impl BitonalEncoder {
         self.update()
     }
 
+    pub fn calculate_from_binary<S>(&mut self, img : &Image<u8, S>) -> RunLengthCode
+    where
+        S : Storage<u8>
+    {
+        self.calculate_from_gray(img, 0)
+    }
+
     pub fn calculate_from_gray<S>(&mut self, img : &Image<u8, S>, above_thr : u8) -> RunLengthCode
     where
         S : Storage<u8>

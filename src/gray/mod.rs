@@ -1580,6 +1580,7 @@ impl MedianCutQuantization {
     
 }
 
+// TODO hide behind quantization trait.
 #[derive(Clone)]
 #[cfg(feature="ipp")]
 pub struct IppReduceBits {
@@ -2077,6 +2078,30 @@ fn histogram_equalize() {
     // Divide cumulative histogram by total number of pixels
     // Multiply resulting ratio by 255
     // Use histogram as a LUT to lookup each y corresponding to each x.
+}
+
+impl<u8, S> Image<u8, S>
+where
+    S : Storage<u8>,
+    u8 : Pixel,
+    f32 : From<u8>
+{
+
+    // Interpreting each pixel as a weight, find the point that
+    // best balance the image plane.
+    pub fn gravity_center(&self) -> (f32, f32) {
+        let sum = self.sum::<f32>(1) as f32;
+        let mut center = (0., 0.);
+        for i in 0..self.height() {
+            for j in 0..self.width() {
+                let weight = f32::from(self[(i, j)]) / sum;
+                center.0 += j as f32 * weight;
+                center.1 += i as f32 * weight;
+            }
+        }
+        center
+    }
+
 }
 
 

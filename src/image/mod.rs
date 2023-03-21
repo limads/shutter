@@ -479,13 +479,11 @@ where
         offset : (usize, usize), 
         dims : (usize, usize)
     ) -> Option<Window<P>> {
-        assert_nonzero(dims);
+        if dims.0 == 0 || dims.1 == 0 {
+            return None;
+        }
         let new_offset = (self.offset.0 + offset.0, self.offset.1 + offset.1);
-        // println!("Window = {:?}", (offset, dims));
-        // if new_offset.0 + dims.0 <= self.original_size().0 &&
-        //    new_offset.1 + dims.1 <= self.original_size().1
-        if offset.0 + dims.0 <= self.height() && offset.1 + dims.1 <= self.width()
-        {
+        if offset.0 + dims.0 <= self.height() && offset.1 + dims.1 <= self.width() {
             Some(Image {
                 slice : index::sub_slice(self.slice.as_ref(), offset, dims, self.width),
                 offset : new_offset,
@@ -2127,8 +2125,10 @@ where
         offset : (usize, usize), 
         dims : (usize, usize)
     ) -> Option<WindowMut<P>> {
-        assert_nonzero(dims);
-        // println!("Window Mut = {:?}", (offset, dims));
+        if dims.0 == 0 || dims.1 == 0 {
+            return None;
+        }
+        // println!("Window Mutassert_non = {:?}", (offset, dims));
         let new_offset = (self.offset.0 + offset.0, self.offset.1 + offset.1);
         // if new_offset.0 + dims.0 <= self.original_size().0
         //    && new_offset.1 + dims.1 <= self.original_size().1
