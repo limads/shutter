@@ -409,12 +409,23 @@ impl IppHistogram {
         img.show();
     }
 
+    pub fn inverse_quantile(&self, q : f64) -> u8 {
+        let sum = self.sum as f64;
+        let mut p = 1.0;
+        for ix in (0..=255).rev() {
+            p -= self.hist[ix] as f64 / sum;
+            if p <= q {
+                return ix as u8;
+            }
+        }
+        0
+    }
+
     pub fn quantile(&self, q : f64) -> u8 {
         let sum = self.sum as f64;
         let mut p = 0.0;
         for ix in 0..=255 {
             p += self.hist[ix] as f64 / sum;
-            println!("{} = {}", ix, p);
             if p >= q {
                 return ix as u8;
             }

@@ -1611,7 +1611,7 @@ impl Area {
 Used to index images. This is equivalent to a rect, containing
 a pair of horizontal (h) and vertical (v) ranges.
 **/
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Region {
     pub rows : Range<usize>,
     pub cols : Range<usize>
@@ -1626,6 +1626,11 @@ impl From<(usize, usize, usize, usize)> for Region {
 }
 
 impl Region {
+
+    pub fn contains_point(&self, pt : &(usize, usize)) -> bool {
+        self.rows.start <= pt.0 && self.rows.end > pt.0
+            && self.cols.start <= pt.1 && self.cols.end > pt.1
+    }
 
     pub fn center(&self) -> (usize, usize) {
         (
@@ -1650,6 +1655,13 @@ impl Region {
         Self {
             cols : Range { start : r.1, end : r.1 + r.3 + 1 },
             rows : Range { start : r.0, end : r.0 + r.2 + 1 }
+        }
+    }
+
+    pub fn from_offset_size(off : (usize, usize), sz : (usize, usize)) -> Self {
+        Self {
+            cols : Range { start : off.1, end : off.1 + sz.1 + 1 },
+            rows : Range { start : off.0, end : off.0 + sz.0 + 1 }
         }
     }
 

@@ -18,7 +18,7 @@ use std::ops::AddAssign;
 use crate::gray::Foreground;
 use crate::local::IppSumWindow;
 use smallvec::SmallVec;
-
+use rangetools::Rangetools;
 use crate::bitonal::*;
 use crate::pyr::*;
 
@@ -245,9 +245,10 @@ pub fn lossy_encode_bitonal_pyr(
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct BitonalEncoder {
-    bit_img : BitonalImage
+    bit_img : BitonalImage,
+    lut : RLEOpLut
 }
 
 impl BitonalEncoder {
@@ -257,16 +258,18 @@ impl BitonalEncoder {
     }
 
     pub fn new(height : usize, width : usize) -> Self {
-        Self { bit_img : BitonalImage::new(height, width / 8) }
+        Self { bit_img : BitonalImage::new(height, width / 8), lut : populate_rle_lut() }
     }
 
     fn update(&mut self) -> RunLengthCode {
-        let bit : &ImageBuf<u8> = self.bit_img.as_ref();
-        let mut rles = Vec::new();
-        let mut rows = Vec::new();
-        for r in 0..bit.height() {
+        let bitonal : &ImageBuf<u8> = self.bit_img.as_ref();
+        let mut rles = Vec::with_capacity(bitonal.height());
+        let mut rows = Vec::with_capacity(bitonal.height());
+
+        for r in 0..bitonal.height() {
             let len_before = rles.len();
-            lossy_encode_bitonal_row(unsafe { bit.row_unchecked(r) }, r, &mut rles);
+            // lossy_encode_bitonal_row(unsafe { bitonal.row_unchecked(r) }, r, &mut rles);
+            lossless_encode_bitonal_row(&self.lut[..], unsafe { bitonal.row_unchecked(r) }, r, &mut rles);
             let len_after = rles.len();
             if len_after > len_before {
                 rows.push(Range { start : len_before, end : len_after });
@@ -306,6 +309,861 @@ impl BitonalEncoder {
         self.update()
     }
 
+}
+
+// rles, open, row, col
+
+fn add_one(
+    rles : &mut Vec<RunLength>,
+    open : &mut bool,
+    opened : bool,
+    row : usize,
+    col : usize,
+    length : usize
+) {
+    rles.push(RunLength { start : (row, col), length });
+    *open = opened;
+}
+
+fn add_two(
+    rles : &mut Vec<RunLength>,
+    open : &mut bool,
+    opened : bool,
+    row : usize,
+    col1 : usize,
+    length1 : usize,
+    col2 : usize,
+    length2 : usize
+) {
+    rles.push(RunLength { start : (row, col1), length : length1 });
+    rles.push(RunLength { start : (row, col2), length : length2 });
+    *open = opened;
+}
+
+fn add_three(
+    rles : &mut Vec<RunLength>,
+    open : &mut bool,
+    opened : bool,
+    row : usize,
+    col1 : usize,
+    length1 : usize,
+    col2 : usize,
+    length2 : usize,
+    col3 : usize,
+    length3 : usize
+) {
+    rles.push(RunLength { start : (row, col1), length : length1 });
+    rles.push(RunLength { start : (row, col2), length : length2 });
+    rles.push(RunLength { start : (row, col3), length : length3 });
+    *open = opened;
+}
+
+fn add_four(
+    rles : &mut Vec<RunLength>,
+    open : &mut bool,
+    opened : bool,
+    row : usize,
+    col1 : usize,
+    length1 : usize,
+    col2 : usize,
+    length2 : usize,
+    col3 : usize,
+    length3 : usize,
+    col4 : usize,
+    length4 : usize
+) {
+    rles.push(RunLength { start : (row, col1), length : length1 });
+    rles.push(RunLength { start : (row, col2), length : length2 });
+    rles.push(RunLength { start : (row, col3), length : length3 });
+    rles.push(RunLength { start : (row, col4), length : length4 });
+    *open = opened;
+}
+
+type FPtrDyn = &'static (dyn Fn(&mut Vec<RunLength>, &mut bool, usize, usize) + 'static);
+
+type RLEOpLut = [FPtrDyn; 256];
+
+fn populate_rle_lut() -> RLEOpLut {
+    let mut ops = [(&|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+    }) as FPtrDyn; 256];
+    ops[0b0] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        *open = false;
+    }) as FPtrDyn;
+    ops[0b1] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, false, row, col, 1)
+    }) as FPtrDyn;
+    ops[0b10] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, false, row, col + 1, 1)
+    }) as FPtrDyn;
+    ops[0b11] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, false, row, col , 2)
+    }) as FPtrDyn;
+    ops[0b100] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, false, row, col + 2, 1)
+    }) as FPtrDyn;
+    ops[0b101] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 1, col + 2, 1)
+    }) as FPtrDyn;
+    ops[0b110] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, false, row, col + 1, 2)
+    }) as FPtrDyn;
+    ops[0b111] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, false, row, col, 3)
+    }) as FPtrDyn;
+    ops[0b1000] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, false, row, col + 3, 1)
+    }) as FPtrDyn;
+    ops[0b1001] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 1, col + 3, 1)
+    }) as FPtrDyn;
+    ops[0b1010] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 1, 1, col + 3, 1)
+    }) as FPtrDyn;
+    ops[0b1011] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 2, col + 3, 1)
+    }) as FPtrDyn;
+    ops[0b1100] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, false, row, col + 2, 2)
+    }) as FPtrDyn;
+    ops[0b1101] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 1, col + 2, 2)
+    }) as FPtrDyn;
+    ops[0b1110] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, false, row, col + 1, 3)
+    }) as FPtrDyn;
+    ops[0b1111] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, false, row, col, 4)
+    }) as FPtrDyn;
+    ops[0b10000] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, false, row, col + 4, 1)
+    }) as FPtrDyn;
+    ops[0b10001] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 1, col + 4, 1)
+    }) as FPtrDyn;
+    ops[0b10010] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 1, 1, col + 4, 1)
+    }) as FPtrDyn;
+    ops[0b10011] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 2, col + 4, 1)
+    }) as FPtrDyn;
+    ops[0b10100] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 2, 1, col + 4, 1)
+    }) as FPtrDyn;
+    ops[0b10101] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, false, row, col, 1, col + 2, 1, col + 4, 1)
+    }) as FPtrDyn;
+    ops[0b10110] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 1, 2, col + 4, 1)
+    }) as FPtrDyn;
+    ops[0b10111] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 3, col + 4, 1)
+    }) as FPtrDyn;
+    ops[0b11000] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, false, row, col + 3, 2)
+    }) as FPtrDyn;
+    ops[0b11001] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 1, col + 3, 2)
+    }) as FPtrDyn;
+    ops[0b11010] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 1, 1, col + 3, 2)
+    }) as FPtrDyn;
+    ops[0b11011] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 2, col + 3, 2)
+    }) as FPtrDyn;
+    ops[0b11100] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, false, row, col + 2, 3)
+    }) as FPtrDyn;
+    ops[0b11101] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 1, col + 2, 3)
+    }) as FPtrDyn;
+    ops[0b11110] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, false, row, col + 1, 4)
+    }) as FPtrDyn;
+    ops[0b11111] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, false, row, col, 5)
+    }) as FPtrDyn;
+    ops[0b100000] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, false, row, col + 5, 1)
+    }) as FPtrDyn;
+    ops[0b100001] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 1, col + 5, 1)
+    }) as FPtrDyn;
+    ops[0b100010] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 1, 1, col + 5, 1)
+    }) as FPtrDyn;
+    ops[0b100011] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 2, col + 5, 1)
+    }) as FPtrDyn;
+    ops[0b100100] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 2, 1, col + 5, 1)
+    }) as FPtrDyn;
+    ops[0b100101] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, false, row, col, 1, col + 2, 1, col + 5, 1)
+    }) as FPtrDyn;
+    ops[0b100110] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 1, 2, col + 5, 1)
+    }) as FPtrDyn;
+    ops[0b100111] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 3, col + 5, 1)
+    }) as FPtrDyn;
+    ops[0b101000] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 3, 1, col + 5, 1)
+    }) as FPtrDyn;
+    ops[0b101001] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, false, row, col, 1, col + 3, 1, col + 5, 1)
+    }) as FPtrDyn;
+    ops[0b101010] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, false, row, col + 1, 1, col + 3, 1, col + 5, 1)
+    }) as FPtrDyn;
+    ops[0b101011] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, false, row, col, 2, col + 3, 1, col + 5, 1)
+    }) as FPtrDyn;
+    ops[0b101100] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 2, 2, col + 5, 1)
+    }) as FPtrDyn;
+    ops[0b101101] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, false, row, col, 1, col + 2, 2, col + 5, 1)
+    }) as FPtrDyn;
+    ops[0b101110] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 1, 3, col + 5, 1)
+    }) as FPtrDyn;
+    ops[0b101111] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 4, col + 5, 1)
+    }) as FPtrDyn;
+    ops[0b110000] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, false, row, col + 4, 2)
+    }) as FPtrDyn;
+    ops[0b110001] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 1, col + 4, 2)
+    }) as FPtrDyn;
+    ops[0b110010] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 1, 1, col + 4, 2)
+    }) as FPtrDyn;
+    ops[0b110011] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 2, col + 4, 2)
+    }) as FPtrDyn;
+    ops[0b110100] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 2, 1, col + 4, 2)
+    }) as FPtrDyn;
+    ops[0b110101] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, false, row, col, 1, col + 2, 1, col + 4, 2)
+    }) as FPtrDyn;
+    ops[0b110110] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 1, 2, col + 4, 2)
+    }) as FPtrDyn;
+    ops[0b110111] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 3, col + 4, 2)
+    }) as FPtrDyn;
+    ops[0b111000] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, false, row, col + 3, 3)
+    }) as FPtrDyn;
+    ops[0b111001] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 1, col + 3, 3)
+    }) as FPtrDyn;
+    ops[0b111010] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 1, 1, col + 3, 3)
+    }) as FPtrDyn;
+    ops[0b111011] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 2, col + 3, 3)
+    }) as FPtrDyn;
+    ops[0b111100] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, false, row, col + 2, 4)
+    }) as FPtrDyn;
+    ops[0b111101] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 1, col + 2, 4)
+    }) as FPtrDyn;
+    ops[0b111110] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, false, row, col + 1, 5)
+    }) as FPtrDyn;
+    ops[0b111111] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, false, row, col, 6)
+    }) as FPtrDyn;
+    ops[0b1000000] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, false, row, col + 6, 1)
+    }) as FPtrDyn;
+    ops[0b1000001] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 1, col + 6, 1)
+    }) as FPtrDyn;
+    ops[0b1000010] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 1, 1, col + 6, 1)
+    }) as FPtrDyn;
+    ops[0b1000011] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 2, col + 6, 1)
+    }) as FPtrDyn;
+    ops[0b1000100] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 2, 1, col + 6, 1)
+    }) as FPtrDyn;
+    ops[0b1000101] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, false, row, col, 1, col + 2, 1, col + 6, 1)
+    }) as FPtrDyn;
+    ops[0b1000110] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 1, 2, col + 6, 1)
+    }) as FPtrDyn;
+    ops[0b1000111] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 3, col + 6, 1)
+    }) as FPtrDyn;
+    ops[0b1001000] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 3, 1, col + 6, 1)
+    }) as FPtrDyn;
+    ops[0b1001001] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, false, row, col, 1, col + 3, 1, col + 6, 1)
+    }) as FPtrDyn;
+    ops[0b1001010] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, false, row, col + 1, 1, col + 3, 1, col + 6, 1)
+    }) as FPtrDyn;
+    ops[0b1001011] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, false, row, col, 2, col + 3, 1, col + 6, 1)
+    }) as FPtrDyn;
+    ops[0b1001100] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 2, 2, col + 6, 1)
+    }) as FPtrDyn;
+    ops[0b1001101] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, false, row, col, 1, col + 2, 2, col + 6, 1)
+    }) as FPtrDyn;
+    ops[0b1001110] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 1, 3, col + 6, 1)
+    }) as FPtrDyn;
+    ops[0b1001111] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 4, col + 6, 1)
+    }) as FPtrDyn;
+    ops[0b1010000] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 4, 1, col + 6, 1)
+    }) as FPtrDyn;
+    ops[0b1010001] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, false, row, col, 1, col + 4, 1, col + 6, 1)
+    }) as FPtrDyn;
+    ops[0b1010010] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, false, row, col + 1, 1, col + 4, 1, col + 6, 1)
+    }) as FPtrDyn;
+    ops[0b1010011] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, false, row, col, 2, col + 4, 1, col + 6, 1)
+    }) as FPtrDyn;
+    ops[0b1010100] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, false, row, col + 2, 1, col + 4, 1, col + 6, 1)
+    }) as FPtrDyn;
+    ops[0b1010101] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_four(rles, open, false, row, col, 1, col + 2, 1, col + 4, 1, col + 6, 1)
+    }) as FPtrDyn;
+    ops[0b1010110] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, false, row, col + 1, 2, col + 4, 1, col + 6, 1)
+    }) as FPtrDyn;
+    ops[0b1010111] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, false, row, col, 3, col + 4, 1, col + 6, 1)
+    }) as FPtrDyn;
+    ops[0b1011000] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 3, 2, col + 6, 1)
+    }) as FPtrDyn;
+    ops[0b1011001] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, false, row, col, 1, col + 3, 2, col + 6, 1)
+    }) as FPtrDyn;
+    ops[0b1011010] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, false, row, col + 1, 1, col + 3, 2, col + 6, 1)
+    }) as FPtrDyn;
+    ops[0b1011011] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, false, row, col, 2, col + 3, 2, col + 6, 1)
+    }) as FPtrDyn;
+    ops[0b1011100] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 2, 3, col + 6, 1)
+    }) as FPtrDyn;
+    ops[0b1011101] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, false, row, col, 1, col + 2, 3, col + 6, 1)
+    }) as FPtrDyn;
+    ops[0b1011110] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 1, 4, col + 6, 1)
+    }) as FPtrDyn;
+    ops[0b1011111] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 5, col + 6, 1)
+    }) as FPtrDyn;
+    ops[0b1100000] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, false, row, col + 5, 2)
+    }) as FPtrDyn;
+    ops[0b1100001] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 1, col + 5, 2)
+    }) as FPtrDyn;
+    ops[0b1100010] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 1, 1, col + 5, 2)
+    }) as FPtrDyn;
+    ops[0b1100011] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 2, col + 5, 2)
+    }) as FPtrDyn;
+    ops[0b1100100] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 2, 1, col + 5, 2)
+    }) as FPtrDyn;
+    ops[0b1100101] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, false, row, col, 1, col + 2, 1, col + 5, 2)
+    }) as FPtrDyn;
+    ops[0b1100110] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 1, 2, col + 5, 2)
+    }) as FPtrDyn;
+    ops[0b1100111] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 3, col + 5, 2)
+    }) as FPtrDyn;
+    ops[0b1101000] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 3, 1, col + 5, 2)
+    }) as FPtrDyn;
+    ops[0b1101001] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, false, row, col, 1, col + 3, 1, col + 5, 2)
+    }) as FPtrDyn;
+    ops[0b1101010] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, false, row, col + 1, 1, col + 3, 1, col + 5, 2)
+    }) as FPtrDyn;
+    ops[0b1101011] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, false, row, col, 2, col + 3, 1, col + 5, 2)
+    }) as FPtrDyn;
+    ops[0b1101100] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 2, 2, col + 5, 2)
+    }) as FPtrDyn;
+    ops[0b1101101] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, false, row, col, 1, col + 2, 2, col + 5, 2)
+    }) as FPtrDyn;
+    ops[0b1101110] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 1, 3, col + 5, 2)
+    }) as FPtrDyn;
+    ops[0b1101111] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 4, col + 5, 1)
+    }) as FPtrDyn;
+    ops[0b1110000] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, false, row, col + 4, 3)
+    }) as FPtrDyn;
+    ops[0b1110001] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 1, col + 4, 3)
+    }) as FPtrDyn;
+    ops[0b1110010] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 1, 1, col + 4, 3)
+    }) as FPtrDyn;
+    ops[0b1110011] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 2, col + 4, 3)
+    }) as FPtrDyn;
+    ops[0b1110100] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 2, 1, col + 4, 3)
+    }) as FPtrDyn;
+    ops[0b1110101] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, false, row, col, 1, col + 2, 1, col + 4, 3)
+    }) as FPtrDyn;
+    ops[0b1110110] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 1, 2, col + 4, 3)
+    }) as FPtrDyn;
+    ops[0b1110111] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 3, col + 4, 3)
+    }) as FPtrDyn;
+    ops[0b1111000] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, false, row, col + 3, 4)
+    }) as FPtrDyn;
+    ops[0b1111001] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 1, col + 3, 4)
+    }) as FPtrDyn;
+    ops[0b1111010] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col + 1, 1, col + 3, 4)
+    }) as FPtrDyn;
+    ops[0b1111011] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 2, col + 3, 4)
+    }) as FPtrDyn;
+    ops[0b1111100] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, false, row, col + 2, 5)
+    }) as FPtrDyn;
+    ops[0b1111101] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, false, row, col, 1, col + 2, 5)
+    }) as FPtrDyn;
+    ops[0b1111110] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, false, row, col + 1, 6)
+    }) as FPtrDyn;
+    ops[0b1111111] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, false, row, col, 7)
+    }) as FPtrDyn;
+    ops[0b10000000] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, true, row, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10000001] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col, 1, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10000010] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 1, 1, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10000011] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col, 2, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10000100] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 2, 1, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10000101] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 1, col + 2, 1, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10000110] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 1, 2, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10000111] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col, 3, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10001000] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 3, 1, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10001001] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 1, col + 3, 1, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10001010] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col + 1, 1, col + 3, 1, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10001011] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 2, col + 3, 1, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10001100] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 2, 2, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10001101] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 1, col + 2, 2, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10001110] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 1, 3, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10001111] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col, 4, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10010000] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 4, 1, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10010001] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 1, col + 4, 1, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10010010] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col + 1, 1, col + 4, 1, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10010011] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 2, col + 4, 1, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10010100] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col + 2, 1, col + 4, 1, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10010101] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_four(rles, open, true, row, col, 1, col + 2, 1, col + 4, 1, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10010110] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col + 1, 2, col + 4, 1, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10010111] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 3, col + 4, 1, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10011000] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 3, 2, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10011001] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 1, col + 3, 2, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10011010] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col + 1, 1, col + 3, 2, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10011011] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 2, col + 3, 2, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10011100] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 2, 3, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10011101] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 1, col + 2, 3, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10011110] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 1, 4, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10011111] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col, 5, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10100000] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 5, 1, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10100001] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 1, col + 5, 1, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10100010] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col + 1, 1, col + 5, 1, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10100011] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 2, col + 5, 1, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10100100] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col + 2, 1, col + 5, 1, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10100101] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_four(rles, open, true, row, col, 1, col + 2, 1, col + 5, 1, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10100110] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col + 1, 2, col + 5, 1, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10100111] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 3, col + 5, 1, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10101000] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col + 3, 1, col + 5, 1, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10101001] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_four(rles, open, true, row, col, 1, col + 3, 1, col + 5, 1, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10101010] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_four(rles, open, true, row, col + 1, 1, col + 3, 1, col + 5, 1, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10101011] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_four(rles, open, true, row, col, 2, col + 3, 1, col + 5, 1, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10101100] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col + 2, 2, col + 5, 1, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10101101] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_four(rles, open, true, row, col, 1, col + 2, 2, col + 5, 1, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10101110] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col + 1, 3, col + 5, 1, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10101111] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 4, col + 5, 1, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10110000] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 4, 2, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10110001] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 1, col + 4, 2, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10110010] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col + 1, 1, col + 4, 2, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10110011] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 2, col + 4, 2, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10110100] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col + 2, 1, col + 4, 2, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10110101] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_four(rles, open, true, row, col, 1, col + 2, 1, col + 4, 2, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10110110] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col + 1, 2, col + 4, 2, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10110111] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 3, col + 4, 2, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10111000] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 3, 3, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10111001] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 1, col + 3, 3, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10111010] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col + 1, 1, col + 3, 3, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10111011] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 2, col + 3, 3, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10111100] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 2, 4, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10111101] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 1, col + 2, 4, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10111110] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 1, 5, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b10111111] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col, 6, col + 7, 1)
+    }) as FPtrDyn;
+    ops[0b11000000] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, true, row, col + 6, 2)
+    }) as FPtrDyn;
+    ops[0b11000001] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col, 1, col + 6, 2)
+    }) as FPtrDyn;
+    ops[0b11000010] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 1, 1, col + 6, 2)
+    }) as FPtrDyn;
+    ops[0b11000011] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col, 2, col + 6, 2)
+    }) as FPtrDyn;
+    ops[0b11000100] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 2, 1, col + 6, 2)
+    }) as FPtrDyn;
+    ops[0b11000101] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 1, col + 2, 1, col + 6, 2)
+    }) as FPtrDyn;
+    ops[0b11000110] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 1, 2, col + 6, 2)
+    }) as FPtrDyn;
+    ops[0b11000111] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col, 3, col + 6, 2)
+    }) as FPtrDyn;
+    ops[0b11001000] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 3, 1, col + 6, 2)
+    }) as FPtrDyn;
+    ops[0b11001001] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 1, col + 3, 1, col + 6, 2)
+    }) as FPtrDyn;
+    ops[0b11001010] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col + 1, 1, col + 3, 1, col + 6, 2)
+    }) as FPtrDyn;
+    ops[0b11001011] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 2, col + 3, 1, col + 6, 2)
+    }) as FPtrDyn;
+    ops[0b11001100] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 2, 2, col + 6, 2)
+    }) as FPtrDyn;
+    ops[0b11001101] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 1, col + 2, 2, col + 6, 2)
+    }) as FPtrDyn;
+    ops[0b11001110] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 1, 3, col + 6, 2)
+    }) as FPtrDyn;
+    ops[0b11001111] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col, 4, col + 6, 2)
+    }) as FPtrDyn;
+    ops[0b11010000] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 4, 1, col + 6, 2)
+    }) as FPtrDyn;
+    ops[0b11010001] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 1, col + 4, 1, col + 6, 2)
+    }) as FPtrDyn;
+    ops[0b11010010] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col + 1, 1, col + 4, 1, col + 6, 2)
+    }) as FPtrDyn;
+    ops[0b11010011] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 2, col + 4, 1, col + 6, 2)
+    }) as FPtrDyn;
+    ops[0b11010100] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col + 2, 1, col + 4, 1, col + 6, 2)
+    }) as FPtrDyn;
+    ops[0b11010101] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_four(rles, open, true, row, col, 1, col + 2, 1, col + 4, 1, col + 6, 2)
+    }) as FPtrDyn;
+    ops[0b11010110] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col + 1, 2, col + 4, 1, col + 6, 2)
+    }) as FPtrDyn;
+    ops[0b11010111] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 3, col + 4, 1, col + 6, 2)
+    }) as FPtrDyn;
+    ops[0b11011000] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 3, 2, col + 6, 2)
+    }) as FPtrDyn;
+    ops[0b11011001] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 1, col + 3, 2, col + 6, 2)
+    }) as FPtrDyn;
+    ops[0b11011010] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col + 1, 1, col + 3, 2, col + 6, 2)
+    }) as FPtrDyn;
+    ops[0b11011011] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 2, col + 3, 2, col + 6, 2)
+    }) as FPtrDyn;
+    ops[0b11011100] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 2, 3, col + 6, 2)
+    }) as FPtrDyn;
+    ops[0b11011101] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 1, col + 2, 3, col + 6, 2)
+    }) as FPtrDyn;
+    ops[0b11011110] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 1, 4, col + 6, 2)
+    }) as FPtrDyn;
+    ops[0b11011111] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col, 5, col + 6, 2)
+    }) as FPtrDyn;
+    ops[0b11100000] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, true, row, col + 5, 3)
+    }) as FPtrDyn;
+    ops[0b11100001] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col, 1, col + 5, 3)
+    }) as FPtrDyn;
+    ops[0b11100010] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 1, 1, col + 5, 3)
+    }) as FPtrDyn;
+    ops[0b11100011] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col, 2, col + 5, 3)
+    }) as FPtrDyn;
+    ops[0b11100100] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 2, 1, col + 5, 3)
+    }) as FPtrDyn;
+    ops[0b11100101] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 1, col + 2, 1, col + 5, 3)
+    }) as FPtrDyn;
+    ops[0b11100110] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 1, 2, col + 5, 3)
+    }) as FPtrDyn;
+    ops[0b11100111] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col, 3, col + 5, 3)
+    }) as FPtrDyn;
+    ops[0b11101000] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 3, 1, col + 5, 3)
+    }) as FPtrDyn;
+    ops[0b11101001] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 1, col + 3, 1, col + 5, 3)
+    }) as FPtrDyn;
+    ops[0b11101010] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col + 1, 1, col + 3, 1, col + 5, 3)
+    }) as FPtrDyn;
+    ops[0b11101011] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 2, col + 3, 1, col + 5, 3)
+    }) as FPtrDyn;
+    ops[0b11101100] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 2, 2, col + 5, 3)
+    }) as FPtrDyn;
+    ops[0b11101101] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 1, col + 2, 2, col + 5, 3)
+    }) as FPtrDyn;
+    ops[0b11101110] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 1, 3, col + 5, 3)
+    }) as FPtrDyn;
+    ops[0b11101111] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col, 4, col + 5, 3)
+    }) as FPtrDyn;
+    ops[0b11110000] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, true, row, col + 4, 4)
+    }) as FPtrDyn;
+    ops[0b11110001] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col, 1, col + 4, 4)
+    }) as FPtrDyn;
+    ops[0b11110010] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 1, 1, col + 4, 4)
+    }) as FPtrDyn;
+    ops[0b11110011] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col, 2, col + 4, 4)
+    }) as FPtrDyn;
+    ops[0b11110100] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 2, 1, col + 4, 4)
+    }) as FPtrDyn;
+    ops[0b11110101] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_three(rles, open, true, row, col, 1, col + 2, 1, col + 4, 4)
+    }) as FPtrDyn;
+    ops[0b11110110] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 1, 2, col + 4, 4)
+    }) as FPtrDyn;
+    ops[0b11110111] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col, 3, col + 4, 4)
+    }) as FPtrDyn;
+    ops[0b11111000] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, true, row, col + 3, 5)
+    }) as FPtrDyn;
+    ops[0b11111001] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col, 1, col + 3, 5)
+    }) as FPtrDyn;
+    ops[0b11111010] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col + 1, 1, col + 3, 5)
+    }) as FPtrDyn;
+    ops[0b11111011] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col, 2, col + 3, 5)
+    }) as FPtrDyn;
+    ops[0b11111100] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, true, row, col + 2, 6)
+    }) as FPtrDyn;
+    ops[0b11111101] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_two(rles, open, true, row, col, 1, col + 2, 6)
+    }) as FPtrDyn;
+    ops[0b11111110] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, true, row, col + 1, 7)
+    }) as FPtrDyn;
+    ops[0b11111111] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+        add_one(rles, open, true, row, col, 8)
+    }) as FPtrDyn;
+
+    ops
+}
+
+// cargo test --lib  -- binrep --nocapture
+#[test]
+fn binrep() {
+    for i in 0..255u8 {
+        println!("{i:#b}");
+    }
 }
 
 /* A good characteristic of the bitonal encoder is that no computation
@@ -383,6 +1241,29 @@ fn lossy_encode_bitonal_pixel(
     }
 }
 
+#[inline(always)]
+fn lossless_encode_bitonal_pixel(
+    lut : &[FPtrDyn],
+    row_ix : usize,
+    col_ix : usize,
+    row : &[u8],
+    open : &mut bool,
+    rles : &mut Vec<RunLength>,
+) {
+    unsafe {
+        let px = row.get_unchecked(col_ix);
+        if *open {
+            let ones = px.trailing_ones() as usize;
+            rles.last_mut().unwrap().length += ones;
+            if ones < 8 {
+                (&*lut[(px >> ones) as usize])(rles, open, row_ix, col_ix*8 + ones);
+            }
+        } else {
+            (&*lut[*px as usize])(rles, open, row_ix, col_ix*8);
+        }
+    }
+}
+
 /* Note the encoding is in reverse order: Empty spaces at the front of the RunLength
 is examined with trailing_zeros, and empty spaces at the end of the RunLength are examined
 with leading_zeros. This representation is lossy because it misses zeroed bits inside each
@@ -396,6 +1277,13 @@ fn lossy_encode_bitonal_row(row : &[u8], row_ix : usize, rles : &mut Vec<RunLeng
         lossy_encode_bitonal_pixel(row_ix, col_ix, max_ix, row, &mut curr_rle, rles);
     }
     // assert!(curr_rle.is_none());
+}
+
+fn lossless_encode_bitonal_row(lut : &[FPtrDyn], row : &[u8], row_ix : usize, rles : &mut Vec<RunLength>) {
+    let mut open = false;
+    for col_ix in 0..row.len() {
+        lossless_encode_bitonal_pixel(lut, row_ix, col_ix, row, &mut open, rles);
+    }
 }
 
 // cargo test --lib -- bitonal_encoder --nocapture
@@ -4079,13 +4967,22 @@ impl RunLengthCode {
             .zip(self.rows[1..nrows].iter());
 
         for (row_above, row_below) in row_pair_iter {
-            if self.rles[row_below.start].start.0 - self.rles[row_above.start].start.0 == 1 {
+            let row_vert_sep = self.rles[row_below.start].start.0 - self.rles[row_above.start].start.0;
+
+            // If vert sep > 1, there is no way any RLEs in this row pair
+            // are connected. skip to next pair.
+            if row_vert_sep == 1 {
+
+                // Iterate over cartesian product of top row RLEs and bottom row RLEs
                 for (local_ix_below, rl_below) in self.rles[row_below.clone()].iter().enumerate() {
-                    // Iterate over overlapping top RLEs (since they are ordered, there is no
+
+                    // Iterate over top RLEs overlapping with this bottom RLE.
+                    // (since RLEs are ordered, there is no
                     // need to check the overlap of intermediate elements:
                     // only the start and end matching RLEs).
                     let iter_above = self.rles[row_above.clone()].iter().enumerate();
                     for (local_ix_above, above) in iter_above {
+
                         if above.end_col() >= rl_below.start.1 {
                             if above.start.1 <= rl_below.end_col() {
                                 uf.union(row_above.start + local_ix_above, row_below.start + local_ix_below);
@@ -4095,6 +4992,10 @@ impl RunLengthCode {
                                 break;
                             }
                         }
+                        /*if rl_below.range().intersects(above.range()) {
+                            uf.union(row_above.start + local_ix_above, row_below.start + local_ix_below);
+                        }*/
+
                     }
                 }
             }

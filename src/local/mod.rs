@@ -972,6 +972,7 @@ pub fn median_filter(src : &Window<u8>, dst : &mut WindowMut<u8>, mask_sz : usiz
     unimplemented!()
 }
 
+#[derive(Clone, Debug)]
 #[cfg(feature="ipp")]
 pub struct IppiFilterGauss {
     spec : Vec<u8>,
