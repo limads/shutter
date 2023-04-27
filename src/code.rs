@@ -100,6 +100,7 @@ impl PyrBitonalEncoder {
         RunLengthCode::from_unsorted(std::mem::take(&mut fst_accum[0]))
     }
 
+    // Calculate from binary
     pub fn calculate<S>(&mut self, img : &Image<u8, S>) -> RunLengthCode
     where
         S : Storage<u8>
@@ -379,7 +380,7 @@ fn add_four(
     *open = opened;
 }
 
-type FPtrDyn = &'static (dyn Fn(&mut Vec<RunLength>, &mut bool, usize, usize) + 'static);
+type FPtrDyn = &'static (dyn Fn(&mut Vec<RunLength>, &mut bool, usize, usize) + Send + Sync + 'static);
 
 type RLEOpLut = [FPtrDyn; 256];
 
@@ -1156,14 +1157,6 @@ fn populate_rle_lut() -> RLEOpLut {
     }) as FPtrDyn;
 
     ops
-}
-
-// cargo test --lib  -- binrep --nocapture
-#[test]
-fn binrep() {
-    for i in 0..255u8 {
-        println!("{i:#b}");
-    }
 }
 
 /* A good characteristic of the bitonal encoder is that no computation
@@ -4179,6 +4172,13 @@ pub fn vertical_nonzero_bound_window<'a>(w : &'a Window<'a, u8>) -> Window<'a, u
     w.sub_window((min_r, min_c), shape).unwrap()
 }
 
+// A compact representation for a set of coordinates. Can be used
+// to represent the foreground pixels of a binary image. Each RunLength
+// represents a set of horizontally contiguous points by the first point
+// in the sequence and the number of points in the sequence. To speed up
+// search, also carry a set of ranges that signals RunLengths that
+// are part of the same row. RunLengths are always sorted by rows, then
+// by columns within rows.
 // RunLength encodings are sorted by starting points within rows
 // and also by rows, so to determine if a pixel is positive can be
 // done by bisection.
@@ -4505,7 +4505,222 @@ fn rows_for_sorted_rles(rles : &[RunLength], rows : &mut Vec<Range<usize>>) {
     }
 }
 
+fn push_left(
+    rles : &mut Vec<RunLength>,
+    rows : &mut Vec<Range<usize>>,
+    pt : (usize, usize),
+    rle : RunLength,
+    // row_start_pos : usize,
+    row_pos : usize
+) -> bool {
+    if pt.1 < rle.start.1 {
+        rles.insert(rows[row_pos].start, RunLength { start : pt, length : 1 });
+        rows[row_pos].end += 1;
+        // if row_pos < rows.len()-1 {
+        shift_by(rows, row_pos, 1);
+        // }
+        true
+    } else {
+        false
+    }
+}
+
+fn push_right(
+    rles : &mut Vec<RunLength>,
+    rows : &mut Vec<Range<usize>>,
+    pt : (usize, usize),
+    rle : RunLength,
+    // row_start_pos : usize,
+    row_pos : usize
+) -> bool {
+    if pt.1 > rle.range().end {
+        rles.insert(rows[row_pos].end, RunLength { start : pt, length : 1 });
+        rows[row_pos].end += 1;
+        // if row_pos < rows.len()-1 {
+        shift_by(rows, row_pos, 1);
+        // }
+        true
+    } else {
+        false
+    }
+}
+
+fn shift_by(all_rows : &mut [Range<usize>], row_pos : usize, val : i32) {
+    if row_pos < all_rows.len()-1 {
+        let right_rows = &mut all_rows[(row_pos+1)..];
+        let val_abs = val.abs() as usize;
+        if val > 0 {
+            for row in right_rows {
+                row.start += val_abs;
+                row.end += val_abs;
+            }
+        } else {
+            for row in right_rows {
+                row.start -= val_abs;
+                row.end -= val_abs;
+            }
+        }
+    }
+}
+
+fn merges_left(rle : &mut RunLength, pt : (usize, usize)) -> bool {
+    if rle.start.1.checked_sub(pt.1) == Some(1) {
+        rle.start.1 -= 1;
+        rle.length += 1;
+        true
+    } else {
+        false
+    }
+}
+
+fn merges_right(rle : &mut RunLength, pt : (usize, usize)) -> bool {
+    if pt.1 == rle.range().end {
+        rle.length += 1;
+        true
+    } else {
+        false
+    }
+}
+
+fn merges_left_or_right(rle : &mut RunLength, pt : (usize, usize)) -> bool {
+    if merges_left(rle, pt) {
+        true
+    } else {
+        merges_right(rle, pt)
+    }
+}
+
+// cargo test --lib -- rle_include --nocapture
+#[test]
+fn rle_include() {
+    let pts = [
+        vec![(16, 19), (16, 20), (17, 14), (17, 15), (17, 17), (17, 19), (17, 20), (18, 14), (18, 15)]
+        //vec![(0,1), (0,2), (0,3)],
+        //vec![(0,3), (0,2), (0,1)],
+        //vec![(0,1), (0,3), (0,2)],
+        //vec![(0,1), (1,1), (2, 1)],
+        //vec![(2,0), (1,0), (0,0)],
+        //vec![(0,1), (0,2), (0,5), (0,6), (0,7), (0,3), (0,4)],
+    ];
+    for pt_set in pts {
+        let mut rle = RunLengthCode::default();
+        pt_set.iter().for_each(|pt| { rle.include(*pt); });
+        println!("{:?}", rle);
+    }
+
+}
+
 impl RunLengthCode {
+
+    // Adds a single point to this RLE (if not already present).
+    // Either increment an existing RLE or innaugurate a new one.
+    pub fn include(&mut self, pt : (usize, usize)) {
+        match self.rows.binary_search_by(|r| self.rles[r.clone()][0].start.0.cmp(&pt.0) ) {
+            Ok(row_pos) => {
+                let fst_rle_pos = self.rows[row_pos].start;
+                match self.rows[row_pos].len() {
+                    1 => {
+                        let fst_rle = self.rles[fst_rle_pos].clone();
+                        if !merges_left_or_right(&mut self.rles[fst_rle_pos], pt) {
+                            let pushed_left = push_left(
+                                &mut self.rles,
+                                &mut self.rows,
+                                pt,
+                                fst_rle,
+                                row_pos
+                            );
+                            if !pushed_left {
+                                push_right(
+                                    &mut self.rles,
+                                    &mut self.rows,
+                                    pt,
+                                    fst_rle,
+                                    row_pos
+                                );
+                            }
+                        }
+                    },
+                    2.. => {
+                        let row_end_pos = self.rows[row_pos].end - 1;
+                        let merged_or_pushed_start = if merges_left(&mut self.rles[fst_rle_pos], pt) {
+                            true
+                        } else {
+                            let fst_rle = self.rles[fst_rle_pos].clone();
+                            push_left(
+                                &mut self.rles,
+                                &mut self.rows,
+                                pt,
+                                fst_rle,
+                                row_pos
+                            )
+                        };
+                        let merged_or_pushed_end = if merged_or_pushed_start {
+                            false
+                        } else {
+                            let lst_rle = self.rles[row_end_pos].clone();
+                            if merges_right(&mut self.rles[row_end_pos], pt) {
+                                true
+                            } else {
+                                push_right(
+                                    &mut self.rles,
+                                    &mut self.rows,
+                                    pt,
+                                    lst_rle,
+                                    row_pos
+                                )
+                            }
+                        };
+                        if !(merged_or_pushed_start || merged_or_pushed_end) {
+                            let part = self.rles[self.rows[row_pos].clone()]
+                                .partition_point(|rle| rle.start.1 < pt.1 && rle.range().end <= pt.1 );
+                            let pos_left = fst_rle_pos + part - 1;
+                            let pos_right = fst_rle_pos + part;
+                            let merges_left = pt.1 == self.rles[pos_left].range().end;
+                            let merges_right = self.rles[pos_right].start.1.checked_sub(pt.1) == Some(1);
+                            if merges_left && merges_right {
+                                let length_right = self.rles[pos_right].length;
+                                self.rles[pos_left].length += (length_right + 1);
+                                self.rles.remove(pos_right);
+                                self.rows[row_pos].end -= 1;
+                                //if row_pos < self.rows.len()-1 {
+                                shift_by(&mut self.rows, row_pos, -1);
+                                // }
+                            } else if merges_left {
+                                self.rles[pos_left].length += 1;
+                            } else if merges_right {
+                                self.rles[pos_right].start.1 -= 1;
+                                self.rles[pos_right].length += 1;
+                            } else if pt.1 > self.rles[pos_left].range().end && pt.1 < self.rles[pos_right].start.1 {
+                                self.rles.insert(pos_right, RunLength { start : pt, length : 1 });
+                                self.rows[row_pos].end += 1;
+                                //if row_pos < self.rows.len()-1 {
+                                shift_by(&mut self.rows, row_pos, 1);
+                                //}
+                            }
+                        }
+                    },
+                    _ => { }
+                }
+            },
+            Err(row_pos) => {
+                if row_pos == 0 {
+                    self.rows.insert(row_pos, Range { start : 0, end : 1 });
+                    self.rles.insert(0, RunLength { start : pt, length : 1});
+                    //if row_pos < self.rows.len()-1 {
+                         shift_by(&mut self.rows, row_pos, 1);
+                    // }
+                } else {
+                    let rle_pos = self.rows[row_pos-1].end;
+                    self.rows.insert(row_pos, Range { start : rle_pos, end : rle_pos + 1});
+                    self.rles.insert(rle_pos, RunLength { start : pt, length : 1 });
+                    //if row_pos < self.rows.len()-1 {
+                    shift_by(&mut self.rows, row_pos, 1);
+                    // }
+                }
+            }
+        }
+        verify_rle_state(&self);
+    }
 
     pub fn contains(&self, pt : (usize, usize)) -> bool {
         match self.rows.binary_search_by(|r| self.rles[r.clone()][0].start.0.cmp(&pt.0) ) {
@@ -5184,6 +5399,23 @@ impl RunLengthCode {
         pts
     }
 
+    pub fn central_point(&self) -> Option<(usize, usize)> {
+        let nr = self.rles.len();
+        if nr == 0 {
+            return None;
+        }
+        let mut r = 0;
+        let mut c = 0;
+        for row in &self.rows {
+            if let (Some(fst), Some(lst)) = (self.rles[row.clone()].first(), self.rles[row.clone()].last()) {
+                r += fst.start.0;
+                c += fst.start.1;
+                c += lst.end().1;
+            }
+        }
+        Some((r / nr, c / (2*nr)))
+    }
+
     // Total area represented by the RunLength (sum of all lengths).
     // Calculated in linear time.
     pub fn area(&self) -> usize {
@@ -5334,13 +5566,15 @@ fn update_range(
 fn verify_rle_state(rle : &RunLengthCode) {
 
     // Verify each row index at least one valid RLE
-    assert!(rle.rows.iter().all(|r| r.end - r.start >= 1 ));
+    assert!(rle.rows.iter().all(|r| r.end - r.start >= 1 ), "{:?}", rle);
 
     // Verify the summed length of sub-indices equals the total length.
-    assert!(rle.rles.len() == rle.rows.iter().fold(0, |total, r| total + rle.rles[r.clone()].len() ) );
+    assert!(rle.rles.len() == rle.rows.iter()
+        .fold(0, |total, r| total + rle.rles[r.clone()].len() ), "{:?}", rle );
 
     // Verify end of previous range (open) equals start of next range (closed).
-    assert!(rle.rows.iter().zip(rle.rows.iter().skip(1)).all(|(a, b)| a.end == b.start ));
+    assert!(rle.rows.iter()
+        .zip(rle.rows.iter().skip(1)).all(|(a, b)| a.end == b.start ), "{:?}", rle);
 
 }
 

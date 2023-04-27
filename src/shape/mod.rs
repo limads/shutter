@@ -687,6 +687,7 @@ pub fn point_centroid(pts : &[(usize, usize)]) -> (f32, f32) {
 }
 
 #[cfg(feature="ipp")]
+#[derive(Clone)]
 pub struct IppiCentralMoments {
     state : Vec<u8>
 }
@@ -713,7 +714,7 @@ impl IppiCentralMoments {
         }
     }
 
-    unsafe fn get_spatial_moment(&self, m : i32, n : i32) -> Option<f32> {
+    pub unsafe fn get_spatial_moment(&self, m : i32, n : i32) -> Option<f32> {
         let channel = 0;
         let mut val : f64 = 0.;
         let offset = crate::foreign::ipp::ippi::IppiPoint { x : 0, y : 0 };
@@ -732,7 +733,8 @@ impl IppiCentralMoments {
         Some(val as f32)
     }
 
-    unsafe fn get_normalized_spatial_moment(&self, m : i32, n : i32) -> Option<f32> {
+    // Normalized variant on interval 0.0-1.0
+    pub unsafe fn get_normalized_spatial_moment(&self, m : i32, n : i32) -> Option<f32> {
         let channel = 0;
         let mut val : f64 = 0.;
         let offset = crate::foreign::ipp::ippi::IppiPoint { x : 0, y : 0 };
@@ -751,7 +753,7 @@ impl IppiCentralMoments {
         Some(val as f32)
     }
 
-    unsafe fn get_central_moment(&self, m : i32, n : i32) -> Option<f32> {
+    pub unsafe fn get_central_moment(&self, m : i32, n : i32) -> Option<f32> {
         let channel = 0;
         let mut val : f64 = 0.;
         let ans = crate::foreign::ipp::ippi::ippiGetCentralMoment_64f(
@@ -768,7 +770,8 @@ impl IppiCentralMoments {
         Some(val as f32)
     }
 
-    unsafe fn get_normalized_central_moment(&self, m : i32, n : i32) -> Option<f32> {
+    // Normalized variant on interval 0.0-1.0
+    pub unsafe fn get_normalized_central_moment(&self, m : i32, n : i32) -> Option<f32> {
         let channel = 0;
         let mut val : f64 = 0.;
         let ans = crate::foreign::ipp::ippi::ippiGetNormalizedCentralMoment_64f(
@@ -798,29 +801,37 @@ impl IppiCentralMoments {
 
             // 0th moment = area = number of pixels
             let zero = self.get_spatial_moment(0, 0)?;
-            let center_x = self.get_spatial_moment(1, 0)? / zero;
-            let center_y = self.get_spatial_moment(0, 1)? / zero;
+            let m10 = self.get_spatial_moment(1, 0)?;
+            let m01 = self.get_spatial_moment(0, 1)?;
+            let center_x = m10 / zero;
+            let center_y = m01 / zero;
+
+           // let disp_x = self.get_spatial_moment(2, 0)? / zero - center_x * m10;
+           // let disp_y = self.get_spatial_moment(0, 2)? / zero - center_y * m01;
+
+            // let disp_x = (self.get_spatial_moment(2, 0)? - self.get_spatial_moment(1, 0)?.powf(2.)) / zero;
+            // let disp_y = (self.get_spatial_moment(0, 2)? - self.get_spatial_moment(0, 1)?.powf(2.)) / zero;
+
             // let center_x = self.get_normalized_central_moment(1, 0)?;
             // let center_y = self.get_normalized_central_moment(0, 1)?;
-
-            let xx = self.get_normalized_central_moment(2, 0)?;
-            let yy = self.get_normalized_central_moment(0, 2)?;
-            let xy = self.get_normalized_central_moment(1, 1)?;
+            // let xx = self.get_central_moment(2, 0)?;
+            // let yy = self.get_central_moment(0, 2)?;
+            /*let xy = self.get_normalized_central_moment(1, 1)?;
             let xxy = self.get_normalized_central_moment(2, 1)?;
             let yyx = self.get_normalized_central_moment(1, 2)?;
             let xxx = self.get_normalized_central_moment(3, 0)?;
-            let yyy = self.get_normalized_central_moment(0, 3)?;
+            let yyy = self.get_normalized_central_moment(0, 3)?;*/
 
             Some(CentralMoments {
                 center : (center_y, center_x),
                 zero,
-                xx,
-                yy,
-                xy,
-                xxy,
-                yyx,
-                xxx,
-                yyy
+                xx : 0.0,
+                yy : 0.0,
+                xy : 0.0,
+                xxy : 0.0,
+                yyx : 0.0,
+                xxx : 0.0,
+                yyy : 0.0
             })
         }
     }
@@ -1611,7 +1622,7 @@ impl Area {
 Used to index images. This is equivalent to a rect, containing
 a pair of horizontal (h) and vertical (v) ranges.
 **/
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, std::hash::Hash)]
 pub struct Region {
     pub rows : Range<usize>,
     pub cols : Range<usize>
@@ -1658,6 +1669,10 @@ impl Region {
         }
     }
 
+    pub fn new(off : (usize, usize), sz : (usize, usize)) -> Self {
+        Self::from_offset_size(off, sz)
+    }
+
     pub fn from_offset_size(off : (usize, usize), sz : (usize, usize)) -> Self {
         Self {
             cols : Range { start : off.1, end : off.1 + sz.1 + 1 },
@@ -1666,7 +1681,12 @@ impl Region {
     }
 
     pub fn to_rect_tuple(&self) -> (usize, usize, usize, usize) {
-        (self.rows.start, self.cols.start, self.rows.end - self.rows.start, self.cols.end - self.cols.start)
+        (
+            self.rows.start,
+            self.cols.start,
+            self.rows.end.saturating_sub(self.rows.start).saturating_sub(1),
+            self.cols.end.saturating_sub(self.cols.start).saturating_sub(1)
+        )
     }
 
 }
@@ -2929,6 +2949,14 @@ pub struct CircleCoords {
 pub struct Circle {
     pub center : Vector2<f32>,
     pub radius : f32
+}
+
+impl Default for Circle {
+
+    fn default() -> Self {
+        Self { center : Vector2::new(0.0, 0.0), radius : 0.0 }
+    }
+
 }
 
 pub fn centroid(ptsf : &[Vector2<f32>]) -> Vector2<f32> {

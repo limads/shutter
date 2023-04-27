@@ -39,6 +39,10 @@ impl BitonalImage {
         S : Storage<u8>
     {
         self.update_from_gray(img, below_thr);
+
+        // This not is bitwise, so updating from below threshold is the
+        // same as updating from above threshold then negating the
+        // bitonal image.
         self.0.not_mut();
     }
 

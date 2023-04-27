@@ -156,6 +156,37 @@ where
     S : Storage<u8>
 {
 
+    pub fn norm_l1(&self) -> f32 {
+        let mut norm = 0.0;
+        let ans = unsafe {
+            crate::foreign::ipp::ippi::ippiNorm_L1_8u_C1R(
+                self.as_ptr(),
+                self.byte_stride() as i32,
+                self.size().into(),
+                &mut norm
+            )
+        };
+        assert!(ans == 0);
+        norm as f32
+    }
+
+    pub fn norm_l1_masked<T : Storage<u8>>(&self, mask : &Image<u8, T>) -> f32 {
+        assert!(self.size() == mask.size());
+        let mut norm = 0.0;
+        let ans = unsafe {
+            crate::foreign::ipp::ippcv::ippiNorm_L1_8u_C1MR(
+                self.as_ptr(),
+                self.byte_stride() as i32,
+                mask.as_ptr(),
+                mask.byte_stride() as i32,
+                self.size().into(),
+                &mut norm
+            )
+        };
+        assert!(ans == 0);
+        norm as f32
+    }
+
     /* Count pixels in the interval [low, high]. */
     pub fn count_pixels(&self, low : u8, high : u8) -> u32 {
 
@@ -2088,7 +2119,7 @@ where
 {
 
     // Interpreting each pixel as a weight, find the point that
-    // best balance the image plane.
+    // best balance the image plane (as x, y coord).
     pub fn gravity_center(&self) -> (f32, f32) {
         let sum = self.sum::<f32>(1) as f32;
         let mut center = (0., 0.);

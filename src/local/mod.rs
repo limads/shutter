@@ -356,6 +356,33 @@ fn histogram_median_filter(src : &Window<'_, u8>, mut dst : WindowMut<'_, u8>, w
     // of #less median until the median bin is reached.
 }
 
+impl<N, S> Image<N, S>
+where
+    S : Storage<N>,
+    N : Pixel
+{
+
+    // Local (block-wise minima)
+    pub fn local_minima_to<T : StorageMut<N>>(&self, min : &mut Image<N, T>) {
+        block_min_or_max(&self.full_window(), Some(&mut min.full_window_mut()), None);
+    }
+
+    // Local (block-wise maxima)
+    pub fn local_maxima_to<T : StorageMut<N>>(&self, max : &mut Image<N, T>) {
+        block_min_or_max(&self.full_window(), None, Some(&mut max.full_window_mut()));
+    }
+
+    // Local (block-wise minima and maxima).
+    pub fn local_extrema_to<T : StorageMut<N>, U : StorageMut<N>>(
+        &self,
+        min : &mut Image<N, T>,
+        max : &mut Image<N, U>
+    ) {
+        block_min_or_max(&self.full_window(), Some(&mut min.full_window_mut()), Some(&mut max.full_window_mut()));
+    }
+
+}
+
 // This implements min-pool or max-pool.
 pub fn block_min_or_max<N>(
     win : &Window<'_, N>,
@@ -543,6 +570,59 @@ where
     }
 }
 
+impl<N, S> Image<N, S>
+where
+    N : Pixel + num_traits::Bounded + num_traits::Zero + PartialOrd,
+    f32 : AsPrimitive<N>,
+    S : Storage<N>,
+    N : AsPrimitive<f32>
+{
+
+    pub fn indexed_minimum(&self) -> ((usize, usize), N) {
+        let (Some((r, c, val)), _) = min_max_idx(&self.full_window(), true, false) else { panic!() };
+        ((r, c), val)
+    }
+
+    pub fn indexed_maximum(&self) -> ((usize, usize), N) {
+        let (_, Some((r, c, val))) = min_max_idx(&self.full_window(), false, true) else { panic!() };
+        ((r, c), val)
+    }
+
+    pub fn indexed_extrema(&self) -> (((usize, usize), N), ((usize, usize), N)) {
+        let (Some((rmin, cmin, valmin)), Some((rmax, cmax, valmax))) = min_max_idx(&self.full_window(), true, true) else {
+            panic!()
+        };
+        (((rmin, cmin), valmin), ((rmax, cmax), valmax))
+    }
+}
+
+fn baseline_min_max_idx<N>(win : &Window<N>) -> (Option<(usize, usize, N)>, Option<(usize, usize, N)>)
+where
+    N : Pixel + num_traits::Bounded + num_traits::Zero + PartialOrd
+{
+    let mut i = 0;
+    let mut min = N::max_value();
+    let mut max = N::min_value();
+    let mut min_ix = 0;
+    let mut max_ix = 0;
+    for px in win.pixels(1) {
+        if *px < min {
+            min = *px;
+            min_ix = i;
+        }
+        if *px > max {
+            max = *px;
+            max_ix = i;
+        }
+        i += 1;
+    }
+    let (nr, nc) = win.size();
+    (
+        Some((min_ix / nr, min_ix % nc, min)),
+        Some((max_ix / nr, max_ix % nc, max))
+    )
+}
+
 // This returns the minimum and maximum values and indices.
 // Can be applied block-wise to get indices at many points.
 pub fn min_max_idx<N>(
@@ -551,7 +631,7 @@ pub fn min_max_idx<N>(
     max : bool
 ) -> (Option<(usize, usize, N)>, Option<(usize, usize, N)>)
 where
-    N : Pixel + AsPrimitive<f32>,
+    N : Pixel + AsPrimitive<f32> + PartialOrd,
     f32 : AsPrimitive<N>,
     for<'a> &'a [N] : Storage<N>,
     for<'a> &'a mut [N] : StorageMut<N>,
@@ -590,7 +670,7 @@ where
                     &mut max_ix as *mut _
                 )
             } else {
-                panic!("Invalid type");
+                return baseline_min_max_idx(win);
             };
             assert!(ans == 0);
             return (
@@ -626,7 +706,7 @@ where
                 assert!(ans == 0);
                 return (Some((min_y as usize, min_x as usize, min.as_())), None);
             } else {
-                panic!("Invalid type");
+                return baseline_min_max_idx(win);
             }
         } else if max {
             let mut max_x : i32 = 0;
@@ -657,12 +737,13 @@ where
                 assert!(ans == 0);
                 return (None, Some((max_y as usize, max_x as usize, max.as_())));
             } else {
-                panic!("Invalid type");
+                return baseline_min_max_idx(win);
             }
+        } else {
+            panic!("Either min or max must be informed")
         }
     }
-
-    unimplemented!()
+    baseline_min_max_idx(win)
 }
 
 pub fn find_peaks(

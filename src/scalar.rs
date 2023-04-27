@@ -466,6 +466,7 @@ where
         self.pixels_mut(1).for_each(|p| *p *= by );
     }
     
+    // scalar_div_assign?
     pub fn scalar_div_mut(&mut self, by : P) {
 
         #[cfg(feature="ipp")]
