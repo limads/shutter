@@ -421,8 +421,8 @@ impl IppHistogram {
         0
     }
 
-    pub fn quantile(&self, q : f64) -> u8 {
-        let sum = self.sum as f64;
+    // Quantile for arbitrary sum (e.g. masked image)
+    pub fn quantile_for(&self, q : f64, sum : f64) -> u8 {
         let mut p = 0.0;
         for ix in 0..=255 {
             p += self.hist[ix] as f64 / sum;
@@ -431,6 +431,11 @@ impl IppHistogram {
             }
         }
         255
+    }
+
+    pub fn quantile(&self, q : f64) -> u8 {
+        let sum = self.sum as f64;
+        self.quantile_for(q, sum)
     }
 
     pub fn accumulate_inplace(&mut self) {
@@ -856,6 +861,7 @@ fn find_modes() {
     //println!("{:?}", hist);
     //println!("{:?}", hist.modes(2, 2));
 }
+
 
 
 

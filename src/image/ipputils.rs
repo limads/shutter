@@ -182,7 +182,8 @@ pub fn row_size_bytes<T>(ncol : usize) -> i32 {
 pub struct IppiResize {
     spec_bytes : Vec<u8>,
     init_buf_bytes : Vec<u8>,
-    work_buf_bytes : Vec<u8>
+    work_buf_bytes : Vec<u8>,
+    res : Resize
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -201,7 +202,93 @@ impl IppiResize {
         self.work_buf_bytes.as_mut_ptr()
     }
 
-    unsafe fn new<T>(src_size : IppiSize, dst_size : IppiSize, res : Resize) -> Self
+    pub fn resize_to<T>(&mut self, src : &ImageRef<T>, dst : &mut ImageMut<T>)
+    where
+        T : Pixel
+    {
+        let mut status : Option<i32> = None;
+        let (src_size, dst_size) = (window_size(src), window_mut_size(&dst));
+        let (src_step, dst_step) = (byte_stride_for_window(src), byte_stride_for_window_mut(&dst));
+        let (src_ptr, dst_ptr) = (
+            src.as_ptr() as *const ffi::c_void,
+            dst.as_mut_ptr() as *mut ffi::c_void
+        );
+        let (is_u8, is_f32) = (src.pixel_is::<u8>(), src.pixel_is::<f32>());
+        let pt = IppiPoint{ x : 0, y : 0 };
+        unsafe {
+            if is_u8 {
+                let border_val : u8 = 0;
+                let status_code = match self.res {
+                    Resize::Nearest => {
+                        ippiResizeNearest_8u_C1R(
+                            src_ptr as *const u8,
+                            src_step,
+                            dst_ptr as *mut u8,
+                            dst_step,
+                            pt,
+                            dst_size,
+                            self.spec_ptr(),
+                            self.buf_ptr()
+                        )
+                    },
+                    Resize::Linear => {
+                        ippiResizeLinear_8u_C1R(
+                            src_ptr as *const u8,
+                            src_step,
+                            dst_ptr as *mut u8,
+                            dst_step,
+                            pt,
+                            dst_size,
+                            crate::foreign::ipp::ippi::_IppiBorderType_ippBorderRepl,
+                            &border_val as *const _,
+                            self.spec_ptr(),
+                            self.buf_ptr()
+                        )
+                    }
+                };
+                status = Some(status_code);
+            } else if is_f32 {
+                let border_val : f32 = 0.;
+                let status_code = match self.res {
+                    Resize::Nearest => {
+                        crate::foreign::ipp::ippi::ippiResizeNearest_32f_C1R(
+                            src_ptr as *const f32,
+                            src_step,
+                            dst_ptr as *mut f32,
+                            dst_step,
+                            pt,
+                            dst_size,
+                            self.spec_ptr(),
+                            self.buf_ptr()
+                        )
+                    },
+                    Resize::Linear => {
+                        crate::foreign::ipp::ippi::ippiResizeLinear_32f_C1R(
+                            src_ptr as *const f32,
+                            src_step,
+                            dst_ptr as *mut f32,
+                            dst_step,
+                            pt,
+                            dst_size,
+                            crate::foreign::ipp::ippi::_IppiBorderType_ippBorderRepl,
+                            &border_val as *const _,
+                            self.spec_ptr(),
+                            self.buf_ptr()
+                        )
+                    }
+                };
+                status = Some(status_code);
+            } else {
+                panic!("Expected u8 or f32 image for resize op");
+            }
+            match status {
+                Some(status) => check_status("Resize", status),
+                None => panic!("Invalid resize type")
+            }
+        }
+    }
+
+    pub fn new<T>(src_size : IppiSize, dst_size : IppiSize, res : Resize) -> Self
     where
         T : Scalar + Default
     {
@@ -221,88 +308,90 @@ impl IppiResize {
             Resize::Nearest => IppiInterpolationType_ippNearest,
             Resize::Linear => IppiInterpolationType_ippLinear
         };
-        if is_u8 {
-            let status_code = ippiResizeGetSize_8u(
-                src_size,
-                dst_size,
-                interp_ty,
-                antialiasing,
-                &mut spec_size,
-                &mut init_buf_size
-            );
-            check_status("Resize get size", status_code);
-            status_get_size = Some(status_code);
-        } else if is_f32 {
-            let status_code = ippiResizeGetSize_32f(
-                src_size,
-                dst_size,
-                interp_ty,
-                antialiasing,
-                &mut spec_size,
-                &mut init_buf_size
-            );
-            check_status("Resize get size", status_code);
-            status_get_size = Some(status_code);
-        } else {
-            panic!("Image expected to be u8 or f32");
-        }
+        unsafe {
+            if is_u8 {
+                let status_code = ippiResizeGetSize_8u(
+                    src_size,
+                    dst_size,
+                    interp_ty,
+                    antialiasing,
+                    &mut spec_size,
+                    &mut init_buf_size
+                );
+                check_status("Resize get size", status_code);
+                status_get_size = Some(status_code);
+            } else if is_f32 {
+                let status_code = ippiResizeGetSize_32f(
+                    src_size,
+                    dst_size,
+                    interp_ty,
+                    antialiasing,
+                    &mut spec_size,
+                    &mut init_buf_size
+                );
+                check_status("Resize get size", status_code);
+                status_get_size = Some(status_code);
+            } else {
+                panic!("Image expected to be u8 or f32");
+            }
 
-        // Allocating an initialization buffer with init_buf_size is only required for
-        // lanczos and cubic filters. For nearest and linear, we can do without it, since
-        // ippiresizenearestinit and ippiresizelinearinit do not take an initialization
-        // buffer argument.
+            // Allocating an initialization buffer with init_buf_size is only required for
+            // lanczos and cubic filters. For nearest and linear, we can do without it, since
+            // ippiresizenearestinit and ippiresizelinearinit do not take an initialization
+            // buffer argument.
 
-        // Then initialize structure using the out parameters:
-        // IppiResizeSpec_<T> has only types for T = 32f or T = 64f
-        let mut spec_bytes = Vec::from_iter((0..(spec_size as usize)).map(|_| 0u8 ));
-        let init_buf_bytes = Vec::from_iter((0..(init_buf_size as usize)).map(|_| 0u8 ));
-        let spec : *mut IppiResizeSpec_32f = mem::transmute::<_, _>(spec_bytes.as_mut_ptr());
-        let init_buf : *mut u8 = mem::transmute::<_, _>(&init_buf_bytes[0]);
+            // Then initialize structure using the out parameters:
+            // IppiResizeSpec_<T> has only types for T = 32f or T = 64f
+            let mut spec_bytes = Vec::from_iter((0..(spec_size as usize)).map(|_| 0u8 ));
+            let init_buf_bytes = Vec::from_iter((0..(init_buf_size as usize)).map(|_| 0u8 ));
+            let spec : *mut IppiResizeSpec_32f = mem::transmute::<_, _>(spec_bytes.as_mut_ptr());
+            let init_buf : *mut u8 = mem::transmute::<_, _>(&init_buf_bytes[0]);
 
-        // mem::forget(spec_bytes);
-        // mem::forget(init_buf_bytes);
+            // mem::forget(spec_bytes);
+            // mem::forget(init_buf_bytes);
 
-        if is_u8 {
-            let status_code = match res {
-                Resize::Nearest => ippiResizeNearestInit_8u(src_size, dst_size, spec),
-                Resize::Linear => ippiResizeLinearInit_8u(src_size, dst_size, spec)
-            };
-            check_status("Resize init", status_code);
-            status_init = Some(status_code);
-        } else if is_f32 {
-            let status_code = match res {
-                Resize::Nearest => ippiResizeNearestInit_32f(src_size, dst_size, spec),
-                Resize::Linear => ippiResizeLinearInit_32f(src_size, dst_size, spec)
-            };
-            check_status("Resize init", status_code);
-            status_init = Some(status_code);
-        } else {
-            panic!("Image expected to be u8 or f32");
-        }
+            if is_u8 {
+                let status_code = match res {
+                    Resize::Nearest => ippiResizeNearestInit_8u(src_size, dst_size, spec),
+                    Resize::Linear => ippiResizeLinearInit_8u(src_size, dst_size, spec)
+                };
+                check_status("Resize init", status_code);
+                status_init = Some(status_code);
+            } else if is_f32 {
+                let status_code = match res {
+                    Resize::Nearest => ippiResizeNearestInit_32f(src_size, dst_size, spec),
+                    Resize::Linear => ippiResizeLinearInit_32f(src_size, dst_size, spec)
+                };
+                check_status("Resize init", status_code);
+                status_init = Some(status_code);
+            } else {
+                panic!("Image expected to be u8 or f32");
+            }
 
-        // Get buffer size for the current spec
-        let n_channels = 1;
-        let mut work_buf_sz = 0;
+            // Get buffer size for the current spec
+            let n_channels = 1;
+            let mut work_buf_sz = 0;
 
-        if is_u8 {
-            let status_code = ippiResizeGetBufferSize_8u(spec, dst_size, n_channels, &mut work_buf_sz as *mut _);
-            check_status("Allocate resize buffer", status_code);
-            assert!(work_buf_sz > 0);
-            status_get_buf_size = Some(status_code);
-        } else if is_f32 {
-            let status_code = ippiResizeGetBufferSize_32f(spec, dst_size, n_channels, &mut work_buf_sz as *mut _);
-            check_status("Allocate resize buffer", status_code);
-            assert!(work_buf_sz > 0);
-            status_get_buf_size = Some(status_code);
-        } else {
-            panic!("Expected u8");
-        }
+            if is_u8 {
+                let status_code = ippiResizeGetBufferSize_8u(spec, dst_size, n_channels, &mut work_buf_sz as *mut _);
+                check_status("Allocate resize buffer", status_code);
+                assert!(work_buf_sz > 0);
+                status_get_buf_size = Some(status_code);
+            } else if is_f32 {
+                let status_code = ippiResizeGetBufferSize_32f(spec, dst_size, n_channels, &mut work_buf_sz as *mut _);
+                check_status("Allocate resize buffer", status_code);
+                assert!(work_buf_sz > 0);
+                status_get_buf_size = Some(status_code);
+            } else {
+                panic!("Expected u8");
+            }
 
-        let work_buf_bytes = Vec::from_iter((0..(work_buf_sz as usize)).map(|_| 0u8 ));
-        if status_get_size.is_some() && status_init.is_some() && status_get_buf_size.is_some() {
-            IppiResize { spec_bytes, init_buf_bytes, work_buf_bytes }
-        } else {
-            panic!("Invalid resize type");
+            let work_buf_bytes = Vec::from_iter((0..(work_buf_sz as usize)).map(|_| 0u8 ));
+            if status_get_size.is_some() && status_init.is_some() && status_get_buf_size.is_some() {
+                IppiResize { spec_bytes, init_buf_bytes, work_buf_bytes, res }
+            } else {
+                panic!("Invalid resize type");
+            }
         }
     }
 
@@ -313,88 +402,15 @@ where
     &'a [T] : Storage<T>,
     &'a mut [T] : StorageMut<T>,
     T : Pixel,
-    //'b : 'd,
-    //'d : 'a
 {
-    let mut status : Option<i32> = None;
-    let (src_size, dst_size) = (window_size(src), window_mut_size(&dst));
-    let (src_step, dst_step) = (byte_stride_for_window(src), byte_stride_for_window_mut(&dst));
-    let (src_ptr, dst_ptr) = (
-        src.as_ptr() as *const ffi::c_void, 
-        dst.as_mut_ptr() as *mut ffi::c_void
-    );
-    let (is_u8, is_f32) = (src.pixel_is::<u8>(), src.pixel_is::<f32>());
-    let pt = IppiPoint{ x : 0, y : 0 };
-    if is_u8 {
-        let mut resize = IppiResize::new::<u8>(src_size, dst_size, res);
-        let border_val : u8 = 0;
-        let status_code = match res {
-            Resize::Nearest => {
-                ippiResizeNearest_8u_C1R(
-                    src_ptr as *const u8,
-                    src_step,
-                    dst_ptr as *mut u8,
-                    dst_step,
-                    pt,
-                    dst_size,
-                    resize.spec_ptr(),
-                    resize.buf_ptr()
-                )
-            },
-            Resize::Linear => {
-                ippiResizeLinear_8u_C1R(
-                    src_ptr as *const u8,
-                    src_step,
-                    dst_ptr as *mut u8,
-                    dst_step,
-                    pt,
-                    dst_size,
-                    crate::foreign::ipp::ippi::_IppiBorderType_ippBorderRepl,
-                    &border_val as *const _,
-                    resize.spec_ptr(),
-                    resize.buf_ptr()
-                )
-            }
-        };
-        status = Some(status_code);
-    } else if is_f32 {
-        let mut resize = IppiResize::new::<f32>(src_size, dst_size, res);
-        let border_val : f32 = 0.;
-        let status_code = match res {
-            Resize::Nearest => {
-                crate::foreign::ipp::ippi::ippiResizeNearest_32f_C1R(
-                    src_ptr as *const f32,
-                    src_step,
-                    dst_ptr as *mut f32,
-                    dst_step,
-                    pt,
-                    dst_size,
-                    resize.spec_ptr(),
-                    resize.buf_ptr()
-                )
-            },
-            Resize::Linear => {
-                crate::foreign::ipp::ippi::ippiResizeLinear_32f_C1R(
-                    src_ptr as *const f32,
-                    src_step,
-                    dst_ptr as *mut f32,
-                    dst_step,
-                    pt,
-                    dst_size,
-                    crate::foreign::ipp::ippi::_IppiBorderType_ippBorderRepl,
-                    &border_val as *const _,
-                    resize.spec_ptr(),
-                    resize.buf_ptr()
-                )
-            }
-        };
-        status = Some(status_code);
+    if src.pixel_is::<u8>() {
+        let mut rsz = IppiResize::new::<u8>(src.size().into(), dst.size().into(), res);
+        rsz.resize_to(src, dst);
+    } else if src.pixel_is::<f32>() {
+        let mut rsz = IppiResize::new::<f32>(src.size().into(), dst.size().into(), res);
+        rsz.resize_to(src, dst);
     } else {
-        panic!("Expected u8 or f32 image for resize op");
-    }
-    match status {
-        Some(status) => check_status("Resize", status),
-        None => panic!("Invalid resize type")
+        panic!("Invalid type");
     }
 }
 

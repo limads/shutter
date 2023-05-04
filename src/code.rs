@@ -312,8 +312,6 @@ impl BitonalEncoder {
 
 }
 
-// rles, open, row, col
-
 fn add_one(
     rles : &mut Vec<RunLength>,
     open : &mut bool,

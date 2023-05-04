@@ -22,6 +22,7 @@ pub enum Foreground {
 
     Above(u8),
 
+    // between, within
     Inside(u8, u8),
 
     Outside(u8, u8)
@@ -889,8 +890,9 @@ unsafe fn ippi_full_threshold(
             assert!(ans == 0);
         },
         Foreground::Inside(a, b) => {
-            ippi_full_threshold(Foreground::Outside(a, b), src, out);
-            out.not_mut();
+            //ippi_full_threshold(Foreground::Outside(a, b), src, out);
+            //out.not_mut();
+            baseline_threshold(&src.full_window(), fg, &mut out.full_window_mut());
         },
         Foreground::Outside(a, b) => {
             ippi_full_threshold(Foreground::Below(a.saturating_sub(1)), src, out);

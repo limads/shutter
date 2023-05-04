@@ -130,6 +130,63 @@ where
 impl<P, S> Image<P, S>
 where
     P : Pixel + PartialOrd,
+    S : StorageMut<P>
+{
+
+    pub fn smaller_assign<T>(&mut self, b : &Image<P, T>)
+    where
+        T : Storage<P>
+    {
+        assert!(self.size() == b.size());
+        #[cfg(feature="ipp")]
+        unsafe {
+            let (a_stride, a_roi) = crate::image::ipputils::step_and_size_for_image(self);
+            let (b_stride, b_roi) = crate::image::ipputils::step_and_size_for_image(b);
+            if self.pixel_is::<u8>() {
+                let ans = crate::foreign::ipp::ippi::ippiMinEvery_8u_C1IR(
+                    mem::transmute(b.as_ptr()),
+                    b.byte_stride() as i32,
+                    mem::transmute(self.as_mut_ptr()),
+                    self.byte_stride() as i32,
+                    self.size().into()
+                );
+                assert!(ans == 0);
+                return;
+            }
+        }
+
+        unimplemented!()
+    }
+
+    pub fn greater_assign<T>(&mut self, b : &Image<P, T>)
+    where
+        T : Storage<P>
+    {
+        assert!(self.size() == b.size());
+        #[cfg(feature="ipp")]
+        unsafe {
+            let (a_stride, a_roi) = crate::image::ipputils::step_and_size_for_image(self);
+            let (b_stride, b_roi) = crate::image::ipputils::step_and_size_for_image(b);
+            if self.pixel_is::<u8>() {
+                let ans = crate::foreign::ipp::ippi::ippiMaxEvery_8u_C1IR(
+                    mem::transmute(b.as_ptr()),
+                    b.byte_stride() as i32,
+                    mem::transmute(self.as_mut_ptr()),
+                    self.byte_stride() as i32,
+                    self.size().into()
+                );
+                assert!(ans == 0);
+                return;
+            }
+        }
+
+        unimplemented!()
+    }
+
+}
+impl<P, S> Image<P, S>
+where
+    P : Pixel + PartialOrd,
     S : Storage<P>,
 {
 

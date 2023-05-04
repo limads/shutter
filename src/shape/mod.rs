@@ -1384,6 +1384,13 @@ where
     }
 
     fn overlap(&self, other : &Self) -> Option<Self> {
+        /*use rangetools::Rangetools;
+        let int = self.intersection(other.clone());
+        if int.is_empty() {
+            None
+        } else {
+            Some(Range { start : int.start, end : int.end })
+        }*/
         let joint = self.joint(other)?;
         let ovlp_start = self.start.max(other.start);
         let ovlp_len = joint.end.checked_sub(joint.start)?
@@ -1637,6 +1644,13 @@ impl From<(usize, usize, usize, usize)> for Region {
 }
 
 impl Region {
+
+    pub fn offset(&self, rows : usize, cols : usize) -> Region {
+        Region {
+            rows : Range { start : self.rows.start + rows, end: self.rows.end + rows },
+            cols : Range { start : self.cols.start + cols, end: self.cols.end + cols },
+        }
+    }
 
     pub fn contains_point(&self, pt : &(usize, usize)) -> bool {
         self.rows.start <= pt.0 && self.rows.end > pt.0

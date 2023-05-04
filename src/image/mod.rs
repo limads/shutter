@@ -6,9 +6,7 @@ use std::fmt;
 use std::fmt::Debug;
 use simba::simd::{AutoSimd};
 use std::convert::TryFrom;
-// use crate::feature::patch::{self, Patch};
 use itertools::Itertools;
-// use crate::feature::patch::ColorMode;
 use num_traits::Zero;
 use serde::{Serialize, Deserialize, de::DeserializeOwned};
 use std::any::Any;
@@ -20,9 +18,6 @@ use num_traits::cast::AsPrimitive;
 use num_traits::float::Float;
 use std::borrow::{Borrow, BorrowMut};
 use std::mem;
-// use crate::raster::*;
-// use crate::draw::*;
-// use crate::sparse::RunLength;
 use num_traits::bounds::Bounded;
 use std::clone::Clone;
 use std::any::{TypeId};
@@ -33,8 +28,6 @@ use std::borrow::ToOwned;
 
 #[cfg(feature="opencv")]
 use nalgebra::{Matrix3, Vector3};
-
-// use crate::io;
 
 #[cfg(feature="ipp")]
 pub mod ipputils;
@@ -216,6 +209,7 @@ impl BinaryPixel for bool {
 pixel buffer. The pixel buffer should always implement Pixels. 
 If the buffer is mutable (&mut [P]) or AsMut<[P]>, it will also
 implement PixelsMut. */
+#[repr(C)]
 pub struct Image<P, S> {
     offset : Coord,
     sz : Size,
@@ -223,6 +217,27 @@ pub struct Image<P, S> {
     slice : S,
     _px : PhantomData<P>
 }
+
+impl<'a, P> Borrow<ImageRef<'a, P>> for ImageBuf<P> {
+
+    /* Safety: Image is repr C, so the three concrete fields
+    offset, size and width have the same layout. Box<T> and &[T]
+    (the slice generic field) also have the same layout. */
+    fn borrow(&self) -> &ImageRef<'a, P> {
+        unsafe { &*((self as *const _) as *const ImageRef<P>) }
+    }
+
+}
+
+/*impl<P> ToOwned for ImageRef<'_, P> {
+
+    type Owned = ImageBuf<P>;
+
+    fn to_owned(&self) -> ImageBuf<P> {
+        self.clone_owned()
+    }
+
+}*/
 
 impl<P, S> fmt::Debug for Image<P, S>
 where
@@ -890,11 +905,18 @@ impl<N> ImageBuf<N>
 where
     N : Pixel,
     Box<[N]> : StorageMut<N>,
-    //&'a [N] : Storage<N>,
-    //&'a mut [N] : StorageMut<N>,
-    //for<'b> &'b mut [N] : StorageMut<N>,
-    //for<'b> &'b [N] : Storage<N>
+    // &'a [N] : Storage<N>,
+    // &'a mut [N] : StorageMut<N>,
+    // for<'b> &'b mut [N] : StorageMut<N>,
+    // for<'b> &'b [N] : Storage<N>
 {
+
+    pub fn truncate_rows(&mut self, nrows : usize) {
+        let mut v = std::mem::take(&mut self.slice).to_vec();
+        v.truncate(nrows * self.width);
+        self.slice = v.into_boxed_slice();
+        self.sz = (nrows, self.sz.1);
+    }
 
     pub fn leak(self) {
         Box::leak(self.slice);
