@@ -149,7 +149,7 @@ where
             Mark::Circle(pos, radius) => {
                 // let center_pos = (self.offset().0 + pos.0, self.offset().1 + pos.1);
 
-                #[cfg(feature="opencv")]
+                /*#[cfg(feature="opencv")]
                 unsafe {
                     let orig_sz = self.original_size();
                     crate::image::cvutils::draw_circle(
@@ -160,7 +160,7 @@ where
                         color
                     );
                     return;
-                }
+                }*/
 
                 let n_points = (TWO_PI * radius as f64) as usize + 4;
                 for ix in 0..=n_points {
@@ -169,8 +169,8 @@ where
                     let y = (self.height() - pos.0) as f64 + theta.sin() * radius as f64;
                     if x >= 0.0 && x < self.width() as f64 {
                         if y >= 0.0 && y < self.height() as f64 {
-                            let i = x as usize;
-                            let j = self.height() - y as usize;
+                            let i = self.height() - y as usize;
+                            let j = x as usize;
                             self[(i, j)] = color;
                         }
                     }

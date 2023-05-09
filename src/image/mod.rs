@@ -25,6 +25,7 @@ use std::marker::PhantomData;
 use nalgebra::Vector2;
 use nalgebra::Complex;
 use std::borrow::ToOwned;
+use crate::shape::Region;
 
 #[cfg(feature="opencv")]
 use nalgebra::{Matrix3, Vector3};
@@ -466,6 +467,14 @@ where
     ) -> Option<ImageRef<P>> {
         let (y, x, h, w) = area.region(self.sz)?.to_rect_tuple();
         self.window((y, x), (h, w))
+    }
+
+    pub fn centered_window(
+        &self,
+        center : (usize, usize),
+        size : (usize, usize)
+    ) -> Option<ImageRef<P>> {
+        self.region(&Region::new_centered(center, size)?)
     }
 
     /* Gets window centered at the given point. If outside bounds, gets
@@ -1136,6 +1145,13 @@ where
     //    Window<'b, M> : Raster
     {
         Self::new_empty(other.height(), other.width())
+    }
+
+    pub fn new_filled(height : usize, width : usize, value : N) -> Self
+    where
+        Box<[N]> : StorageMut<N>
+    {
+        Self::new_constant(height, width, value)
     }
 
     pub fn new_constant(height : usize, width : usize, value : N) -> Self
@@ -2140,6 +2156,14 @@ where
     ) -> Option<ImageMut<P>> {
         let (y, x, h, w) = region.to_rect_tuple();
         self.window_mut((y, x), (h, w))
+    }
+
+    pub fn centered_window_mut(
+        &mut self,
+        center : (usize, usize),
+        size : (usize, usize)
+    ) -> Option<ImageMut<P>> {
+        self.region_mut(&Region::new_centered(center, size)?)
     }
 
     pub fn window_mut(

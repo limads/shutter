@@ -840,7 +840,9 @@ impl IppiCentralMoments {
 
 // The central moments are translation invariant. Moments can be calculated over the
 // shape edge only, since the edge is equivalent to a binary image giving weight 1
-// to pixels at the edge and weight zero for pixels outside it.
+// to pixels at the edge and weight zero for pixels outside it. For a binary image,
+// the moment 0,1/(0,0) and 1,0/(0,0) are the centroid. For a grayscale image,
+// it is the center of gravity (point of equilibrium of the image terrain surface).
 pub struct CentralMoments {
 
     // (row, col) just convert to f32
@@ -1645,7 +1647,15 @@ impl From<(usize, usize, usize, usize)> for Region {
 
 impl Region {
 
-    pub fn offset(&self, rows : usize, cols : usize) -> Region {
+    pub fn offset(&self) -> (usize, usize) {
+        (self.rows.start, self.cols.start)
+    }
+
+    pub fn size(&self) -> (usize, usize) {
+        (self.rows.end - self.rows.start, self.cols.end - self.cols.start)
+    }
+
+    pub fn offset_by(&self, rows : usize, cols : usize) -> Region {
         Region {
             rows : Range { start : self.rows.start + rows, end: self.rows.end + rows },
             cols : Range { start : self.cols.start + cols, end: self.cols.end + cols },
@@ -1681,6 +1691,11 @@ impl Region {
             cols : Range { start : r.1, end : r.1 + r.3 + 1 },
             rows : Range { start : r.0, end : r.0 + r.2 + 1 }
         }
+    }
+
+    pub fn new_centered(center : (usize, usize), sz : (usize, usize)) -> Option<Self> {
+        let off = (center.0.checked_sub(sz.0 / 2)?, center.1.checked_sub(sz.1 / 2)?);
+        Some(Self::new(off, sz))
     }
 
     pub fn new(off : (usize, usize), sz : (usize, usize)) -> Self {

@@ -822,6 +822,64 @@ pub struct AvgPool {
 
 #[cfg(feature="ipp")]
 #[derive(Debug, Clone)]
+pub struct IppiFilterBoxF32 {
+    buf : Vec<u8>,
+    mask_sz : (usize, usize)
+}
+
+#[cfg(feature="ipp")]
+impl IppiFilterBoxF32 {
+
+    pub fn new(height : usize, width : usize, mask_sz : (usize, usize)) -> Self {
+        let dst_size = crate::foreign::ipp::ippi::IppiSize::from((height, width));
+        let mask_size = crate::foreign::ipp::ippi::IppiSize::from(mask_sz);
+        let num_channels = 1;
+        let data_ty = crate::foreign::ipp::ippi::IppDataType_ipp32f;
+        let mut buf_sz = 0;
+        unsafe {
+            let ans = crate::foreign::ipp::ippi::ippiFilterBoxBorderGetBufferSize(
+                dst_size,
+                mask_size,
+                data_ty,
+                num_channels,
+                &mut buf_sz as *mut _
+            );
+            assert!(buf_sz > 0);
+            assert!(ans == 0);
+            let mut buf = Vec::<u8>::with_capacity(buf_sz as usize);
+            buf.set_len(buf_sz as usize);
+            Self { buf, mask_sz }
+        }
+    }
+
+    pub fn apply<S, T>(&mut self, src : &Image<f32, S>, dst : &mut Image<f32, T>)
+    where
+        S : Storage<f32>,
+        T : StorageMut<f32>
+    {
+        let border_val : f32 = 0.0;
+        // let border_ty = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderConst;
+        let border_ty = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderRepl;
+        unsafe {
+            let ans = crate::foreign::ipp::ippi::ippiFilterBoxBorder_32f_C1R(
+                src.as_ptr(),
+                src.byte_stride() as i32,
+                dst.as_mut_ptr(),
+                dst.byte_stride() as i32,
+                dst.size().into(),
+                self.mask_sz.into(),
+                border_ty,
+                &border_val as *const _,
+                self.buf.as_mut_ptr() as *mut _
+            );
+            assert!(ans == 0);
+        }
+    }
+
+}
+
+#[cfg(feature="ipp")]
+#[derive(Debug, Clone)]
 pub struct IppiFilterBox {
     buf : Vec<u8>,
     mask_sz : (usize, usize)
@@ -1128,6 +1186,81 @@ impl IppiFilterGauss {
 
 }
 
+#[derive(Clone, Debug)]
+#[cfg(feature="ipp")]
+pub struct IppiFilterGaussF32 {
+    spec : Vec<u8>,
+    buffer : Vec<u8>
+}
+
+#[cfg(feature="ipp")]
+impl IppiFilterGaussF32 {
+
+    // range_sq: Smooth based on pixel intensity difference
+    // geom_sq : Smooth based on distance between pixels.
+    pub fn new(height : usize, width : usize, kernel_side : usize, sigma : f32) -> Self {
+        let mut buf_sz : i32 = 0;
+        let mut spec_sz : i32 = 0;
+        let num_channels = 1;
+        let data_ty = crate::foreign::ipp::ippi::IppDataType_ipp32f;
+        unsafe {
+            let ans = crate::foreign::ipp::ippcv::ippiFilterGaussianGetBufferSize(
+                (height, width).into(),
+                kernel_side as u32,
+                data_ty,
+                num_channels,
+                &mut spec_sz as *mut _,
+                &mut buf_sz as *mut _,
+            );
+            assert!(ans == 0);
+            assert!(spec_sz > 0);
+            assert!(buf_sz > 0);
+            let mut buffer = Vec::<u8>::with_capacity(buf_sz as usize);
+            buffer.set_len(buf_sz as usize);
+            let mut spec = Vec::<u8>::with_capacity(spec_sz as usize);
+            spec.set_len(spec_sz as usize);
+            let border_val : u8 = 0;
+            // let border_ty = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderConst;
+            let border_ty = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderRepl;
+            let ans = crate::foreign::ipp::ippcv::ippiFilterGaussianInit(
+                (height, width).into(),
+                kernel_side as u32,
+                sigma,
+                border_ty,
+                data_ty,
+                num_channels,
+                spec.as_mut_ptr() as *mut _,
+                buffer.as_mut_ptr() as *mut _
+            );
+            assert!(ans == 0);
+            Self { spec, buffer }
+        }
+    }
+
+    pub fn apply<S, T>(&mut self, src : &Image<f32, S>, dst : &mut Image<f32, T>)
+    where
+        S : Storage<f32>,
+        T : StorageMut<f32>
+    {
+        unsafe {
+            let border_val : f32 = 0.0;
+            let border_ty = crate::foreign::ipp::ippcv::_IppiBorderType_ippBorderConst;
+            let ans = crate::foreign::ipp::ippcv::ippiFilterGaussianBorder_32f_C1R(
+                src.as_ptr(),
+                src.byte_stride() as i32,
+                dst.as_mut_ptr(),
+                dst.byte_stride() as i32,
+                src.size().into(),
+                border_val,
+                self.spec.as_mut_ptr() as *mut _,
+                self.buffer.as_mut_ptr() as *mut _
+            );
+            assert!(ans == 0);
+        }
+    }
+
+}
+
 #[derive(Debug, Clone)]
 #[cfg(feature="ipp")]
 pub struct IppiFilterBilateral {
@@ -1212,6 +1345,69 @@ pub fn bilateral_filter(src : &Window<u8>, dst : &mut WindowMut<u8>, mask_sz : u
     IppiFilterBilateral::new(src.height(), src.width(), mask_sz, 1.0, 1.0).apply(src, dst);
 }
 
+#[derive(Clone, Debug)]
+pub struct IppFilterSobel {
+    buf : Vec<u8>,
+    mask : crate::foreign::ipp::ippi::IppiMaskSize,
+    norm : crate::foreign::ipp::ippi::IppNormType
+}
+
+impl IppFilterSobel {
+
+    pub fn new(sz : (usize, usize), mask_sz : usize) -> Self {
+        let mask = if mask_sz == 3 {
+            crate::foreign::ipp::ippi::_IppiMaskSize_ippMskSize3x3
+        } else {
+            crate::foreign::ipp::ippi::_IppiMaskSize_ippMskSize5x5
+        };
+        let num_channels = 1;
+        let norm = crate::foreign::ipp::ippi::IppNormType_ippNormL1;
+        unsafe {
+            let mut buf_sz = 0;
+            let ans = crate::foreign::ipp::ippi::ippiFilterSobelGetBufferSize(
+                sz.into(),
+                mask,
+                norm,
+                crate::foreign::ipp::ippi::IppDataType_ipp8u,
+                crate::foreign::ipp::ippi::IppDataType_ipp16s,
+                num_channels,
+                &mut buf_sz
+            );
+            assert!(ans == 0);
+            let mut buf : Vec<u8> = (0..(buf_sz as usize)).map(|_| 0u8 ).collect();
+            Self { buf, mask, norm }
+        }
+    }
+
+    pub fn apply(
+        &mut self,
+        src : &Image<u8, impl Storage<u8>>,
+        dst : &mut Image<i16, impl StorageMut<i16>>
+    ) {
+        unsafe {
+            let border_val = 0;
+            let ans = crate::foreign::ipp::ippi::ippiFilterSobel_8u16s_C1R(
+                src.as_ptr(),
+                src.byte_stride() as i32,
+                dst.as_mut_ptr(),
+                dst.byte_stride() as i32,
+                src.size().into(),
+                self.mask,
+                self.norm,
+                crate::foreign::ipp::ippi::_IppiBorderType_ippBorderConst,
+                border_val,
+                self.buf.as_mut_ptr()
+            );
+            assert!(ans == 0);
+        }
+    }
+
+}
+
+
+
+
+
 /*IppStatus ippiFilterBox_64f_C1R(const Ipp<datatype>* pSrc, int srcStep, Ipp<datatype>*
 pDst, int dstStep, IppiSize dstRoiSize, IppiSize maskSize, IppiPoint anchor );
 
@@ -1228,11 +1424,6 @@ dstStep, IppiSize roiSize, IppiDeconvFFTState_32f_C1R* pDeconvFFTState );
 
 IppStatus ippiDeconvFFT_32f_C3R(const Ipp32f* pSrc, int srcStep, Ipp32f* pDst, int
 dstStep, IppiSize roiSize, IppiDeconvFFTState_32f_C3R* pDeconvFFTState );
-
-IppStatus ippiFilterSobel_<mod>(const Ipp<srcdatatype>* pSrc, int srcStep,
-Ipp<dstdatatype>* pDst, int dstStep, IppiSize dstRoiSize, IppiMaskSize maskSize,
-IppNormType normType, IppiBorderType borderType, Ipp<srcdatatype> borderValue, Ipp8u*
-pBuffer );
 
 IppStatus ippiFilterGaussian_<mod>(const Ipp<datatype>* pSrc, int srcStep,
 Ipp<datatype>* pDst, int dstStep, IppiSize roiSize, IppiBorderType borderType, const

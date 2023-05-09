@@ -7,8 +7,9 @@ use std::cmp::Ordering;
 use std::ops::SubAssign;
 // use crate::point::PointOp;
 use crate::conv::*;
+use std::ops::AddAssign;
 
-pub struct RectComplement {
+pub struct Complement {
     pub tl : (usize, usize, usize, usize),
     pub tr : (usize, usize, usize, usize),
     pub bl : (usize, usize, usize, usize),
@@ -19,7 +20,7 @@ pub struct RectComplement {
     pub left : (usize, usize, usize, usize),
 }
 
-impl RectComplement {
+impl Complement {
 
     pub fn as_array(&self) -> [(usize, usize, usize, usize); 8] {
         [
@@ -36,10 +37,20 @@ impl RectComplement {
     
 }
 
+/*pub enum NestedComplement {
+    Full((usize, usize, usize, usize)),
+    Complement(Complement),
+    Nested(Box<NestedComplement>)
+}
+
+fn search(compl : &mut Vec<NestedComplement>, pos : (usize, usize)) {
+
+}*/
+
 pub fn rect_complement(
     inner : (usize, usize, usize, usize),
     outer : (usize, usize, usize, usize)
-) -> Option<RectComplement> {
+) -> Option<Complement> {
     let outside_bounds = inner.0 < outer.0 ||
         inner.0 > outer.2.checked_sub(inner.0)? ||
         inner.1 > outer.3.checked_sub(inner.1)? ||
@@ -53,7 +64,7 @@ pub fn rect_complement(
     let bottom_h = (outer.0 + outer.2) - (inner.0 + inner.2);
     let right_col_offset = inner.1 + inner.3;
     let bottom_row_offset = inner.0 + inner.2;
-    Some(RectComplement {
+    Some(Complement {
         tl : (outer.0, outer.1, top_h, left_w),
         tr : (outer.0, right_col_offset, top_h, right_w),
         bl : (bottom_row_offset, outer.0, bottom_h, left_w),
@@ -80,7 +91,8 @@ pub struct HoughCircle {
     shape : (usize, usize),
     
     // Holds one matrix for each possible radius. Each matrix has the same dimension as the ImageBuf.
-    // Use float because eventually we will want to blur it, but it is actually an counter.
+    // Use float because eventually we will want to blur it, but it is actually a counter. Each
+    // accumulator represents the point probability in y-down coordinates.
     accum : Vec<ImageBuf<f32>>,
     
     accum_blurred : Vec<ImageBuf<f32>>,
@@ -88,7 +100,9 @@ pub struct HoughCircle {
     found : BTreeMap<usize, Vec<((usize, usize), f32)>>,
     
     // Local sums over the blurred ImageBuf.
-    pub ws : ImageBuf<f32>
+    pub ws : ImageBuf<f32>,
+
+    filt : crate::local::IppiFilterGaussF32
     
 }
 
@@ -125,12 +139,14 @@ impl HoughCircle {
         
         let accum : Vec<_> = (0..n_radii)
             .map(|_| ImageBuf::new_constant(shape.0, shape.1, 0.) ).collect();
-        let accum_blurred : Vec<_> = (0..n_radii)
-            .map(|_| ImageBuf::new_constant(shape.0 - 5 + 1, shape.1 - 5 + 1, 0.) ).collect();
+        //let accum_blurred : Vec<_> = (0..n_radii)
+        //    .map(|_| ImageBuf::new_constant(shape.0 - 5 + 1, shape.1 - 5 + 1, 0.) ).collect();
+        let accum_blurred = accum.clone();
         let ws = ImageBuf::new_constant(
             accum_blurred[0].height() / 4, 
             accum_blurred[0].width() / 4, 0.0f32);
-        Self { angles, radii, accum, shape, deltas, found : BTreeMap::new(), accum_blurred, ws }
+        let filt = crate::local::IppiFilterGaussF32::new(shape.0, shape.1, 5, 4.0);
+        Self { angles, radii, accum, shape, deltas, found : BTreeMap::new(), accum_blurred, ws, filt }
     }
     
     pub fn best_matched_accumulator(&self) -> Option<&ImageBuf<f32>> {
@@ -166,62 +182,172 @@ impl HoughCircle {
     }
     
     /// Returns the n-highest circle peaks at least dist apart from each other.
-    /// Points are in cartesian coordinates.
+    /// Points are in cartesian coordinates. The computational cost is
+    /// n_pts * n_radii sums + n_radii convolutions.
     pub fn calculate(
         &mut self, 
         pts : &[Point2<f32>], 
         n_expected : usize, 
-        min_dist : usize
-    ) -> Vec<((usize, usize), f32)> {
+        min_dist : usize,
+        min_pts : f32
+    ) -> Vec<HoughMaximum> {
+        let mut must_test = DMatrix::from_element(
+            pts.len(),
+            self.deltas.len(),
+            true
+        );
+        let mut timer = crate::util::Timer::start();
         for i in 0..self.radii.len() {
-            let mut acc = &mut self.accum[i];
-            acc.full_window_mut().fill(0.);
-            accumulate_for_radius(pts, &self.deltas[i], acc);
-            acc.full_window().convolve_mut(
+            // let mut acc = &mut self.accum[i];
+            self.accum[i].full_window_mut().fill(0.);
+            accumulate_for_radius(pts, &self.deltas[i], &mut must_test, &mut self.accum[i]);
+
+            // Without normalization, the algorithm might prefer the larger
+            // of concentric circles, even if they are noisier than smaller circles.
+            // let acc_s = acc.sum::<f32>(1);
+            // acc.scalar_div_mut(acc_s);
+
+            /*acc.full_window().convolve_mut(
                 &blur::GAUSS, 
                 &mut self.accum_blurred[i]
-            );
-            
-            /*let mut twice_blurred = self.accum_blurred[i].full_window()
-                .convolve_padded(&blur::GAUSS, Convolution::Linear);
-            twice_blurred = twice_blurred.full_window()
-                .convolve_padded(&blur::GAUSS, Convolution::Linear);    
-            self.accum_blurred[i].full_window_mut().sub_assign(twice_blurred.full_window());
-            self.accum_blurred[i].full_window_mut().abs_mut();*/
-            
-            
+            );*/
+            self.filt.apply(&self.accum[i], &mut self.accum_blurred[i]);
         }
-        let mut circles = Vec::new();
-        find_hough_maxima(&self.accum_blurred[..], n_expected, min_dist, &mut self.found, &mut self.ws.full_window_mut());
+        timer.time("Accumulation");
+        /*let mut circles = Vec::new();
+        find_hough_maxima(
+            &self.accum_blurred[..],
+            n_expected,
+            min_dist,
+            &mut self.found,
+            &mut self.ws.full_window_mut()
+        );
         for (rad_ix, centers) in &self.found {
             circles.extend(centers.clone().drain(..).map(|c| (c.0, self.radii[*rad_ix])));
         }
-        circles        
+        circles*/
+        let ans = find_hough_maxima_blockwise(
+            &self.accum_blurred[..],
+            &self.radii,
+            n_expected,
+            min_dist,
+            min_pts
+        );
+        timer.time("Max search");
+        ans
     }
     
 }
 
+/* Since radii are tested in increasing fashion,
+at the first delta not inside for a given point, set must_test for (pt, delta) = false.
+Then for all radius > curr_radius, the point will not be tested anymore (all deltas
+arrays have the same angle sequence). */
 fn accumulate_for_radius(
     pts : &[Point2<f32>], 
     deltas : &[Vector2<f32>], 
+    must_test : &mut DMatrix<bool>,
     accum : &mut ImageBuf<f32>
 ) {
     let shape = Vector2::new(accum.width() as f32, accum.height() as f32);
-    for pt in pts {
-        for d in deltas {
+
+    /* TODO only deltas at the top left quadrant need to be checked for
+    positivity to avoid usize overflow. The bounds check at the indexing suffice
+    for the other cases. Add a separate iterator for those angles that do not
+    perform the explicit check. */
+
+    for (i, pt) in pts.iter().enumerate() {
+        for (j, d) in deltas.iter().enumerate() {
+            // if !must_test[(i, j)] { continue };
             let center = pt.clone() + d;
-            let inside = center[0] > 0.0 && 
+            /*let inside = center[0] > 0.0 &&
                 center[1] > 0.0 && 
                 center[0] < shape[0] && 
-                center[1] < shape[1];
+                center[1] < shape[1];*/
+            let inside = center[0] > 0.0 && center[1] > 0.0;
             if inside {
-                accum[((shape[1] - center[1]) as usize, center[0] as usize)] += 1.0;
+                if let Some(a) = accum.get_mut((center[0] as usize, (shape[1] - center[1]) as usize)) {
+                    *a += 1.0;
+                }
+            } else {
+                // must_test[(i, j)] = false;
             }
         }
     }
 }
 
-// The returned map maps indices of the radius vector into a 
+#[derive(Debug, Clone, Copy)]
+pub struct HoughMaximum {
+    pub rad : f32,
+    pub pos : (usize, usize),
+    pub count : f32
+}
+
+// Define blocks as having size min_dist.
+// Then sort all blocks by rows then by cols within
+// rows for all images. If local maxima at neighboring
+// blocks are greater than threshold, keep only the
+// largest bock. For neighboring blocks, the distance
+// between local maxima is upper bounded by 2*block_dist.
+// So block_dist = min_dist/2 guarantees removing close
+// neighbors makes sure all maxima are at least min_dist apart.
+fn find_hough_maxima_blockwise(
+    accums : &[ImageBuf<f32>],
+    radii : &[f32],
+    n_expected : usize,
+    min_dist : usize,
+    min_pts : f32
+) -> Vec<HoughMaximum> {
+    assert!(accums.len() == radii.len());
+    // assert!(accums[0].height() % min_dist == 0 && accums[0].width() % min_dist == 0);
+    let mut peaks = Vec::new();
+    let mut rad_peaks = Vec::new();
+    for rad_ix in 0..accums.len() {
+        for w in accums[rad_ix].windows((min_dist, min_dist)) {
+            let (pos, v) = w.indexed_maximum();
+            if v > min_pts {
+                rad_peaks.push(HoughMaximum {
+                    rad : radii[rad_ix],
+                    pos : (w.offset().0 + pos.0, w.offset().1 + pos.1),
+                    count : v
+                });
+            }
+        }
+
+        // Remove neighboring cols within rows
+        // Sort not really required if windows(.) iterates row-wise.
+        rad_peaks.sort_by(|a, b| a.pos.0.cmp(&b.pos.0) );
+        for i in (0..rad_peaks.len()).rev().skip(1) {
+            try_remove_neighbor(&mut rad_peaks, min_dist, i);
+        }
+
+        // Remove neighboring rows within cols
+        rad_peaks.sort_by(|a, b| a.pos.1.cmp(&b.pos.1) );
+        for i in (0..rad_peaks.len()).rev().skip(1) {
+            try_remove_neighbor(&mut rad_peaks, min_dist, i);
+        }
+
+        peaks.extend(rad_peaks.drain(..));
+    }
+
+    peaks.sort_by(|a, b| b.count.total_cmp(&a.count) );
+    peaks.truncate(n_expected);
+    peaks
+}
+
+fn try_remove_neighbor(rad_peaks : &mut Vec<HoughMaximum>, min_dist : usize, i : usize) {
+    let dist_r = rad_peaks[i].pos.0.abs_diff(rad_peaks[i + 1].pos.0);
+    let dist_c = rad_peaks[i].pos.1.abs_diff(rad_peaks[i + 1].pos.1);
+    if dist_c < min_dist && dist_r < min_dist {
+        if rad_peaks[i].count > rad_peaks[i + 1].count {
+            rad_peaks.remove(i + 1);
+        } else {
+            rad_peaks.swap_remove(i);
+        }
+    }
+}
+
+// The returned map maps indices of the radius vector into a
 // set of likely circle centers.
 // Perhaps blur found peaks a little bit.
 // Take as parameter number of points in the circle edge (will equal the number of votes
@@ -250,7 +376,7 @@ fn find_hough_maxima(
                 let prev_pos = prev_found[0].0;
                 let offy = prev_pos.0.saturating_sub(min_dist);
                 let offx = prev_pos.1.saturating_sub(min_dist);
-                let mut exclude = (
+                let exclude = (
                     offy,
                     offx,
                     (2*min_dist).min(outer_shape.0-offy),
@@ -263,16 +389,16 @@ fn find_hough_maxima(
                 for r in compl.as_array() {
                     
                     // Use this for absolute global maximum.
-                    /*let opt_max = crate::local::min_max_idx(
+                    let opt_max = crate::local::min_max_idx(
                         &accums[rad_ix].window((r.0, r.1), (r.2, r.3)).unwrap(), 
                         false,
                         true
-                    );*/
-                    let opt_max = contrasting_maximum(
+                    );
+                    /*let opt_max = contrasting_maximum(
                         &accums[rad_ix].window((r.0, r.1), (r.2, r.3)).unwrap(),
                         ws,
                         3
-                    );
+                    );*/
                     
                     if let (_, Some(new_max)) = opt_max {
                         if new_max.2 > max.1 {
@@ -352,8 +478,8 @@ mod test {
             pts.push(c.clone() + delta);
         }
         let mut hough = HoughCircle::new(12, min_radius, max_radius, n_radii, (100,100));
-        let ans = hough.calculate(&pts[..], 1, 1);
-        println!("{:?}", ans);
+        let ans = hough.calculate(&pts[..], 1, 1, 1.0);
+        // println!("{:?}", ans);
         for i in 0..n_radii {
             // hough.accum[i].show();
         }
@@ -373,6 +499,7 @@ mod test {
     }
 
 }
+
 
 
 
