@@ -325,6 +325,15 @@ where
                 );
                 assert!(ans == 0);
                 return A::from(sum as f32);
+            } else if self.pixel_is::<i16>() {
+                let ans = crate::foreign::ipp::ippi::ippiSum_16s_C1R(
+                    std::mem::transmute(self.as_ptr()),
+                    step,
+                    roi,
+                    &mut sum as *mut _
+                );
+                assert!(ans == 0);
+                return A::from(sum as f32);
             }
         }
 

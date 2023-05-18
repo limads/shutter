@@ -571,6 +571,22 @@ where
 
     pub fn conditional_fill(&mut self, mask : &Window<u8>, color : P) {
         assert!(self.shape() == mask.shape());
+
+        if self.pixel_is::<u8>() {
+            unsafe {
+                let ans = crate::foreign::ipp::ippi::ippiSet_8u_C1MR(
+                    *std::mem::transmute::<_,&u8>(&color),
+                    std::mem::transmute(self.as_mut_ptr()),
+                    self.byte_stride() as i32,
+                    self.size().into(),
+                    mask.as_ptr(),
+                    mask.byte_stride() as i32
+                );
+                assert!(ans == 0);
+                return;
+            }
+        }
+
         self.pixels_mut(1).zip(mask.pixels(1)).for_each(|(d, m)| if *m != 0 { *d = color } );
     }
 

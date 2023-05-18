@@ -261,7 +261,8 @@ where
                 return;
             }
         }
-        unimplemented!()
+        self.pixels(1).zip(b.pixels(1)).zip(dst.pixels_mut(1))
+            .for_each(|((a, b), d)| *d = if *a > *b { *a } else { *b });
     }
     
     // a < b ? a else b
@@ -303,7 +304,8 @@ where
             }
         }
 
-        unimplemented!()
+        self.pixels(1).zip(b.pixels(1)).zip(dst.pixels_mut(1))
+            .for_each(|((a, b), d)| *d = if *a < *b { *a } else { *b });
     }
 
 
@@ -337,6 +339,17 @@ where
                 );
                 assert!(ans == 0);
                 return;
+            } else if self.pixel_is::<u16>() {
+                let ans = crate::foreign::ipp::ippcv::ippiAbsDiff_16u_C1R(
+                    mem::transmute(self.as_ptr()),
+                    this_step,
+                    mem::transmute(rhs.as_ptr()),
+                    rhs_step,
+                    mem::transmute(dst.as_mut_ptr()),
+                    dst_step,
+                    mem::transmute(dst_roi)
+                );
+                assert!(ans == 0);
             }
         }
         unimplemented!()
@@ -363,6 +376,21 @@ where
             if lhs.pixel_is::<u8>() {
                 let scale : i32 = 0;
                 let ans = crate::foreign::ipp::ippi::ippiDiv_8u_C1RSfs(
+                    mem::transmute(lhs.as_ptr()),
+                    lhs_stride,
+                    mem::transmute(rhs.as_ptr()),
+                    rhs_stride,
+                    mem::transmute(dst.as_mut_ptr()),
+                    dst_stride,
+                    lhs_roi,
+                    scale
+                );
+                assert!(ans == 0);
+                return;
+            }
+            if self.pixel_is::<i16>() {
+                let scale : i32 = 0;
+                let ans = crate::foreign::ipp::ippi::ippiDiv_16s_C1RSfs(
                     mem::transmute(lhs.as_ptr()),
                     lhs_stride,
                     mem::transmute(rhs.as_ptr()),

@@ -1429,16 +1429,6 @@ IppStatus ippiFilterGaussian_<mod>(const Ipp<datatype>* pSrc, int srcStep,
 Ipp<datatype>* pDst, int dstStep, IppiSize roiSize, IppiBorderType borderType, const
 Ipp<datatype> borderValue[1], IppFilterGaussianSpec* pSpec, Ipp8u* pBuffer );
 
-IppStatus ippiDCTFwd_<mod> (const Ipp32f* pSrc, int srcStep, Ipp32f* pDst, int dstStep,
-const IppiDCTFwdSpec_32f* pDCTSpec, Ipp8u* pBuffer );
-
-IppStatus ippiDCTInv_<mod> (const Ipp32f* pSrc, int srcStep, Ipp32f* pDst, int dstStep,
-const IppiDCTInvSpec_32f* pDCTSpec, Ipp8u* pBuffer );
-
-IppStatus ippiDCT8x8Fwd_<mod>(const Ipp<datatype>* pSrc, Ipp<datatype>* pDst );
-
-IppStatus ippiDCT8x8Inv_2x2_16s_C1(const Ipp16s* pSrc, Ipp16s* pDst );
-
 // imgproc::blur
 // imgproc::median_blur
 // imgproc::sobel

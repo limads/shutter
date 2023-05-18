@@ -26,6 +26,10 @@ pub fn perspective_to() {
 
 }
 
+/*
+x' = m[00]*x + m[01]*y + m[02]
+y' = m[10]*x + m[01]*y + m[12]
+*/
 #[cfg(feature="ipp")]
 pub fn affine_to<N>(w : &Window<N>, m : &Matrix2x3<f64>, dst : &mut WindowMut<N>) 
 where
@@ -52,7 +56,7 @@ where
     };
     let interp = crate::foreign::ipp::ippi::IppiInterpolationType_ippNearest;
     let dir = crate::foreign::ipp::ippi::IppiWarpDirection_ippWarpForward;
-    let border = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderMirror;
+    let border = crate::foreign::ipp::ippi::_IppiBorderType_ippBorderRepl;
     let n_channels = 1;
     let (mut spec_sz, mut init_buf_sz) : (i32, i32) = (0, 0);
     let border_val = 0.0;

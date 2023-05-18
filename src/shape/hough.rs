@@ -7,7 +7,8 @@ use std::cmp::Ordering;
 use std::ops::SubAssign;
 // use crate::point::PointOp;
 use crate::conv::*;
-use std::ops::AddAssign;
+use std::ops::{AddAssign, };
+use std::ops::{DivAssign};
 
 pub struct Complement {
     pub tl : (usize, usize, usize, usize),
@@ -76,6 +77,14 @@ pub fn rect_complement(
     })
 }
 
+/* The hough transform trace a circle around each point. The circle is discretized
+around n_sector points, and circles between min_radii..max_radii are traced for each point.
+After accumulation (and potentially after smoothing preprocessing of the accumulator
+images for each radius), the accumulator image local maxima correspond to circular features
+present in the point set spatial arrangement. The accumulation step of the hough algorithm can be
+processor intensive, since it must iterate over n_pts * n_radii * n_sectors. To reduce computational
+load, you can use accumulate_weighted. Weights can be locally aggregated points (with weight = 1.0 for
+a single point in the 3x3 neighborhood, and 9.0 for 9 points in the neighborhood, for example). */
 #[derive(Debug, Clone)]
 pub struct HoughCircle {
 
@@ -93,16 +102,20 @@ pub struct HoughCircle {
     // Holds one matrix for each possible radius. Each matrix has the same dimension as the ImageBuf.
     // Use float because eventually we will want to blur it, but it is actually a counter. Each
     // accumulator represents the point probability in y-down coordinates.
-    accum : Vec<ImageBuf<f32>>,
+    pub accum : Vec<ImageBuf<f32>>,
     
-    accum_blurred : Vec<ImageBuf<f32>>,
+    pub accum_blurred : Vec<ImageBuf<f32>>,
 
     found : BTreeMap<usize, Vec<((usize, usize), f32)>>,
     
     // Local sums over the blurred ImageBuf.
     pub ws : ImageBuf<f32>,
 
-    filt : crate::local::IppiFilterGaussF32
+    filt : crate::local::IppiFilterGaussF32,
+
+    filt_box : crate::local::IppiFilterBoxF32,
+
+    flat_dst : ImageBuf<f32>
     
 }
 
@@ -145,8 +158,10 @@ impl HoughCircle {
         let ws = ImageBuf::new_constant(
             accum_blurred[0].height() / 4, 
             accum_blurred[0].width() / 4, 0.0f32);
-        let filt = crate::local::IppiFilterGaussF32::new(shape.0, shape.1, 5, 4.0);
-        Self { angles, radii, accum, shape, deltas, found : BTreeMap::new(), accum_blurred, ws, filt }
+        let filt = crate::local::IppiFilterGaussF32::new(shape.0, shape.1, 5, 2.0);
+        let mut filt_box = crate::local::IppiFilterBoxF32::new(128, 128, (9, 9));
+        Self { angles, radii, accum, shape, deltas, found : BTreeMap::new(), accum_blurred, ws, filt, filt_box,
+        flat_dst : ImageBuf::<f32>::new_constant(128, 128, 0.0) }
     }
     
     pub fn best_matched_accumulator(&self) -> Option<&ImageBuf<f32>> {
@@ -181,62 +196,97 @@ impl HoughCircle {
         &self.found
     }
     
-    /// Returns the n-highest circle peaks at least dist apart from each other.
-    /// Points are in cartesian coordinates. The computational cost is
-    /// n_pts * n_radii sums + n_radii convolutions.
-    pub fn calculate(
-        &mut self, 
-        pts : &[Point2<f32>], 
-        n_expected : usize, 
-        min_dist : usize,
-        min_pts : f32
-    ) -> Vec<HoughMaximum> {
-        let mut must_test = DMatrix::from_element(
+    pub fn accumulate_weighted(
+        &mut self,
+        pts : &[Point2<f32>],
+        weights : &[f32]
+    ) {
+        for i in 0..self.radii.len() {
+            self.accum[i].full_window_mut().fill(0.);
+            accumulate_weighted_for_radius(pts, weights, &self.deltas[i], &mut self.accum[i]);
+            self.filt.apply(&self.accum[i], &mut self.accum_blurred[i]);
+        }
+    }
+
+    pub fn accumulate(
+        &mut self,
+        pts : &[Point2<f32>]
+    ) {
+        /*let mut must_test = DMatrix::from_element(
             pts.len(),
             self.deltas.len(),
             true
-        );
-        let mut timer = crate::util::Timer::start();
+        );*/
         for i in 0..self.radii.len() {
             // let mut acc = &mut self.accum[i];
             self.accum[i].full_window_mut().fill(0.);
-            accumulate_for_radius(pts, &self.deltas[i], &mut must_test, &mut self.accum[i]);
+            accumulate_for_radius(pts, &self.deltas[i], /*&mut must_test,*/ &mut self.accum[i]);
 
             // Without normalization, the algorithm might prefer the larger
             // of concentric circles, even if they are noisier than smaller circles.
             // let acc_s = acc.sum::<f32>(1);
             // acc.scalar_div_mut(acc_s);
 
-            /*acc.full_window().convolve_mut(
-                &blur::GAUSS, 
-                &mut self.accum_blurred[i]
-            );*/
             self.filt.apply(&self.accum[i], &mut self.accum_blurred[i]);
+
+            // This step gives preferences to "peaky" regions, since "ridge"
+            // regions will be subtracted away by the more spatially dispersed
+            // flat image in the difference.
+            // self.filt_box.apply(&self.accum_blurred[i], &mut self.flat_dst);
+            // self.accum_blurred[i].sub_assign(&flat_dst);
         }
-        timer.time("Accumulation");
-        /*let mut circles = Vec::new();
-        find_hough_maxima(
-            &self.accum_blurred[..],
-            n_expected,
-            min_dist,
-            &mut self.found,
-            &mut self.ws.full_window_mut()
-        );
-        for (rad_ix, centers) in &self.found {
-            circles.extend(centers.clone().drain(..).map(|c| (c.0, self.radii[*rad_ix])));
+    }
+
+    /// Returns the n-highest circle peaks at least dist apart from each other.
+    /// Points are in cartesian coordinates. The computational cost is
+    /// n_pts * n_radii sums + n_radii convolutions.
+    pub fn calculate(
+        &mut self,
+        pts : &[Point2<f32>],
+        weights : Option<&[f32]>,
+        n_expected : usize,
+        min_dist : usize,
+        min_pts : f32,
+    ) -> Vec<HoughMaximum> {
+        if let Some(weights) = weights {
+            self.accumulate_weighted(pts, weights);
+        } else {
+            self.accumulate(pts);
         }
-        circles*/
-        let ans = find_hough_maxima_blockwise(
+        self.maxima(n_expected, min_dist, min_pts)
+    }
+
+    pub fn maxima(&self, n_expected : usize, min_dist : usize, min_pts : f32) -> Vec<HoughMaximum> {
+        find_hough_maxima_blockwise(
             &self.accum_blurred[..],
             &self.radii,
             n_expected,
             min_dist,
             min_pts
-        );
-        timer.time("Max search");
-        ans
+        )
     }
     
+}
+
+fn accumulate_weighted_for_radius(
+    pts : &[Point2<f32>],
+    weights : &[f32],
+    deltas : &[Vector2<f32>],
+    accum : &mut ImageBuf<f32>
+) {
+    let shape = Vector2::new(accum.width() as f32, accum.height() as f32);
+    assert!(pts.len() == weights.len());
+    for (i, pt) in pts.iter().enumerate() {
+        for d in deltas.iter() {
+            let center = pt + d;
+            let inside = center[0] > 0.0 && center[1] > 0.0;
+            if inside {
+                if let Some(a) = accum.get_mut((center[0] as usize, (shape[1] - center[1]) as usize)) {
+                    *a += weights[i];
+                }
+            }
+        }
+    }
 }
 
 /* Since radii are tested in increasing fashion,
@@ -246,7 +296,7 @@ arrays have the same angle sequence). */
 fn accumulate_for_radius(
     pts : &[Point2<f32>], 
     deltas : &[Vector2<f32>], 
-    must_test : &mut DMatrix<bool>,
+    // must_test : &mut DMatrix<bool>,
     accum : &mut ImageBuf<f32>
 ) {
     let shape = Vector2::new(accum.width() as f32, accum.height() as f32);
@@ -256,10 +306,10 @@ fn accumulate_for_radius(
     for the other cases. Add a separate iterator for those angles that do not
     perform the explicit check. */
 
-    for (i, pt) in pts.iter().enumerate() {
-        for (j, d) in deltas.iter().enumerate() {
+    for pt in pts.iter() {
+        for d in deltas.iter() {
             // if !must_test[(i, j)] { continue };
-            let center = pt.clone() + d;
+            let center = pt + d;
             /*let inside = center[0] > 0.0 &&
                 center[1] > 0.0 && 
                 center[0] < shape[0] && 
@@ -280,7 +330,8 @@ fn accumulate_for_radius(
 pub struct HoughMaximum {
     pub rad : f32,
     pub pos : (usize, usize),
-    pub count : f32
+    pub count : f32,
+    pub rad_ix : usize
 }
 
 // Define blocks as having size min_dist.
@@ -309,7 +360,8 @@ fn find_hough_maxima_blockwise(
                 rad_peaks.push(HoughMaximum {
                     rad : radii[rad_ix],
                     pos : (w.offset().0 + pos.0, w.offset().1 + pos.1),
-                    count : v
+                    count : v,
+                    rad_ix
                 });
             }
         }
@@ -478,7 +530,7 @@ mod test {
             pts.push(c.clone() + delta);
         }
         let mut hough = HoughCircle::new(12, min_radius, max_radius, n_radii, (100,100));
-        let ans = hough.calculate(&pts[..], 1, 1, 1.0);
+        let ans = hough.calculate(&pts[..], None, 1, 1, 1.0);
         // println!("{:?}", ans);
         for i in 0..n_radii {
             // hough.accum[i].show();
