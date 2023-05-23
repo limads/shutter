@@ -3394,3 +3394,19 @@ impl rhai::CustomType for ImageBuf<u8> {
 
 }
 
+impl<S> Image<u8, S>
+where
+    S : Storage<u8>
+{
+
+    pub fn packed_pixels<'a>(&'a self) -> Option<impl Iterator<Item=wide::u8x16> + 'a> {
+        if self.width() % 16 == 0 {
+            Some(self.rows().map(|row| row.chunks(16).map(|ch| wide::u8x16::from(ch) ) ).flatten())
+        } else {
+            None
+        }
+    }
+
+}
+
+

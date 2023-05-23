@@ -1647,6 +1647,10 @@ impl From<(usize, usize, usize, usize)> for Region {
 
 impl Region {
 
+    pub fn is_valid(&self) -> bool {
+        self.rows.end > self.rows.start && self.cols.end > self.cols.start
+    }
+
     pub fn offset(&self) -> (usize, usize) {
         (self.rows.start, self.cols.start)
     }

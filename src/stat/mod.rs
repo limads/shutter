@@ -202,7 +202,33 @@ where
 
 }
 
-impl<P, S> Image<P, S> 
+impl<S> Image<u8, S>
+where
+    S : Storage<u8>
+{
+
+    pub fn masked_sum<T>(&self, mask : &Image<u8, T>) -> u32
+    where
+        T : Storage<u8>
+    {
+        assert!(self.shape() == mask.shape());
+        // assert!(self.width() % 16 == 0);
+        /*let mut sum = wide::u8x16::ZERO;
+        for (pxs, ms) in self.packed_pixels().zip(mask.packed_pixels()) {
+
+        }*/
+        let mut sum = 0;
+        for (px, m) in self.pixels(1).zip(mask.pixels(1)) {
+            if *m != 0 {
+                sum += *px as u32;
+            }
+        }
+        sum
+    }
+
+}
+
+impl<P, S> Image<P, S>
 where
     P : Pixel + Add<Output=P>,
     S : Storage<P>,
