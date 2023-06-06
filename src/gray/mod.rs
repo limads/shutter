@@ -1774,6 +1774,10 @@ pub struct Lookup([u8; 256]);
 
 impl Lookup {
 
+    pub fn from_array(s : [u8; 256]) -> Self {
+        Self(s)
+    }
+
     pub fn from_slice(s : &[u8]) -> Self {
         let mut arr : [u8; 256] = [0; 256];
         arr.copy_from_slice(s);

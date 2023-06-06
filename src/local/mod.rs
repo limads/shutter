@@ -1404,7 +1404,123 @@ impl IppFilterSobel {
 
 }
 
+#[derive(Clone, Debug)]
+pub struct IppFilterSobelHoriz {
+    buf : Vec<u8>,
+    mask : crate::foreign::ipp::ippi::IppiMaskSize,
+    norm : crate::foreign::ipp::ippi::IppNormType
+}
 
+impl IppFilterSobelHoriz {
+
+    pub fn new(sz : (usize, usize), mask_sz : usize) -> Self {
+        let mask = if mask_sz == 3 {
+            crate::foreign::ipp::ippi::_IppiMaskSize_ippMskSize3x3
+        } else {
+            crate::foreign::ipp::ippi::_IppiMaskSize_ippMskSize5x5
+        };
+        let num_channels = 1;
+        let norm = crate::foreign::ipp::ippi::IppNormType_ippNormL1;
+        unsafe {
+            let mut buf_sz = 0;
+            let ans = crate::foreign::ipp::ippi::ippiFilterSobelHorizBorderGetBufferSize(
+                sz.into(),
+                mask,
+                // norm,
+                crate::foreign::ipp::ippi::IppDataType_ipp8u,
+                crate::foreign::ipp::ippi::IppDataType_ipp16s,
+                num_channels,
+                &mut buf_sz
+            );
+            assert!(ans == 0);
+            let mut buf : Vec<u8> = (0..(buf_sz as usize)).map(|_| 0u8 ).collect();
+            Self { buf, mask, norm }
+        }
+    }
+
+    pub fn apply(
+        &mut self,
+        src : &Image<u8, impl Storage<u8>>,
+        dst : &mut Image<i16, impl StorageMut<i16>>
+    ) {
+        unsafe {
+            let border_val = 0;
+            let ans = crate::foreign::ipp::ippi::ippiFilterSobelHorizBorder_8u16s_C1R(
+                src.as_ptr(),
+                src.byte_stride() as i32,
+                dst.as_mut_ptr(),
+                dst.byte_stride() as i32,
+                src.size().into(),
+                self.mask,
+                // self.norm,
+                crate::foreign::ipp::ippi::_IppiBorderType_ippBorderConst,
+                border_val,
+                self.buf.as_mut_ptr()
+            );
+            assert!(ans == 0);
+        }
+    }
+
+}
+
+#[derive(Clone, Debug)]
+pub struct IppFilterSobelVert {
+    buf : Vec<u8>,
+    mask : crate::foreign::ipp::ippi::IppiMaskSize,
+    norm : crate::foreign::ipp::ippi::IppNormType
+}
+
+impl IppFilterSobelVert {
+
+    pub fn new(sz : (usize, usize), mask_sz : usize) -> Self {
+        let mask = if mask_sz == 3 {
+            crate::foreign::ipp::ippi::_IppiMaskSize_ippMskSize3x3
+        } else {
+            crate::foreign::ipp::ippi::_IppiMaskSize_ippMskSize5x5
+        };
+        let num_channels = 1;
+        let norm = crate::foreign::ipp::ippi::IppNormType_ippNormL1;
+        unsafe {
+            let mut buf_sz = 0;
+            let ans = crate::foreign::ipp::ippi::ippiFilterSobelVertBorderGetBufferSize(
+                sz.into(),
+                mask,
+                // norm,
+                crate::foreign::ipp::ippi::IppDataType_ipp8u,
+                crate::foreign::ipp::ippi::IppDataType_ipp16s,
+                num_channels,
+                &mut buf_sz
+            );
+            assert!(ans == 0);
+            let mut buf : Vec<u8> = (0..(buf_sz as usize)).map(|_| 0u8 ).collect();
+            Self { buf, mask, norm }
+        }
+    }
+
+    pub fn apply(
+        &mut self,
+        src : &Image<u8, impl Storage<u8>>,
+        dst : &mut Image<i16, impl StorageMut<i16>>
+    ) {
+        unsafe {
+            let border_val = 0;
+            let ans = crate::foreign::ipp::ippi::ippiFilterSobelVertBorder_8u16s_C1R(
+                src.as_ptr(),
+                src.byte_stride() as i32,
+                dst.as_mut_ptr(),
+                dst.byte_stride() as i32,
+                src.size().into(),
+                self.mask,
+                // self.norm,
+                crate::foreign::ipp::ippi::_IppiBorderType_ippBorderConst,
+                border_val,
+                self.buf.as_mut_ptr()
+            );
+            assert!(ans == 0);
+        }
+    }
+
+}
 
 
 

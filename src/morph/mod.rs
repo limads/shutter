@@ -656,6 +656,10 @@ pub struct IppiGrayMorph {
 #[cfg(feature="ipp")]
 impl IppiGrayMorph {
 
+    pub fn update_kernel(&mut self, new_kernel : &ImageRef<i32>) {
+        self.kernel.copy_from(&new_kernel);
+    }
+
     pub fn new(kernel : ImageBuf<i32>, img_sz : (usize, usize), is_dilate : bool) -> Self {
         assert!(kernel.height() % 2 == 1 && kernel.width() % 2 == 1);
         unsafe {

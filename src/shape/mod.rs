@@ -1717,8 +1717,8 @@ impl Region {
         (
             self.rows.start,
             self.cols.start,
-            self.rows.end.saturating_sub(self.rows.start).saturating_sub(1),
-            self.cols.end.saturating_sub(self.cols.start).saturating_sub(1)
+            self.rows.end.saturating_sub(self.rows.start),
+            self.cols.end.saturating_sub(self.cols.start)
         )
     }
 
@@ -3003,6 +3003,60 @@ pub fn centroid(ptsf : &[Vector2<f32>]) -> Vector2<f32> {
     center
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct MedianPoint {
+    pub median : Vector2<f32>,
+    pub niter : u32,
+    pub err :  f32
+}
+
+impl MedianPoint {
+
+    pub fn average_radius(&self, pts_f : &[Vector2<f32>]) -> f32 {
+        let mut rad = pts_f.iter().fold(0.0, |s, pt| s + pt.metric_distance(&self.median) );
+        rad /= pts_f.len() as f32;
+        rad
+    }
+
+    // Calculate the geometric median with the Weiszfeld algorithm.
+    // Iterates while dist(prev_median, curr_median) > tol.
+    // https://en.wikipedia.org/wiki/Geometric_median
+    pub fn calculate(pts : &[Vector2<f32>], tol : f32, maxiter : u32, guess : Option<Vector2<f32>>) -> Option<Self> {
+
+        // Start with the average as a first guess.
+        let mut median = if let Some(guess) = guess {
+            guess
+        } else {
+            let mut avg = pts.iter().fold(Vector2::new(0.0, 0.0), |s, pt| s + pt );
+            avg.scale_mut(1. / (pts.len() as f32));
+            avg
+        };
+
+        let mut niter = 0;
+        while niter <= maxiter {
+            let mut next_median = Vector2::new(0.0, 0.0);
+            let mut weight_sum = 0.0;
+            for pt in pts {
+                let mut diff_prev = pt - median;
+                let l1 = diff_prev.lp_norm(1).max(1.0e-20);
+                let weight = 1.0 / l1;
+                next_median += pt.scale(weight);
+                weight_sum += weight;
+            }
+            next_median.scale_mut(1.0 / weight_sum);
+            let err = median.metric_distance(&next_median);
+            if err <= tol {
+                println!("{}", niter);
+                return Some(MedianPoint { median : next_median, niter, err });
+            } else {
+                median = next_median;
+                niter += 1;
+            }
+        }
+        None
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CircleEstimator {
     centered_ptsf : Vec<Vector2<f32>>,
@@ -3020,6 +3074,22 @@ impl CircleEstimator {
         }
     }
 
+    // This doesn't really work because the algorihtm expects
+    // a mean estimate of the center. Using the median point
+    // overestimates the radius.
+    // Estimate with the median point as the center estimate.
+    // The median point minimizes the l1 norms of the points, therefore
+    // it is more robust to outliers, but requires an iterative
+    // method to be found, therefore it is more computationally demanding.
+    /*pub fn estimate_with_median(&mut self, ptsf : &[Vector2<f32>], tol : f32, max_iter : u32, guess : Option<Vector2<f32>>) -> Option<Circle> {
+        let m = MedianPoint::calculate(ptsf, tol, max_iter, guess)?;
+        self.estimate_with_centroid(ptsf, &m.median)
+    }*/
+
+    // Estimate with the centroid as the center estimate. The
+    // centroid minimizes the lenght of the projections along the
+    // x and y axes, making this method cheap but sensitive to
+    // outliers.
     pub fn estimate(&mut self, ptsf : &[Vector2<f32>]) -> Option<Circle> {
         let center = centroid(ptsf);
         self.estimate_with_centroid(ptsf, &center)

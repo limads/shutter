@@ -375,6 +375,15 @@ pub struct IppHistogram {
 #[cfg(feature="ipp")]
 impl IppHistogram {
 
+    pub fn min(&self) -> Option<u8> {
+        self.hist.iter().position(|c| *c > 0 ).map(|p| p as u8 )
+    }
+
+    pub fn max(&self) -> Option<u8> {
+        let p = self.hist.iter().rev().position(|c| *c > 0 ).map(|p| p as u8 )?;
+        (255u8).checked_sub(p)
+    }
+
     pub fn nonzero(&self) -> Vec<usize> {
         let mut nz = Vec::with_capacity(32);
         for i in 0..256 {
