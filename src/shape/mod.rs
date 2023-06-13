@@ -1708,8 +1708,8 @@ impl Region {
 
     pub fn from_offset_size(off : (usize, usize), sz : (usize, usize)) -> Self {
         Self {
-            cols : Range { start : off.1, end : off.1 + sz.1 + 1 },
-            rows : Range { start : off.0, end : off.0 + sz.0 + 1 }
+            cols : Range { start : off.1, end : off.1 + sz.1 },
+            rows : Range { start : off.0, end : off.0 + sz.0 }
         }
     }
 
