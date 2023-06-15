@@ -263,7 +263,7 @@ where
         let avg = A::from(sum_f / (self.area() as f32));
         Some(avg)
     }
-    
+
     #[cfg(feature="ipp")]
     pub fn masked_mean_stddev<T>(&self, mask : &Image<P, T>) -> (f32, f32)
     where
@@ -371,6 +371,20 @@ where
         s.pixels(1).fold(P::zero(), |s, p| s + *p )
     }
     
+}
+
+impl<S : Storage<u8>> Image<u8, S> {
+
+    #[cfg(feature="ipp")]
+    pub fn masked_geomean_stddev<T : Storage<u8>>(&self, mask : &Image<u8, T>) -> (f32, f32) {
+        let mut log = self.clone_owned();
+        let mut s_p_1 = self.clone_owned();
+        s_p_1.scalar_add_mut(1);
+        crate::scalar::ln_to(&s_p_1, &mut log);
+        let (m, std) = log.masked_mean_stddev(mask);
+        (m.exp(), std.exp())
+    }
+
 }
 
 /*pub fn dot_prod_to<N>(a : &Window<N>, b : &Window<u8>, dst : &mut WindowMut<N>)

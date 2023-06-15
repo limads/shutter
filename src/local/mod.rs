@@ -1522,50 +1522,6 @@ impl IppFilterSobelVert {
 
 }
 
-
-
-/*IppStatus ippiFilterBox_64f_C1R(const Ipp<datatype>* pSrc, int srcStep, Ipp<datatype>*
-pDst, int dstStep, IppiSize dstRoiSize, IppiSize maskSize, IppiPoint anchor );
-
-IppStatus ippiFilterSeparable_<mod>(const Ipp<datatype>* pSrc, int srcStep,
-Ipp<datatype>* pDst, int dstStep, IppiSize roiSize, IppiBorderType borderType,
-Ipp<datatype> borderValue, const IppiFilterSeparableSpec* pSpec, Ipp8u* pBuffer );
-
-IppStatus ippiConv_<mod>(const Ipp<datatype>* pSrc1, int src1Step, IppiSize src1Size,
-const Ipp<datatype>* pSrc2, int src2Step, IppiSize src2Size, Ipp<datatype>* pDst, int
-dstStep, int divisor, IppEnum algType, Ipp8u* pBuffer );
-
-IppStatus ippiDeconvFFT_32f_C1R(const Ipp32f* pSrc, int srcStep, Ipp32f* pDst, int
-dstStep, IppiSize roiSize, IppiDeconvFFTState_32f_C1R* pDeconvFFTState );
-
-IppStatus ippiDeconvFFT_32f_C3R(const Ipp32f* pSrc, int srcStep, Ipp32f* pDst, int
-dstStep, IppiSize roiSize, IppiDeconvFFTState_32f_C3R* pDeconvFFTState );
-
-IppStatus ippiFilterGaussian_<mod>(const Ipp<datatype>* pSrc, int srcStep,
-Ipp<datatype>* pDst, int dstStep, IppiSize roiSize, IppiBorderType borderType, const
-Ipp<datatype> borderValue[1], IppFilterGaussianSpec* pSpec, Ipp8u* pBuffer );
-
-// imgproc::blur
-// imgproc::median_blur
-// imgproc::sobel
-
-/* pub fn scharr(
-    src: &dyn ToInputArray,
-    dst: &mut dyn ToOutputArray,
-    ddepth: i32,
-    dx: i32,
-    dy: i32,
-    scale: f64,
-    delta: f64,
-    border_type: i32
-) -> Result<()>
-*/
-
-// TODO use crate edge_detection::canny(
-// TODO use image_conv::convolution(&img, filter, 1, PaddingType::UNIFORM(1)); with custom filters.
-// mss_saliency = "1.0.6" for salient portion extraction.
-*/
-
 // Separability of Kernels (Szelisky, p. 116, after Perona, 1995). If SVD of the 2d kernel matrix has only
 // the first singular value not zeroed, then the Kernel is separable into \sqrt \sigma_0 u_0 (vertical)
 // and \sqrt \sigma_0 v_0^T (horizontal) kernels.
@@ -1644,4 +1600,126 @@ impl IppFilterLaplace {
     }
 
 }
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Fraction {
+    Polyphase12,
+    Polyphase35,
+    Polyphase23,
+    Polyphase710,
+    Polyphase34
+}
+
+#[cfg(feature="ipp")]
+unsafe fn decimate_filter<S, T>(
+    src : &Image<u8, S>,
+    dst : &mut Image<u8, T>,
+    fr : Fraction,
+    byrow : bool
+) where
+    S : Storage<u8>,
+    T : StorageMut<u8>
+{
+    let inner = src.window((4, 4), (src.height()-4, src.width()-4)).unwrap();
+    let frac = match fr {
+        Fraction::Polyphase12 => crate::foreign::ipp::ippi::IppiFraction_ippPolyphase_1_2,
+        Fraction::Polyphase35 => crate::foreign::ipp::ippi::IppiFraction_ippPolyphase_1_2,
+        Fraction::Polyphase23 => crate::foreign::ipp::ippi::IppiFraction_ippPolyphase_1_2,
+        Fraction::Polyphase710 => crate::foreign::ipp::ippi::IppiFraction_ippPolyphase_1_2,
+        Fraction::Polyphase34 => crate::foreign::ipp::ippi::IppiFraction_ippPolyphase_1_2
+    };
+    let (dst_len, src_len) = match fr {
+        Fraction::Polyphase12 => (1, 2),
+        Fraction::Polyphase35 => (3, 5),
+        Fraction::Polyphase23 => (2, 3),
+        Fraction::Polyphase710 => (7, 10),
+        Fraction::Polyphase34 => (3, 4)
+    };
+    let ans = if byrow {
+        assert!(inner.height() % src_len == 0);
+        assert!(dst.height() % dst_len == 0);
+        assert!(dst.height() % inner.height() == 0);
+        crate::foreign::ipp::ippi::ippiDecimateFilterRow_8u_C1R(
+            inner.as_ptr(),
+            src.byte_stride() as i32,
+            src.size().into(),
+            dst.as_mut_ptr(),
+            dst.byte_stride() as i32,
+            frac
+        )
+    } else {
+        assert!(inner.width() % src_len == 0);
+        assert!(dst.width() % dst_len == 0);
+        assert!(dst.width() % inner.width() == 0);
+        crate::foreign::ipp::ippi::ippiDecimateFilterColumn_8u_C1R(
+            src.as_ptr(),
+            src.byte_stride() as i32,
+            src.size().into(),
+            dst.as_mut_ptr(),
+            dst.byte_stride() as i32,
+            frac
+        )
+    };
+    assert!(ans == 0);
+}
+
+/* Wiener (noise-removal, edge-preserving) filter. The power
+is assumed to be constant power and additive. */
+#[cfg(feature="ipp")]
+pub struct IppWiener {
+    buf : Vec<u8>,
+    sz : (usize, usize),
+    mask_sz : (usize, usize),
+    noise : f32
+}
+
+#[cfg(feature="ipp")]
+impl IppWiener {
+
+    pub fn new(height : usize, width : usize, mask_sz : (usize, usize), noise : f32) -> Self {
+        assert!(noise >= 0.0 && noise <= 1.0);
+        let sz = (height, width);
+        let n_channels = 1;
+        let mut buf_sz : i32 = 0;
+        unsafe {
+            let ans = crate::foreign::ipp::ippi::ippiFilterWienerGetBufferSize(
+                sz.into(),
+                mask_sz.into(),
+                n_channels,
+                &mut buf_sz as *mut _
+            );
+            assert!(ans == 0);
+            let mut buf : Vec<_> = (0..(buf_sz as usize)).map(|_| 0u8 ).collect();
+            Self {
+                buf,
+                sz,
+                mask_sz,
+                noise
+            }
+        }
+    }
+
+    pub fn apply<S, T>(&mut self, src : &Image<u8, S>, dst : &mut Image<u8, T>)
+    where
+        S : Storage<u8>,
+        T : StorageMut<u8>
+    {
+        let anchor = crate::foreign::ipp::ippi::IppiPoint { x : 0, y : 0 };
+        unsafe {
+            let ans = crate::foreign::ipp::ippi::ippiFilterWiener_8u_C1R(
+                src.as_ptr(),
+                src.byte_stride() as i32,
+                dst.as_mut_ptr(),
+                dst.byte_stride() as i32,
+                dst.size().into(),
+                self.mask_sz.into(),
+                anchor,
+                &mut self.noise as *mut _,
+                self.buf.as_mut_ptr()
+            );
+            assert!(ans == 0);
+        }
+    }
+}
+
 

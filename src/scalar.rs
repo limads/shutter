@@ -729,17 +729,86 @@ where
     }
 }*/
 
-/*IppStatus ippiSqr_<mod> ( const Ipp<datatype>* pSrc , int srcStep , Ipp<datatype>* pDst ,
-    int dstStep , IppiSize roiSize , int scaleFactor );
+#[cfg(feature="ipp")]
+pub fn square_to<S, T>(src : &Image<u8, S>, dst : &mut Image<u8, T>)
+where
+    S : Storage<u8>,
+    T : StorageMut<u8>
+{
+    let scale_factor = 1;
+    unsafe {
+        let status = crate::foreign::ipp::ippi::ippiSqr_8u_C1RSfs(
+            src.as_ptr(),
+            src.byte_stride() as i32,
+            dst.as_mut_ptr(),
+            dst.byte_stride() as i32,
+            src.size().into(),
+            scale_factor
+        );
+        assert!(status == 0);
+    }
+}
 
-IppStatus ippiSqrt_<mod> ( const Ipp<datatype>* pSrc , int srcStep , Ipp<datatype>* pDst ,
-int dstStep , IppiSize roiSize , int scaleFactor );
+#[cfg(feature="ipp")]
+pub fn sqrt_to<S, T>(src : &Image<u8, S>, dst : &mut Image<u8, T>)
+where
+    S : Storage<u8>,
+    T : StorageMut<u8>
+{
+    let scale_factor = 1;
+    unsafe {
+        let status = crate::foreign::ipp::ippi::ippiSqrt_8u_C1RSfs(
+            src.as_ptr(),
+            src.byte_stride() as i32,
+            dst.as_mut_ptr(),
+            dst.byte_stride() as i32,
+            src.size().into(),
+            scale_factor
+        );
+        assert!(status == 0);
+    }
+}
 
-IppStatus ippiLn_<mod> ( const Ipp<datatype>* pSrc , int srcStep , Ipp<datatype>* pDst , int
-dstStep , IppiSize roiSize , int scaleFactor );
+// Important! Image cannot contain zero values (call scalar_add(1) first)
+#[cfg(feature="ipp")]
+pub fn ln_to<S, T>(src : &Image<u8, S>, dst : &mut Image<u8, T>)
+where
+    S : Storage<u8>,
+    T : StorageMut<u8>
+{
+    let scale_factor = 1;
+    unsafe {
+        let status = crate::foreign::ipp::ippi::ippiLn_8u_C1RSfs(
+            src.as_ptr(),
+            src.byte_stride() as i32,
+            dst.as_mut_ptr(),
+            dst.byte_stride() as i32,
+            src.size().into(),
+            scale_factor
+        );
+        assert!(status == 0);
+    }
+}
 
-IppStatus ippiExp_<mod> ( const Ipp<datatype>* pSrc , int srcStep , Ipp<datatype>* pDst ,
-int dstStep , IppiSize roiSize , int scaleFactor );*/
+#[cfg(feature="ipp")]
+pub fn exp_to<S, T>(src : &Image<u8, S>, dst : &mut Image<u8, T>)
+where
+    S : Storage<u8>,
+    T : StorageMut<u8>
+{
+    let scale_factor = 1;
+    unsafe {
+        let status = crate::foreign::ipp::ippi::ippiExp_8u_C1RSfs(
+            src.as_ptr(),
+            src.byte_stride() as i32,
+            dst.as_mut_ptr(),
+            dst.byte_stride() as i32,
+            src.size().into(),
+            scale_factor
+        );
+        assert!(status == 0);
+    }
+}
 
 /*/// Stretch the image profile such that the gray levels make the best use of the dynamic range.
 /// (Myler & Weeks, 1993). gray_max and gray_min are min and max intensities at the current image.

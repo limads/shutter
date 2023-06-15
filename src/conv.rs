@@ -1030,32 +1030,58 @@ where
 
 }
 
-/*
+#[cfg(feature="ipp")]
+#[derive(Clone, Debug)]
+pub struct IppDeconv {
+    state : Vec<u8>,
+    kernel : ImageBuf<f32>
+}
 
-IppStatus ippiFilterBilateralInit(IppiFilterBilateralType filter, IppiSize dstRoiSize,
-int kernelWidthHeight, IppDataType dataType, int numChannels, IppiDistanceMethodType
-distMethod, Ipp64f valSquareSigma, Ipp64f posSquareSigma, IppiFilterBilateralSpec*
-pSpec);
+#[cfg(feature="ipp")]
+impl IppDeconv {
 
-IppStatus ippiFilterBilateralBorderInit(IppiFilterBilateralType filter, IppiSize
-dstRoiSize, int radius, IppDataType dataType, int numChannels, IppiDistanceMethodType
-distMethod, Ipp32f valSquareSigma, Ipp32f posSquareSigma, IppiFilterBilateralSpec*
-pSpec);
+    pub fn new(kernel : ImageBuf<f32>, threshold : f32) -> Self {
+        let n_channels = 1;
+        let fft_order = 1;
+        let mut sz : i32 = 0;
+        let kernel_sz = kernel.height() as i32;
+        unsafe {
+            let ans = crate::foreign::ipp::ippi::ippiDeconvFFTGetSize_32f(
+                n_channels,
+                kernel_sz,
+                fft_order,
+                &mut sz
+            );
+            assert!(ans == 0);
+            let mut state : Vec<_> = (0..(sz as usize)).map(|_| 0 ).collect();
+            let ans = crate::foreign::ipp::ippi::ippiDeconvFFTInit_32f_C1R(
+                std::mem::transmute(state.as_ptr()),
+                kernel.as_ptr(),
+                kernel_sz,
+                fft_order,
+                threshold
+            );
+            assert!(ans == 0);
+            Self { state, kernel }
+        }
+    }
 
-ippiFilterBilateralBorder_<mod>(const
+    pub fn apply<S, T>(&mut self, src : &Image<f32, S>, dst : &mut Image<f32, T>)
+    where
+        S : Storage<f32>,
+        T : StorageMut<f32>
+    {
+        unsafe {
+            let ans = crate::foreign::ipp::ippi::ippiDeconvFFT_32f_C1R(
+                src.as_ptr(),
+                src.byte_stride() as i32,
+                dst.as_mut_ptr(),
+                dst.byte_stride() as i32,
+                src.size().into(),
+                std::mem::transmute(self.state.as_mut_ptr())
+            );
+            assert!(ans == 0);
+        }
+    }
 
-IppStatus ippiFilterBoxBorder_<mod>(const Ipp<datatype>* pSrc, int srcStep,
-Ipp<datatype>* pDst, int dstStep, IppiSize roiSize, IppiSize maskSize, IppiBorderType
-border, const Ipp<datatype>* borderValue, Ipp8u* pBuffer);
-
-IppStatus ippiFilterGaussianBorder_<mod>(const Ipp<datatype>* pSrc, int srcStep,
-Ipp<datatype>* pDst, int dstStep, IppiSize roiSize, Ipp<datatype> borderValue,
-IppFilterGaussianSpec* pSpec, Ipp8u* pBuffer);
-
-IppStatus ippiDecimateFilterRow_8u_C1R(const Ipp8u* pSrc, int srcStep, IppiSize
-srcRoiSize, Ipp8u* pDst, int dstStep, IppiFraction fraction);
-
-IppStatus ippiDecimateFilterColumn_8u_C1R(const Ipp8u* pSrc, int srcStep, IppiSize
-srcRoiSize, Ipp8u* pDst, int dstStep, IppiFraction fraction);
-
-*/
+}

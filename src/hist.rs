@@ -871,6 +871,42 @@ fn find_modes() {
     //println!("{:?}", hist.modes(2, 2));
 }
 
+#[cfg(feature="ipp")]
+#[derive(Debug, Clone)]
+pub struct MaskedHistogram {
+    masked : ImageBuf<u8>,
+    pub hist : IppHistogram
+}
 
+impl MaskedHistogram {
 
+    pub fn calculate<S, T>(img : &Image<u8, S>, mask : &Image<u8, T>) -> Self
+    where
+        S : Storage<u8>,
+        T : Storage<u8>
+    {
+        let mut h = Self::new(img.height(), img.width());
+        h.update(img, mask);
+        h
+    }
 
+    pub fn new(height : usize, width : usize) -> Self {
+        Self {
+            hist : IppHistogram::new(height, width),
+            masked : ImageBuf::<u8>::new_constant(height, width, 0)
+        }
+    }
+
+    pub fn update<S, T>(&mut self, img : &Image<u8, S>, mask : &Image<u8, T>)
+    where
+        S : Storage<u8>,
+        T : Storage<u8>
+    {
+        img.and_to(&mask, &mut self.masked);
+        self.hist.update(&self.masked);
+        let mask_mass = (mask.sum::<f32>(1) / 255.0) as u32;
+        self.hist.sum = mask_mass;
+        self.hist.hist[0] = self.hist.hist[0].saturating_sub(mask_mass);
+    }
+
+}

@@ -2037,26 +2037,6 @@ impl IppiSAD {
 
 // Histogram stretching/equalization.
 
-// Important! Image cannot contain zero values (call scalar_add(1) first)
-pub fn log_to<S, T>(src : &Image<u8, S>, dst : &mut Image<u8, T>)
-where
-    S : Storage<u8>,
-    T : StorageMut<u8>
-{
-    let scale_factor = 1;
-    unsafe {
-        let status = crate::foreign::ipp::ippi::ippiLn_8u_C1RSfs(
-            src.as_ptr(),
-            src.byte_stride() as i32,
-            dst.as_mut_ptr(),
-            dst.byte_stride() as i32,
-            src.size().into(),
-            scale_factor
-        );
-        assert!(status == 0);
-    }
-}
-
 // Moeslund (2012)
 pub fn enhance_range() {
     // Maps range [low-high] to the whole integer domain of the image.
