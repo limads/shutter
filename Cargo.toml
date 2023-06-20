@@ -31,6 +31,7 @@ wide = "0.7.5"
 rhai = { version = "1.12" }
 tuples = "1.6.0"
 either="1.0"
+statrs="0.16.0"
 # gstreamer-app = { version = "0.17.0" }
 # rustdct = "0.7.0"
 # rustfft = "0.7.0"

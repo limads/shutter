@@ -2021,9 +2021,9 @@ impl From<Edge> for Polygon {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct Triangle([(usize, usize); 3]);
+pub struct TriangleCoords([(usize, usize); 3]);
 
-impl Triangle {
+impl TriangleCoords {
 
     pub fn lines(&self) -> [Line; 3] {
         let l1 = Line::from([self.0[0], self.0[1]]);
@@ -2033,12 +2033,12 @@ impl Triangle {
     }
 
     /// Splits this triangle into two right triangles
-    pub fn split_to_right(&self) -> (Triangle, Triangle) {
+    pub fn split_to_right(&self) -> (TriangleCoords, TriangleCoords) {
         let base = self.base();
         let perp = perp_line(&self, &base);
         let (b1, b2) = base.points();
         let (perp_pt, top) = perp.points();
-        (Triangle([b1, top, perp_pt]), Triangle([b2, top, perp_pt]))
+        (TriangleCoords([b1, top, perp_pt]), TriangleCoords([b2, top, perp_pt]))
     }
 
     // Gets the triangle "base" (largest line)
@@ -2076,7 +2076,7 @@ impl Triangle {
 
 }
 
-fn perp_line(tri : &Triangle, base : &Line) -> Line {
+fn perp_line(tri : &TriangleCoords, base : &Line) -> Line {
     let (b1, b2) = base.points();
     let top = tri.0.iter().find(|pt| **pt != b1 && **pt != b2 ).unwrap();
     base.perpendicular(*top)
@@ -2088,12 +2088,12 @@ impl Polygon {
         self.triangles().iter().fold(0.0, |area, tri| area + tri.area() )
     }
 
-    pub fn triangles<'a>(&'a self) -> Vec<Triangle> {
+    pub fn triangles<'a>(&'a self) -> Vec<TriangleCoords> {
         let n = self.0.len();
         let last = self.0.last().unwrap().clone();
         let mut triangles = Vec::new();
         for (a, b) in self.0.iter().take(n-1).zip(self.0.iter().skip(1)) {
-            triangles.push(Triangle([*a, *b, last]));
+            triangles.push(TriangleCoords([*a, *b, last]));
         }
         triangles
     }
@@ -3003,11 +3003,242 @@ pub fn centroid(ptsf : &[Vector2<f32>]) -> Vector2<f32> {
     center
 }
 
+/* A triangle represents as a triplet of vertices. No
+spatial relationship between the vertices is specified,
+except that they must not be all collinear. */
+pub struct Triangle {
+    pub v1 : Vector2<f32>,
+    pub v2 : Vector2<f32>,
+    pub v3 : Vector2<f32>,
+}
+
+const SQRT_3 : f32 = 1.732050808;
+
+fn height_equilateral(edge : f32) -> f32 {
+    (SQRT_3 * edge) / 2.
+}
+
+impl Triangle {
+
+    pub fn edges(&self) -> [f32; 3] {
+        [
+            self.v1.metric_distance(&self.v2),
+            self.v2.metric_distance(&self.v3),
+            self.v3.metric_distance(&self.v1),
+        ]
+    }
+
+    pub fn edge_midpoints(&self) -> [Vector2<f32>; 3] {
+        [
+            self.v1.scale(0.5) + self.v2.scale(0.5),
+            self.v2.scale(0.5) + self.v3.scale(0.5),
+            self.v3.scale(0.5) + self.v1.scale(0.5)
+        ]
+    }
+
+    // Finds the Fermat-Torricelli point for a triangle.
+    // https://en.wikipedia.org/wiki/Fermat_point
+    pub fn median_point(&self) -> Vector2<f32> {
+        let [e1, e2, _] = self.edges();
+        let [m12, m23, _] = self.edge_midpoints();
+        unimplemented!()
+    }
+
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct MedianPoint {
     pub median : Vector2<f32>,
     pub niter : u32,
     pub err :  f32
+}
+
+fn guess_or_avg(pts : &[Vector2<f32>], guess : Option<Vector2<f32>>) -> Vector2<f32> {
+    if let Some(guess) = guess {
+        guess
+    } else {
+        let mut avg = pts.iter().fold(Vector2::new(0.0, 0.0), |s, pt| s + pt );
+        avg.scale_mut(1. / (pts.len() as f32));
+        avg
+    }
+}
+
+// This is f(x) at Cohen's paper.
+fn sum_euclid(pts : &[Vector2<f32>], center : &Vector2<f32>) -> f32 {
+    pts.iter().fold(0., |s, pt| s + pt.metric_distance(center) )
+}
+
+mod acc_median {
+
+    use super::*;
+    use nalgebra::Matrix2;
+
+    // gt(x)
+    fn penalty(pt : &Vector2<f32>, center : &Vector2<f32>, t : f32) -> f32 {
+        (1.0 + t.powf(2.)*(center - pt).norm_squared()).sqrt()
+    }
+
+    // This is f_t(x) at Cohen's paper.
+    fn penalized_euclidian_dist(pts : &[Vector2<f32>], center : &Vector2<f32>, t : f32) -> f32 {
+        pts.iter().fold(0., |s, pt| {
+            let t_sq = t.powf(2.);
+            let m = (center - pt).norm_squared();
+            let gt = (1.0 + t_sq*m).sqrt();
+            s + gt - (1. + gt).ln()
+        })
+    }
+
+    pub fn path_param_update(f_star : f32, i : usize) -> f32 {
+        (1. / (400. * f_star)) * (1. + 1. / 600.).powf(i as f32 - 1.0)
+    }
+
+    // Return the eigenvector to the largest eigenvalue of PSD matrix A.
+    fn power_method(a : &Matrix2<f32>, niter : usize) -> Vector2<f32> {
+        use rand::distributions::Distribution;
+        let mut n = statrs::distribution::Normal::new(0., 1.0).unwrap();
+        let mut rng = rand::thread_rng();
+        let mut y = Vector2::new(n.sample(&mut rng) as f32, n.sample(&mut rng) as f32);
+        for i in 0..niter {
+            let y_unorm = a.pow(i as u32) * &y;
+            y = y_unorm.normalize();
+        }
+        y
+    }
+
+    // Contribution of point to the hessian.
+    fn weight(pts : &[Vector2<f32>], center : &Vector2<f32>, t : f32) -> f32 {
+        pts.iter().fold(0.0, |s, pt| s + (1.0 / (1.0 + penalty(pt, center, t))) )
+    }
+
+    // Lemma 13 of Cohen's paper
+    fn path_gradient(pts : &[Vector2<f32>], x : &Vector2<f32>, t : f32) -> Vector2<f32> {
+        let t_sq = t.powf(2.);
+        pts.iter().fold(Vector2::new(0.0, 0.0), |grad, pt| {
+            grad + (x - pt).scale(t_sq / (1. + penalty(pt, x, t)))
+        })
+    }
+
+    // Lemma 13 of Cohen's paper
+    fn path_hessian(pts : &[Vector2<f32>], x : &Vector2<f32>, t : f32) -> Matrix2<f32> {
+        let t_sq = t.powf(2.);
+        pts.iter().fold(Matrix2::zeros(), |hess, pt| {
+            let d = x.clone() - pt;
+            let pen = penalty(pt, x, t);
+            let scale_out = t_sq / (1. + pen);
+            let scale_in = t_sq / (pen * (1. + pen));
+            hess + (Matrix2::identity() - (d * d.transpose()).scale(scale_in)).scale(scale_out)
+        })
+    }
+
+    // This is alg. 3 of Cohen (2016)
+    // lambda, v are returned by approx_min_eigen
+    fn local_center(
+        pts : &[Vector2<f32>],
+        y : &Vector2<f32>,
+        t : f32,
+        eps : f32,
+    ) -> Vector2<f32> {
+        // TODO use x here instead of y?
+        let (lambda, v) = approx_min_eigen(pts, y, t, eps);
+        let wq = weight(pts, y, t);
+        let weighted_id = Matrix2::identity().scale(wq);
+        let t_sq = (t as f32).powf(2.);
+        let q = t_sq * weighted_id - (v * v.transpose()).scale(t_sq * wq - lambda);
+        let mut x_i = y.clone();
+
+        for i in 1..=((64.0 * (1.0 / eps).ln()) as usize) {
+            let delta_prev = y.clone() - x_i;
+
+            // The last term  ||x(i) - x(i-1)||_Q^2 is simply (x(i) - x(i-1))^T Q (x(i) - x(i-1))
+            // (since the norm under q is the square root of the Q quadratic form, i.e. a Q-induced norm)
+            let norm_q = ((delta_prev.transpose() * &q) * &delta_prev);
+            let grad = path_gradient(pts, &x_i, t);
+            // x_i = min(sum_euclid(pts, x_i)) + grad.dot(&delta_prev) + 4.0*norm_q;
+        }
+
+        x_i
+    }
+
+    // This is alg. 4 of Cohen (2016)
+    // u : eigenvec of approx_min_eigen (bad direction)
+    pub fn line_search(
+        pts : &[Vector2<f32>],
+        f_star : f32,
+        y : &Vector2<f32>,
+        t : f32,
+        t_next : f32,
+        u : &Vector2<f32>,
+        eps : f32
+    ) -> Vector2<f32> {
+        let eps_star = (1.0 / 3.0)*eps;
+        let lower = -6.0*f_star;
+        let upper = 6.0*f_star;
+        let n = pts.len() as f32;
+        let e_zero = ((eps*eps_star) / (160. * n.powf(2.))).powf(2.);
+
+        /* TODO local_center takes evals/evecs of iteration t, NOT iteration t_next */
+
+        // q is the oracle function.
+        let q = Box::new(|alpha : f32| -> f32 {
+            let lc = local_center(pts, &(y.clone() + u.scale(alpha)), t_next, e_zero);
+            penalized_euclidian_dist(pts, &lc, t_next)
+        });
+
+        let alpha_next = one_dim_minimizer(q,lower,upper,e_zero,t_next*(pts.len() as f32));
+
+        // TODO original paper uses alpha here (not alpha_next)
+        local_center(pts, &(y.clone() + u.scale(alpha_next)), t_next, e_zero)
+    }
+
+    // (l, u) is an interval in the real line
+    // eps is a target error.
+    fn one_dim_minimizer<G : Fn(f32)->f32>(
+        g : G,
+        l : f32,
+        u : f32,
+        eps : f32,
+        lipschitz_bound : f32
+    ) -> f32 {
+        let max_iter = ((lipschitz_bound*(u - l))/eps).log(3.0/2.0).ceil() as usize;
+        let mut x_i = l;
+        let mut yl_i = l;
+        let mut yu_i = u;
+        for i in 1..=max_iter {
+            let zl_i = (2.0*yl_i + yu_i) / 3.0;
+            let zu_i = (yl_i + 2.0*yu_i) / 3.0;
+            if g(zl_i) <= g(zu_i) {
+                yu_i = zu_i;
+                if g(zl_i) <= g(x_i) {
+                    x_i = zl_i;
+                }
+            } else {
+                yl_i = zl_i;
+                if g(zu_i) <= g(x_i) {
+                    x_i = zu_i;
+                }
+            }
+        }
+        x_i
+    }
+
+    // This is alg. 2 of Cohen (2016)
+    // Return (eigenval, eigenvec pair)
+    pub fn approx_min_eigen(pts : &[Vector2<f32>], median : &Vector2<f32>, t : f32, eps : f32) -> (f32, Vector2<f32>) {
+        let mut a = Matrix2::zeros();
+        for pt in pts {
+            let d = median - pt;
+            let pen = penalty(pt, median, t);
+            let mut sq : Matrix2<f32> = (d * &d.transpose());
+            let s = t.powf(4.) / ((1. + pen).powf(2.) * pen);
+            sq.scale_mut(s);
+            a += sq;
+        }
+        let niter = (pts.len() as f32 / eps).ln() as usize;
+        let u = power_method(&a, niter);
+        let lambda = (u.transpose() * path_hessian(pts, median, t) * u)[0];
+        (lambda, u)
+    }
+
 }
 
 impl MedianPoint {
@@ -3018,19 +3249,81 @@ impl MedianPoint {
         rad
     }
 
+    // Implementation of the accurate median algorithm of  Cohen, Lee & Miller
+    // Cohen, M. B., Lee, Y. T., Miller, G., Pachocki, J., & Sidford, A. (2016, June).
+    // Geometric median in nearly linear time. In Proceedings of the forty-eighth annual ACM symposium
+    // on Theory of Computing (pp. 9-21).
+    /*
+    From the paper (p.4) Let x_t for t increasing during the optimization be
+    // the central path.
+    lim t->inf x_t = x* (where x* is the solution). For any t, rapid
+    changes in xt must occur in the direction of the smallest eigenvector
+    of the hessian of the penalized objective f_t(x). This direction is
+    v_t, the bad direction. Starting at x_t, there is a point y obtained
+    by moving x_t in the bad direction, such that y and x_t' are close
+    enough so that a first order optimization can be applied to converge
+    to x_t'. Then increase t by a multiplicative constant so that the
+    algorithm converge in logarithmic time of log(n/eps) (number of points
+    divided by desired accuracy). The algorithm applies a linear search
+    along the bad path to find the next point on the central path.
+
+    The region ||x-y||_2 is bounded by O(1/t) (decrease with t), so
+    the line search is limited to a convex function g found approximately
+    by a centering procedure, that can be operated on using binary search.
+
+    This is alg. 1 of Cohen (2016)
+    */
+    pub fn calculate_accurate(
+        &self,
+        pts : &[Vector2<f32>],
+        eps : f32,
+        weights : Option<&[f32]>,
+        guess : Option<Vector2<f32>>
+    ) -> Option<Vector2<f32>> {
+        assert!(eps > 0. && eps <= 1.0);
+        let n = pts.len() as f32;
+        let mut median = guess_or_avg(pts, guess);
+        let f_star = sum_euclid(pts, &median);
+
+        // Path parameter to penalized weight
+
+        let eps_star = (1.0 / 3.0)*eps;
+        let t_star = (2.0*n) / (eps_star * f_star);
+        let e_v = (1.0/8.0)*(eps_star / (7.0*n)).powf(2.);
+        let e_c = (e_v / 36.0).powf(3.0/2.0);
+
+        let mut i = 1;
+        let mut t_i = acc_median::path_param_update(f_star, i);
+        median = acc_median::line_search(pts, f_star, &median, t_i, t_i, &Vector2::zeros(), e_c);
+        while t_i <= t_star {
+            t_i = acc_median::path_param_update(f_star, i);
+            let t_i_next = acc_median::path_param_update(f_star, i+1);
+
+            // u_i is an approximation to the bad direction.
+            let (lambda_i, u_i) = acc_median::approx_min_eigen(pts, &median, t_i, e_v);
+
+            median = acc_median::line_search(
+                pts,
+                f_star,
+                &median,
+                t_i,
+                t_i_next,
+                &u_i,
+                e_c
+            );
+            t_i = t_i_next;
+            i += 1;
+        }
+        Some(median)
+    }
+
     // Calculate the geometric median with the Weiszfeld algorithm.
     // Iterates while dist(prev_median, curr_median) > tol.
     // https://en.wikipedia.org/wiki/Geometric_median
     pub fn calculate(pts : &[Vector2<f32>], tol : f32, maxiter : u32, guess : Option<Vector2<f32>>) -> Option<Self> {
 
         // Start with the average as a first guess.
-        let mut median = if let Some(guess) = guess {
-            guess
-        } else {
-            let mut avg = pts.iter().fold(Vector2::new(0.0, 0.0), |s, pt| s + pt );
-            avg.scale_mut(1. / (pts.len() as f32));
-            avg
-        };
+        let mut median = guess_or_avg(pts, guess);
 
         let mut niter = 0;
         while niter <= maxiter {
