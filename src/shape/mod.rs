@@ -3153,6 +3153,8 @@ mod acc_median {
             // (since the norm under q is the square root of the Q quadratic form, i.e. a Q-induced norm)
             let norm_q = ((delta_prev.transpose() * &q) * &delta_prev);
             let grad = path_gradient(pts, &x_i, t);
+
+            // by Lemma 23 we have that the minimizer has value ft0 (xt0 ) and is achieved in the range [ 6f˜⇤ , 6f˜⇤ ].
             // x_i = min(sum_euclid(pts, x_i)) + grad.dot(&delta_prev) + 4.0*norm_q;
         }
 
@@ -3184,6 +3186,7 @@ mod acc_median {
             penalized_euclidian_dist(pts, &lc, t_next)
         });
 
+        /* Line search over g(alpha), a convex function, using a binary search */
         let alpha_next = one_dim_minimizer(q,lower,upper,e_zero,t_next*(pts.len() as f32));
 
         // TODO original paper uses alpha here (not alpha_next)
@@ -3192,6 +3195,10 @@ mod acc_median {
 
     // (l, u) is an interval in the real line
     // eps is a target error.
+    // This is a binary search over the line along the
+    // eigenvector with the smallest eigenvale (the "bad" direction,
+    // that is steep therefore making x vary the most.). The argmin (alpha)
+    // is a scale factor applied to the eigenvector (https://en.wikipedia.org/wiki/Line_search)
     fn one_dim_minimizer<G : Fn(f32)->f32>(
         g : G,
         l : f32,
@@ -3239,6 +3246,38 @@ mod acc_median {
         (lambda, u)
     }
 
+}
+
+fn update_median_point(
+    pt : &Vector2<f32>,
+    median : &Vector2<f32>,
+    w : f32,
+    next_median : &mut Vector2<f32>,
+    weight_sum : &mut f32
+) {
+    let mut diff_prev = pt - median;
+    let l1 = diff_prev.lp_norm(1).max(1.0e-20);
+    let weight = w / l1;
+    *next_median += pt.scale(weight);
+    *weight_sum += weight;
+}
+
+fn check_median_step(
+    median : &mut Vector2<f32>,
+    next_median : &mut Vector2<f32>,
+    niter : &mut u32,
+    weight_sum : f32,
+    tol : f32
+) -> Option<MedianPoint> {
+    next_median.scale_mut(1.0 / weight_sum);
+    let err = median.metric_distance(&next_median);
+    if err <= tol {
+        Some(MedianPoint { median : next_median.clone(), niter : *niter, err })
+    } else {
+        *median = *next_median;
+        *niter += 1;
+        None
+    }
 }
 
 impl MedianPoint {
@@ -3317,6 +3356,35 @@ impl MedianPoint {
         Some(median)
     }
 
+    // Weighted Weiszfeld algorithm.
+    // The weighted generalization is presented at
+    // Beck & Sabach (2015) Weisfeld's Method: Old and
+    // new results (p. 5).
+    pub fn calculate_weighted(
+        pts : &[Vector2<f32>],
+        weights : &[f32],
+        tol : f32,
+        maxiter : u32,
+        guess : Option<Vector2<f32>>
+    ) -> Option<Self> {
+
+        // Start with the average as a first guess.
+        let mut median = guess_or_avg(pts, guess);
+
+        let mut niter = 0;
+        while niter <= maxiter {
+            let mut next_median = Vector2::new(0.0, 0.0);
+            let mut weight_sum = 0.0;
+            for (pt,w) in pts.iter().zip(weights.iter()) {
+                update_median_point(pt, &median, *w, &mut next_median, &mut weight_sum);
+            }
+            if let Some(ans) = check_median_step(&mut median, &mut next_median, &mut niter, weight_sum,tol) {
+                return Some(ans);
+            }
+        }
+        None
+    }
+
     // Calculate the geometric median with the Weiszfeld algorithm.
     // Iterates while dist(prev_median, curr_median) > tol.
     // https://en.wikipedia.org/wiki/Geometric_median
@@ -3330,20 +3398,10 @@ impl MedianPoint {
             let mut next_median = Vector2::new(0.0, 0.0);
             let mut weight_sum = 0.0;
             for pt in pts {
-                let mut diff_prev = pt - median;
-                let l1 = diff_prev.lp_norm(1).max(1.0e-20);
-                let weight = 1.0 / l1;
-                next_median += pt.scale(weight);
-                weight_sum += weight;
+                update_median_point(pt, &median, 1.0, &mut next_median, &mut weight_sum);
             }
-            next_median.scale_mut(1.0 / weight_sum);
-            let err = median.metric_distance(&next_median);
-            if err <= tol {
-                println!("{}", niter);
-                return Some(MedianPoint { median : next_median, niter, err });
-            } else {
-                median = next_median;
-                niter += 1;
+            if let Some(ans) = check_median_step(&mut median, &mut next_median, &mut niter, weight_sum,tol) {
+                return Some(ans);
             }
         }
         None

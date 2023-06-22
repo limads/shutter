@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use petgraph::unionfind::UnionFind;
 use std::cmp::{PartialEq, Eq};
 use smallvec::SmallVec;
+use crate::shape::Region;
 
 #[cfg(feature="ipp")]
 fn ipp_integral(win : &Window<u8>, dst : &mut WindowMut<i32>) {
@@ -45,8 +46,29 @@ where
 
 impl<T> Integral<T>
 where
-    T : Pixel + Scalar + Clone + Copy + Any + Zero + From<u8> + Default + std::ops::AddAssign
+    T : Pixel + Scalar + Clone + Copy + Any + Zero + From<u8> + Default + std::ops::AddAssign +
+    std::ops::Sub<Output=T>
 {
+
+    /* Gives the unnormalized contrast of two regions (difference of their sum),
+    when inner is nested within outer. Returns None if inner is not nested in
+    outer. */
+    pub fn contrast_nested(&self, inner : &Region, outer : &Region) -> Option<T> {
+        if inner.rows.start >= outer.rows.start &&
+            inner.rows.end <= outer.rows.end &&
+            inner.cols.start >= outer.cols.start &&
+            inner.cols.end <= outer.cols.end
+        {
+            Some(self.sum_region(outer)? - self.sum_region(inner)?)
+        } else {
+            None
+        }
+    }
+
+    pub fn sum_region(&self, r1 : &Region) -> Option<T> {
+        Some(rect_area(&self.0.region(r1)?))
+    }
+
 
     pub fn new_constant(height : usize, width : usize, val : T) -> Self {
         Integral(ImageBuf::<T>::new_constant(height, width, val))
@@ -155,12 +177,21 @@ pub struct Quad {
     pub content : Content
 }
 
+/* Represents a categorical classification for an integral
+produced from a binary window. */
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Content {
+
+    // Only zero pixels at this region
     Empty,
+
+    // At least one nonzero pixel at this region, and at least one zero pixel at this region
     Mixed,
+
+    // Only nonero pixels at this region.
     Filled
+
 }
 
 impl Content {
@@ -181,7 +212,9 @@ impl Content {
 
 }
 
-pub fn rect_area(w : &Window<i32>) -> i32 {
+// If this integral image resulted from a binary image,
+// this gives the nonzero area.
+pub fn rect_area<T : std::ops::Sub<Output=T> + Pixel>(w : &Window<T>) -> T {
     let hm1 = w.height()-1;
     let wm1 = w.width()-1;
     unsafe {
@@ -189,7 +222,7 @@ pub fn rect_area(w : &Window<i32>) -> i32 {
         let tr = w.get_unchecked((0, wm1));
         let tl = w.get_unchecked((0usize, 0usize));
         let bl = w.get_unchecked((hm1, 0));
-        (br - (tr - tl) - bl)
+        (*br - (*tr - *tl) - *bl)
     }
 }
 

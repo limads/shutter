@@ -416,11 +416,11 @@ where
 
     // The linear index directly indexes the underlying slice (but it might)
     // index elements outside the effective region.
-    pub fn linear_index(&self, ix : usize) -> &P {
+    pub fn linear_index(&self, ix : usize) -> Option<&P> {
         // assert!(ix < self.width() * self.height());
         // let (row, col) = (ix / self.width(), ix % self.width());
         // unsafe { &*self.as_ptr().offset((self.width * row + col) as isize) as &P }
-        &self.slice.as_ref()[ix]
+        self.slice.as_ref().get(ix)
     }
 
     /// Returns a borrowed view over the whole window. Same as self.as_ref(). But is

@@ -7,7 +7,7 @@ use nalgebra::DMatrix;
 [-pi, pi] from left to right (Increased resolution with wider polar image) */
 pub struct PolarImage {
 
-    polar : ImageBuf<u8>,
+    pub polar : ImageBuf<u8>,
 
     map : PolarMap
 
@@ -47,7 +47,7 @@ impl PolarImage {
         Self { polar, map : PolarMap::new((height, width), c) }
     }
 
-    pub fn map(&self) -> PolarMap {
+    pub fn get_map(&self) -> PolarMap {
         self.map.clone()
     }
 
@@ -77,14 +77,26 @@ impl PolarImage {
         Self::from(w, map)
     }
 
+    // This map is complete (since it uses indices of the polar image.)
+    pub fn from_complete<S>(w : &Image<u8, S>, map : PolarMap) -> Self
+    where
+        S : Storage<u8>
+    {
+        let polar = ImageBuf::<u8>::new_constant(w.height(), w.width(), 0);
+        let mut polar_img = Self { polar, map };
+        polar_img.update_complete(w);
+        polar_img
+    }
+
+    // This map is incomplete (since it uses indices of the cartesian image).
     pub fn from<S>(w : &Image<u8, S>, map : PolarMap) -> Self
     where
         S : Storage<u8>
     {
         let polar = ImageBuf::<u8>::new_constant(w.height(), w.width(), 0);
-        let mut pi = Self { polar, map };
-        pi.update(w);
-        pi
+        let mut polar_img = Self { polar, map };
+        polar_img.update(w);
+        polar_img
     }
 
     // TODO write this into an inverse map with the linear index y*width + x.
@@ -115,6 +127,22 @@ impl PolarImage {
             for j in 0..w.width() {
                 let lin_polar = cartesian_to_polar(&self.map.lut, &(i, j), &w.size());
                 self.polar.as_mut_slice()[lin_polar] = w[(i, j)];
+            }
+        }
+    }
+
+    /* TODO allow partial updates (half-width, half-height, etc.) */
+    pub fn update_complete<S>(&mut self, w : &Image<u8, S>)
+    where
+        S : Storage<u8>
+    {
+        self.polar.fill(0);
+        for i in 0..w.height() {
+            for j in 0..w.width() {
+                let lin_cart = cartesian_to_polar(&self.map.lut_inv, &(i, j), &w.size());
+                if let Some(cart_px) = w.linear_index(lin_cart) {
+                    self.polar.as_mut_slice()[i * w.size().1 + j] = *cart_px;
+                }
             }
         }
     }
@@ -171,18 +199,40 @@ fn cartesian_to_polar(
 pub struct PolarMap {
 
     // If ix is a linear index of the cartesian image, lut[ix]
-    // is a linear index of the polar image.
+    // is a linear index of the polar image. Note the mapping
+    // is not guaranteed to be complete (there are entries of the
+    // polar image that do not correspond to pixels in the
+    // cartesian image.)
     lut : Rc<[usize]>,
 
-    center : (usize, usize),
+    // If ix is a linear index of the polar image, lut_inv[ix]
+    // is a linear index of the cartesian image.
 
-    max_rad : f32
+    size : (usize, usize),
+
+    lut_inv : Rc<[usize]>,
+
+    pub center : (usize, usize),
+
+    pub max_rad : f32,
+
+    pub rad_delta : f32,
+
+    pub angle_delta : f32
 
 }
 
 impl PolarMap {
 
-    fn new(size : (usize, usize), center : (usize, usize)) -> Self {
+    pub fn angle_at_col(&self, theta_ix : usize) -> f32 {
+        -std::f32::consts::PI + theta_ix as f32 * self.angle_delta
+    }
+
+    pub fn to_cartesian(&self, r : usize, theta : usize) -> (usize, usize) {
+        polar_coord_to_cart_coord(r, theta, &self.center, self.rad_delta, self.angle_delta)
+    }
+
+    pub fn new(size : (usize, usize), center : (usize, usize)) -> Self {
         let mut mtx_r = DMatrix::<f32>::zeros(size.0, size.1);
         let mut mtx_theta = DMatrix::<f32>::zeros(size.0, size.1);
 
@@ -208,6 +258,7 @@ impl PolarMap {
         }
 
         let mut lut = Vec::new();
+
         for i in 0..size.0 {
             for j in 0..size.1 {
 
@@ -219,7 +270,7 @@ impl PolarMap {
 
                 // Map (-pi, pi) to [0..ncols]. Zero angle is then ncols/2, -pi is 0 and pi is ncols.
                 let norm_theta = (mtx_theta[(i, j)] + std::f32::consts::PI) / (2.0*std::f32::consts::PI);
-                let theta_ix = (norm_theta*((size.1-1) as f32)) as usize;
+                let theta_ix = (norm_theta*((size.1-1) as f32)).round() as usize;
                 assert!(theta_ix < size.1);
 
                 // lut.push((r_ix, theta_ix));
@@ -227,9 +278,31 @@ impl PolarMap {
             }
         }
 
-        Self { lut : lut.into(), center, max_rad : max_radius }
+        let mut lut_inv = Vec::new();
+        let rad_delta = max_radius / size.0 as f32;
+        let half_w = size.1 as f32 / 2.0;
+        let angle_delta = (2.0*std::f32::consts::PI) / size.1 as f32;
+        for r_ix in 0..size.0 {
+            for theta_ix in 0..size.1 {
+                let (y, x) = polar_coord_to_cart_coord(r_ix, theta_ix, &center, rad_delta, angle_delta);
+                lut_inv.push(y*size.1 + x);
+            }
+        }
+
+        Self { lut : lut.into(), lut_inv : lut_inv.into(), center, max_rad : max_radius, size, rad_delta, angle_delta }
     }
 
+}
+
+pub fn polar_coord_to_cart_coord(r_ix : usize, theta_ix : usize, center : &(usize, usize), rad_delta : f32, angle_delta : f32) -> (usize, usize) {
+    let theta_center = -std::f32::consts::PI + theta_ix as f32 * angle_delta;
+    let rad = r_ix as f32 * rad_delta;
+
+    // TODO this saturating sub might be overwriting previous pixels.
+    // let y = size.0 - (center.0 as f32 + theta_center.sin() * rad).round() as usize;
+    let y = (center.0 as f32 - theta_center.sin() * rad).round().max(0.0) as usize;
+    let x = (center.1 as f32 + theta_center.cos() * rad).round() as usize;
+    (y, x)
 }
 
 /*// cargo test --lib --message-format short -- polar --nocapture

@@ -132,7 +132,7 @@ fn local_median_filtering(win : Window<u8>, mut dst : WindowMut<u8>, hist : &mut
     for m in [0, 1, 2, 3, 5, 6, 7, 8] {
 
         // Update histogram
-        hist[*win.linear_index(m) as usize] += 1;
+        hist[*win.linear_index(m).unwrap() as usize] += 1;
 
         // Walk from start towards end of the histogram until the median is found.
         let mut median : u8 = 0;
