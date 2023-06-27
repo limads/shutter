@@ -245,10 +245,10 @@ pub mod coord {
     pixel, returns the correspoinding image coordinate. */
     pub fn point_to_coord<F>(pt : &Vector2<F>, shape : (usize, usize)) -> Option<(usize, usize)>
     where
-        F : AsPrimitive<usize> + PartialOrd + Zero
+        F : AsPrimitive<usize> + PartialOrd + Zero + num_traits::Float
     {
         if pt[0] > F::zero() && pt[1] > F::zero() {
-            let (row, col) : (usize, usize) = (pt[1].as_(), pt[0].as_());
+            let (row, col) : (usize, usize) = (pt[1].round().as_(), pt[0].round().as_());
             if col < shape.1 && row < shape.0 {
                 return Some((shape.0 - row, col));
             }
@@ -2978,7 +2978,7 @@ pub struct CircleCoords {
     pub radius : usize
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Circle {
     pub center : Vector2<f32>,
     pub radius : f32
@@ -3447,6 +3447,9 @@ impl CircleEstimator {
     }
 
     pub fn estimate_with_centroid(&mut self, ptsf : &[Vector2<f32>], centroid : &Vector2<f32>) -> Option<Circle> {
+        if ptsf.len() < 3 {
+            return None;
+        }
         self.centered_ptsf.clear();
         self.x_sq.clear();
         self.y_sq.clear();
@@ -3483,7 +3486,117 @@ impl CircleEstimator {
 
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Line2 {
+    pub p1 : Vector2<f32>,
+    pub p2 : Vector2<f32>
+}
+
+impl Line2 {
+
+    pub fn new(p1 : Vector2<f32>, p2 : Vector2<f32>) -> Self {
+        Self { p1, p2 }
+    }
+
+    pub fn collinear(&self, pt : &Vector2<f32>, tol : f32) -> bool {
+        (self.angle() - (Line2 { p1 : self.p1, p2 : pt.clone() }).angle()).abs() < tol
+    }
+
+    pub fn length(&self) -> f32 {
+        self.p1.metric_distance(&self.p2)
+    }
+
+    /* Build the vector p2 centered at p1 */
+    pub fn offset(&self) -> Vector2<f32> {
+        self.p2 - self.p1
+    }
+
+    pub fn angle(&self) -> f32 {
+        let off = self.offset();
+        off[1].atan2(off[0])
+    }
+
+}
+
+#[derive(Clone, Debug, Copy)]
+pub enum Incidence {
+    Tangent(Vector2<f32>),
+    Secant(Line2)
+}
+
+// cargo test --lib -- test_circle --nocapture
+#[test]
+fn test_circle() {
+    let c = Circle { center : Vector2::new(10.0, 10.0), radius : 10.0 };
+    let l = Line2 { p1 : Vector2::new(1.0, 1.0), p2 : Vector2::new(30.0, 30.0) };
+    println!("{:?}", c.incidence(&l, 0.01));
+}
+
 impl Circle {
+
+    /* If line intersects the circle at two points, return the pair of points.
+    The points are ordered by their distance to p1
+    https://mathworld.wolfram.com/Circle-LineIntersection.html
+    Tangent_tol is used to decide on whether the line is tangent or secant
+    based on its proximity to circle. If the line is closer to the circle
+    than tangent tol, it is considered a tangent. It is considered a secant
+    otherwise. */
+    pub fn incidence(&self, line : &Line2, tangent_tol : f32) -> Option<Incidence> {
+        let line_c = Line2 {
+            p1 : line.p1 - self.center,
+            p2 : line.p2 - self.center
+        };
+        let dx = line_c.p2[0] - line_c.p1[0];
+        let dy = line_c.p2[1] - line_c.p1[1];
+        let dr = dx.hypot(dy);
+        if dr == 0.0 {
+            return None;
+        }
+
+        // This differs from f32::signum in that it cannot return zero.
+        let sgn = |x : f32| if x < 0.0 { -1.0 } else { 1.0 };
+
+        // Determinant of [[x1, x2], [y1, y2]]
+        let det = line_c.p1[0] * line_c.p2[1] - line_c.p2[0] * line_c.p1[1];
+        let incidence = self.radius.powf(2.)*dr.powf(2.) - det.powf(2.);
+        if incidence < 0.0 {
+            None
+        } else if incidence.abs() < tangent_tol {
+            let x = (det*dy) / dr.powf(2.);
+            let y = ((-det)*dx) / dr.powf(2.);
+            Some(Incidence::Tangent(Vector2::new(x, y) + self.center))
+        } else {
+            let incidence_root = incidence.sqrt();
+            let x1 = (det*dy + sgn(dy)*dx * incidence_root) / dr.powf(2.);
+            let x2 = (det*dy - sgn(dy)*dx * incidence_root) / dr.powf(2.);
+            let y1 = ((-det)*dx + dy.abs() * incidence_root) / dr.powf(2.);
+            let y2 = ((-det)*dx - dy.abs() * incidence_root) / dr.powf(2.);
+            let v1 = Vector2::new(x1, y1) + self.center;
+            let v2 = Vector2::new(x2, y2) + self.center;
+            let l = if v1.metric_distance(&line.p1) < v2.metric_distance(&line.p1) {
+                Line2 { p1 : v1, p2 : v2 }
+            } else {
+                Line2 { p1 : v2, p2 : v1 }
+            };
+            Some(Incidence::Secant(l))
+        }
+    }
+
+    pub fn contains(&self, pt : &Vector2<f32>) -> bool {
+        self.center.metric_distance(&pt) < self.radius
+    }
+
+    pub fn encloses(&self, other : &Self) -> bool {
+        self.center.metric_distance(&other.center) + other.radius < self.radius
+    }
+
+    pub fn circumference(&self) -> f32 {
+        2.0*std::f32::consts::PI*self.radius
+    }
+
+    pub fn area(&self) -> f32 {
+        std::f32::consts::PI*self.radius.powf(2.)
+    }
 
     pub fn coords(&self, img_sz : (usize, usize)) -> Option<CircleCoords> {
         if self.center[0] < 0.0 || self.center[1] < 0.0 {
@@ -3547,6 +3660,10 @@ impl Circle {
         ptsf.iter().fold(0.0, |acc, pt| acc + ((pt - &self.center).magnitude() - self.radius).powf(2.)  ) / n
     }
 
+    pub fn abs_errors(&self, ptsf : &[Vector2<f32>]) -> Vec<f32> {
+        ptsf.iter().map(|pt| ((pt - &self.center).magnitude() - self.radius).abs()  ).collect()
+    }
+
     pub fn avg_abs_error(&self, ptsf : &[Vector2<f32>]) -> f32 {
         let n = ptsf.len() as f32;
         ptsf.iter().fold(0.0, |acc, pt| acc + ((pt - &self.center).magnitude() - self.radius).abs()  ) / n
@@ -3556,6 +3673,11 @@ impl Circle {
     pub fn radius_variance(&self, pts : &[(u16, u16)], img_height : u16) -> f32 {
         let ptsf : Vec<Vector2<f32>> = pts.iter().map(|pt| Vector2::new(pt.1 as f32, (img_height - pt.0) as f32) ).collect();
         self.radius_variance_from_pts(&ptsf[..])
+    }
+
+    pub fn iter_circumference(&self, n_pts : u32) -> Vec<Vector2<f32>> {
+        let sector_arc = (2.0 * std::f32::consts::PI) / n_pts as f32;
+        (0..n_pts).map(|s| self.circumference_at(sector_arc*(s as f32)) ).collect()
     }
 
     pub fn circumference_at(&self, deg_rad : f32) -> Vector2<f32> {
@@ -3572,5 +3694,43 @@ struct InterIndices(Vec<usize>);
 useful for vectorized ops. */
 struct SeqIndices(Vec<usize>);
 
+use petgraph::graph::NodeIndex;
+use std::iter::FromIterator;
 
+// TODO implement PartialOrd for Event by y-coordinate.
+enum Event {
 
+    // Sweep line met a new point
+    Site(Vector2<f32>),
+
+    // Sweep line met a circle lower point.
+    Circle(Vector2<f32>, NodeIndex<usize>)
+}
+
+// Computes the Voronoi diagram using Fortune's algorithm (plane sweep)
+fn voronoi_diagram(pts : &[Vector2<f32>]) {
+
+    // Priority queue of events
+    let mut queue : Vec<Event> = Vec::from_iter(pts.iter().map(|pt| Event::Site(pt.clone() )));
+    // queue.sort_by(|a, b| a[1].cmp(&b[1]) );
+
+    while !queue.is_empty() {
+        match queue.pop().unwrap() {
+            Event::Site(site) => {
+                handle_site_event(&site)
+            },
+            Event::Circle(lower_pt, ix) => {
+                handle_circle_event(&lower_pt)
+            }
+        }
+    }
+
+}
+
+fn handle_site_event(site : &Vector2<f32>) {
+
+}
+
+fn handle_circle_event(lower_pt : &Vector2<f32>) {
+
+}

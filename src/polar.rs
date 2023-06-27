@@ -222,10 +222,48 @@ pub struct PolarMap {
 
 }
 
+// cargo test --lib -- test_polar --nocapture
+#[test]
+fn test_polar() {
+    let mut pmap = PolarMap::new((128,128), (64,64));
+    use std::f32::consts::PI;
+    let n_sectors = 16;
+    for t in 0..n_sectors {
+        println!("t = {}", t);
+        for r in (8..64).step_by(8) {
+            let angle = -PI + (t as f32 / n_sectors as f32)*(2.*PI);
+            let (mut y, mut x) = ((64.0 + angle.sin()*(r as f32)).round(), (64.0 + angle.cos()*(r as f32)).round());
+            y = 128.0 - y;
+            println!("{:?} = {:?}", (y as usize, x as usize), pmap.to_polar(y as usize, x as usize).unwrap());
+        }
+    }
+}
+
 impl PolarMap {
 
     pub fn angle_at_col(&self, theta_ix : usize) -> f32 {
         -std::f32::consts::PI + theta_ix as f32 * self.angle_delta
+    }
+
+    pub fn to_polar(&self, row : usize, col : usize) -> Option<(usize, usize)> {
+        // let dy = (row as f32 - self.center.0 as f32);
+        let dy = (self.center.0 as f32 - row as f32);
+        // let dy = self.size.0.checked_sub(row.checked_sub(self.center.0)?)? as f32;
+        let dx = col as f32 - self.center.1 as f32;
+        let r = dx.hypot(dy);
+        let norm_radius = r / self.max_rad;
+        if norm_radius > 1.0 {
+            return None;
+        }
+        let y = dy / r;
+        let x =  dx / r;
+        // let r_ix = (norm_radius*((self.size.0-1) as f32)).round() as usize;
+        let r_ix = (norm_radius*(self.size.0 as f32)).round() as usize;
+        let theta = y.atan2(x);
+        let norm_theta = (theta + std::f32::consts::PI) / (2.0*std::f32::consts::PI);
+        // let theta_ix = (norm_theta*((self.size.1-1) as f32)).round() as usize;
+        let theta_ix = (norm_theta*(self.size.1 as f32)).round() as usize;
+        Some((r_ix, theta_ix))
     }
 
     pub fn to_cartesian(&self, r : usize, theta : usize) -> (usize, usize) {
