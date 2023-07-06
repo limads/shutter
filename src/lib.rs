@@ -359,7 +359,7 @@ pub mod point;
 
 */
 
-pub fn module() -> rhai::Module {
+/*pub fn module() -> rhai::Module {
 
     use crate::image::*;
 
@@ -371,4 +371,6 @@ pub fn module() -> rhai::Module {
         |path : &str| -> Result<ImageBuf<u8>> { Ok(crate::io::decode_from_file(path)?) }
     );
     module
-}
+}*/
+
+

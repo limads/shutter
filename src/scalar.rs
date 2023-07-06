@@ -368,7 +368,7 @@ where
 
         #[cfg(feature="ipp")]
         unsafe {
-            let scale_factor = 0;
+            let scale_factor = 1;
             let (byte_stride, roi) = crate::image::ipputils::step_and_size_for_image(self);
 
             if self.pixel_is::<u8>() {

@@ -4612,8 +4612,9 @@ impl RunLengthCode {
 
     // Adds a single point to this RLE (if not already present).
     // Either increment an existing RLE or innaugurate a new one.
+    // Panics if point was already present on RLE.
     pub fn include(&mut self, pt : (usize, usize)) {
-        match self.rows.binary_search_by(|r| self.rles[r.clone()][0].start.0.cmp(&pt.0) ) {
+        match self.rows.binary_search_by(|r| self.rles[r.clone()][0].   start.0.cmp(&pt.0) ) {
             Ok(row_pos) => {
                 let fst_rle_pos = self.rows[row_pos].start;
                 match self.rows[row_pos].len() {

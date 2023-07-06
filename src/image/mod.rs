@@ -3354,7 +3354,7 @@ impl ImageBuf<u8> {
 
 }
 
-impl rhai::CustomType for ImageBuf<u8> {
+/*impl rhai::CustomType for ImageBuf<u8> {
 
     fn build(mut builder: rhai::TypeBuilder<'_, Self>) {
 
@@ -3392,7 +3392,7 @@ impl rhai::CustomType for ImageBuf<u8> {
             });
     }
 
-}
+}*/
 
 impl<S> Image<u8, S>
 where

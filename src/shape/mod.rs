@@ -3494,6 +3494,10 @@ pub struct Line2 {
 
 impl Line2 {
 
+    pub fn midpoint(&self) -> Vector2<f32> {
+        self.p1.scale(0.5) + self.p2.scale(0.5)
+    }
+
     pub fn new(p1 : Vector2<f32>, p2 : Vector2<f32>) -> Self {
         Self { p1, p2 }
     }
@@ -3533,6 +3537,10 @@ fn test_circle() {
 }
 
 impl Circle {
+
+    //pub fn contains(&self, pt : &Vector2<f32>) -> bool {
+    //    pt.metric_distance(&self.center) < self.radius
+    //}
 
     /* If line intersects the circle at two points, return the pair of points.
     The points are ordered by their distance to p1

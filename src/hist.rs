@@ -398,6 +398,10 @@ impl IppHistogram {
         &self.hist[..]
     }
 
+    pub fn as_mut_slice(&mut self) -> &mut [u32] {
+        &mut self.hist[..]
+    }
+
     pub fn draw(&self, win : &mut WindowMut<'_, u8>, color : u8) {
         assert!(win.width() % 256 == 0);
         assert!(win.width() >= 256);
