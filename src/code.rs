@@ -21,6 +21,11 @@ use smallvec::SmallVec;
 use rangetools::Rangetools;
 use crate::bitonal::*;
 use crate::pyr::*;
+use once_cell;
+use std::rc::Rc;
+use std::sync::Arc;
+use crate::shape::Region;
+use crate::shape::CentralMoments;
 
 #[derive(Debug, Clone)]
 pub struct PyrBitonalEncoder {
@@ -249,7 +254,8 @@ pub fn lossy_encode_bitonal_pyr(
 #[derive(Clone)]
 pub struct BitonalEncoder {
     bit_img : BitonalImage,
-    lut : RLEOpLut
+    lut8 : RLEOpLut8,
+    lut16 : RLEOpLut16
 }
 
 impl BitonalEncoder {
@@ -259,7 +265,11 @@ impl BitonalEncoder {
     }
 
     pub fn new(height : usize, width : usize) -> Self {
-        Self { bit_img : BitonalImage::new(height, width / 8), lut : populate_rle_lut() }
+        Self {
+            bit_img : BitonalImage::new(height, width / 8),
+            lut8 : populate_rle_lut8(),
+            lut16 : populate_rle_lut16()
+        }
     }
 
     fn update(&mut self) -> RunLengthCode {
@@ -269,8 +279,12 @@ impl BitonalEncoder {
 
         for r in 0..bitonal.height() {
             let len_before = rles.len();
-            // lossy_encode_bitonal_row(unsafe { bitonal.row_unchecked(r) }, r, &mut rles);
-            lossless_encode_bitonal_row(&self.lut[..], unsafe { bitonal.row_unchecked(r) }, r, &mut rles);
+
+            lossless_encode_bitonal_row_8(&self.lut8[..], unsafe { bitonal.row_unchecked(r) }, r, &mut rles);
+
+            // TODO guarantee align 2 when allocating self.bit_img
+            // lossless_encode_bitonal_row_16(&self.lut16[..], unsafe { bitonal.row_unchecked(r) }, r, &mut rles);
+
             let len_after = rles.len();
             if len_after > len_before {
                 rows.push(Range { start : len_before, end : len_after });
@@ -310,6 +324,42 @@ impl BitonalEncoder {
         self.update()
     }
 
+}
+
+// cargo test --lib -- encoding_strategies --nocapture
+#[test]
+fn encoding_strategies() {
+    let mut bte = BitonalEncoder::new(128,128);
+    let mut rles_8 = Vec::with_capacity(128);
+    let mut rles_16 = Vec::with_capacity(128);
+    let mut img = ImageBuf::<u8>::new_constant(128,128,0);
+    for i in 0..128usize {
+        for j in 0..128usize {
+            if rand::random::<f32>() < 0.5 {
+                img[(i,j)] = 255;
+            }
+        }
+    }
+    bte.bit_img.update_from_binary(&img);
+    let bitonal : &ImageBuf<u8> = bte.bit_img.as_ref();
+    for r in 0..img.height() {
+        rles_8.clear();
+        rles_16.clear();
+        lossless_encode_bitonal_row_8(&bte.lut8[..], unsafe { bitonal.row_unchecked(r) }, r, &mut rles_8);
+        lossless_encode_bitonal_row_16(&bte.lut16[..], unsafe { bitonal.row_unchecked(r) }, r, &mut rles_16);
+        for i in 0..rles_8.len() {
+            if rles_8[i] != rles_16[i] {
+                let c = rles_8[i].start.1-1;
+                img[(r, c)] = 127;
+                println!("{:?} vs. {:?}", rles_8[i], rles_16[i]);
+                img.show();
+
+            }
+        }
+        println!("{:?}", rles_8);
+        println!("{:?}", rles_16);
+        assert!(rles_8 == rles_16);
+    }
 }
 
 fn add_one(
@@ -378,11 +428,1363 @@ fn add_four(
     *open = opened;
 }
 
+/* Holds current RunLength, if the RunLenght is open, the row, and the column. */
 type FPtrDyn = &'static (dyn Fn(&mut Vec<RunLength>, &mut bool, usize, usize) + Send + Sync + 'static);
 
-type RLEOpLut = [FPtrDyn; 256];
+type BPtrDyn = Box<dyn Fn(&mut Vec<RunLength>, &mut bool, usize, usize) + Send + Sync + 'static>;
 
-fn populate_rle_lut() -> RLEOpLut {
+type RLEOpLut8 = [FPtrDyn; 256];
+
+type RLEOpLut16 = Arc<[BPtrDyn]>;
+
+/* The two-byte LUT (index for all possible 16-pixel sequences) executes at twice the speed
+of the one-byte LUT, but requires much more space than the 8-pixel LUT. This is the last unsigned integer that
+can reasonably be used to index the LUT for most applications, since an u32 LUT would occupy
+too much space (many gbs to store a fat pointer for each possible u32 value). */
+fn populate_rle_lut16() -> RLEOpLut16 {
+    let lut8 = populate_rle_lut8_ptr();
+    let mut lut16 : Vec<BPtrDyn> = (0..65_536)
+        .map(|_| Box::new(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| { }) as BPtrDyn )
+        .collect();
+    for left in 0..=255u8 {
+        for right in 0..=255u8 {
+
+            /* This guarantees the bytes are 16-bit aligned. */
+            let mut ix : [u16;1] = [0;1];
+            let mut ixs = bytemuck::cast_slice_mut(&mut ix);
+            ixs[0] = left;
+            ixs[1] = right;
+            let ix : u16 = ix[0];
+
+            // let left_cb : FPtrDyn = lut8[left as usize];
+            // let right_cb : FPtrDyn = lut8[right as usize];
+            let left_cb : FPtr = lut8[left as usize];
+            let right_cb : FPtr = lut8[right as usize];
+            if left == 0 && right == 0 {
+                lut16[ix as usize] = Box::new(move |rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+                    *open = false;
+                }) as BPtrDyn;
+            } else if left != 0 && right == 0 {
+                lut16[ix as usize] = Box::new(move |rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+                    left_cb(rles, open, row, col);
+                    *open = false;
+                }) as BPtrDyn;
+            } else if left == 0 && right != 0 {
+                lut16[ix as usize] = Box::new(move |rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+                    *open = false;
+                    right_cb(rles, open, row, col + 8);
+                }) as BPtrDyn;
+            } else {
+                lut16[ix as usize] = Box::new(move |rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
+                    left_cb(rles, open, row, col);
+                    right_cb(rles, open, row, col + 8);
+                }) as BPtrDyn;
+            }
+        }
+    }
+    lut16.into()
+}
+
+fn populate_rle_lut8_ptr() -> [FPtr; 256] {
+
+    fn add_n_0(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        *open = false;
+    }
+
+    let mut ops : [FPtr; 256] = [add_n_0; 256];
+
+    ops[0b0] = add_n_0;
+
+    fn add_n_1(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, false, row, col, 1)
+    }
+    ops[0b1] = add_n_1;
+
+    fn add_n_10(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, false, row, col + 1, 1)
+    }
+    ops[0b10] = add_n_10;
+
+    fn add_n_11(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, false, row, col , 2)
+    }
+    ops[0b11] = add_n_11;
+
+    fn add_n_100(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, false, row, col + 2, 1)
+    }
+    ops[0b100] = add_n_100;
+
+    fn add_n_101(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 1, col + 2, 1)
+    }
+    ops[0b101] = add_n_101;
+
+
+    fn add_n_110(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, false, row, col + 1, 2)
+    }
+    ops[0b110] = add_n_110;
+
+
+    fn add_n_111(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, false, row, col, 3)
+    }
+    ops[0b111] = add_n_111;
+
+
+    fn add_n_1000(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, false, row, col + 3, 1)
+    }
+    ops[0b1000] = add_n_1000;
+
+
+    fn add_n_1001(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 1, col + 3, 1)
+    }
+    ops[0b1001] = add_n_1001;
+
+
+    fn add_n_1010(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 1, 1, col + 3, 1)
+    }
+    ops[0b1010] = add_n_1010;
+
+
+    fn add_n_1011(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 2, col + 3, 1)
+    }
+    ops[0b1011] = add_n_1011;
+
+
+    fn add_n_1100(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, false, row, col + 2, 2)
+    }
+    ops[0b1100] = add_n_1100;
+
+
+    fn add_n_1101(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 1, col + 2, 2)
+    }
+    ops[0b1101] = add_n_1101;
+
+
+    fn add_n_1110(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, false, row, col + 1, 3)
+    }
+    ops[0b1110] = add_n_1110;
+
+    fn add_n_1111(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, false, row, col, 4)
+    }
+    ops[0b1111] = add_n_1111;
+
+    fn add_n_10000(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, false, row, col + 4, 1)
+    }
+    ops[0b10000] = add_n_10000;
+
+    fn add_n_10001(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 1, col + 4, 1)
+    }
+    ops[0b10001] = add_n_10001;
+
+    fn add_n_10010(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 1, 1, col + 4, 1)
+    }
+    ops[0b10010] = add_n_10010;
+
+    fn add_n_10011(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 2, col + 4, 1)
+    }
+    ops[0b10011] = add_n_10011;
+
+    fn add_n_10100(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 2, 1, col + 4, 1)
+    }
+    ops[0b10100] = add_n_10100;
+
+    fn add_n_10101(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, false, row, col, 1, col + 2, 1, col + 4, 1)
+    }
+    ops[0b10101] = add_n_10101;
+
+    fn add_n_10110(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 1, 2, col + 4, 1)
+    }
+    ops[0b10110] = add_n_10110;
+
+    fn add_n_10111(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 3, col + 4, 1)
+    }
+    ops[0b10111] = add_n_10111;
+
+    fn  add_n_11000(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, false, row, col + 3, 2)
+    }
+    ops[0b11000] = add_n_11000;
+
+    fn add_n_11001(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 1, col + 3, 2)
+    }
+    ops[0b11001] = add_n_11001;
+
+    fn add_n_11010(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 1, 1, col + 3, 2)
+    }
+    ops[0b11010] = add_n_11010;
+
+    fn add_n_11011(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 2, col + 3, 2)
+    }
+    ops[0b11011] = add_n_11011;
+
+    fn add_n_11100(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, false, row, col + 2, 3)
+    }
+    ops[0b11100] = add_n_11100;
+
+    fn add_n_11101(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 1, col + 2, 3)
+    }
+    ops[0b11101] = add_n_11101;
+
+    fn add_n_11110(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, false, row, col + 1, 4)
+    }
+    ops[0b11110] = add_n_11110;
+
+    fn add_n_11111(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, false, row, col, 5)
+    }
+    ops[0b11111] = add_n_11111;
+
+    fn add_n_100000(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, false, row, col + 5, 1)
+    }
+    ops[0b100000] = add_n_100000;
+
+    fn add_n_100001(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 1, col + 5, 1)
+    }
+    ops[0b100001] = add_n_100001;
+
+    fn add_n_100010(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 1, 1, col + 5, 1)
+    }
+    ops[0b100010] = add_n_100010;
+
+    fn add_n_100011(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 2, col + 5, 1)
+    }
+    ops[0b100011] = add_n_100011;
+
+    fn add_n_100100(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 2, 1, col + 5, 1)
+    }
+    ops[0b100100] = add_n_100100;
+
+    fn add_n_100101(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, false, row, col, 1, col + 2, 1, col + 5, 1)
+    }
+    ops[0b100101] = add_n_100101;
+
+    fn add_n_100110(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 1, 2, col + 5, 1)
+    }
+    ops[0b100110] = add_n_100110;
+
+    fn add_n_100111(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 3, col + 5, 1)
+    }
+    ops[0b100111] = add_n_100111;
+
+    fn add_n_101000(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 3, 1, col + 5, 1)
+    }
+    ops[0b101000] = add_n_101000;
+
+    fn add_n_101001(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, false, row, col, 1, col + 3, 1, col + 5, 1)
+    }
+    ops[0b101001] = add_n_101001;
+
+    fn add_n_101010(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, false, row, col + 1, 1, col + 3, 1, col + 5, 1)
+    }
+    ops[0b101010] = add_n_101010;
+
+    fn add_n_101011(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, false, row, col, 2, col + 3, 1, col + 5, 1)
+    }
+    ops[0b101011] = add_n_101011;
+
+    fn add_n_101100(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 2, 2, col + 5, 1)
+    }
+    ops[0b101100] = add_n_101100;
+
+    fn add_n_101101(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, false, row, col, 1, col + 2, 2, col + 5, 1)
+    }
+    ops[0b101101] = add_n_101101;
+
+    fn add_n_101110(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 1, 3, col + 5, 1)
+    }
+    ops[0b101110] = add_n_101110;
+
+    fn add_n_101111(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 4, col + 5, 1)
+    }
+    ops[0b101111] = add_n_101111;
+
+    fn add_n_110000(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, false, row, col + 4, 2)
+    }
+    ops[0b110000] = add_n_110000;
+
+    fn add_n_110001(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 1, col + 4, 2)
+    }
+    ops[0b110001] = add_n_110001;
+
+    fn add_n_110010(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 1, 1, col + 4, 2)
+    }
+    ops[0b110010] = add_n_110010;
+
+    fn add_n_110011(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 2, col + 4, 2)
+    }
+    ops[0b110011] = add_n_110011;
+
+    fn add_n_110100(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 2, 1, col + 4, 2)
+    }
+    ops[0b110100] = add_n_110100;
+
+    fn add_n_110101(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, false, row, col, 1, col + 2, 1, col + 4, 2)
+    }
+    ops[0b110101] = add_n_110101;
+
+    fn add_n_110110(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 1, 2, col + 4, 2)
+    }
+    ops[0b110110] = add_n_110110;
+
+    fn add_n_110111(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 3, col + 4, 2)
+    }
+    ops[0b110111] = add_n_110111;
+
+    fn add_n_111000(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, false, row, col + 3, 3)
+    }
+    ops[0b111000] = add_n_111000;
+
+    fn add_n_111001(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 1, col + 3, 3)
+    }
+    ops[0b111001] = add_n_111001;
+
+    fn add_n_111010(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 1, 1, col + 3, 3)
+    }
+    ops[0b111010] = add_n_111010;
+
+    fn add_n_111011(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 2, col + 3, 3)
+    }
+    ops[0b111011] = add_n_111011;
+
+    fn add_n_111100(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, false, row, col + 2, 4)
+    }
+    ops[0b111100] = add_n_111100;
+
+    fn add_n_111101(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 1, col + 2, 4)
+    }
+    ops[0b111101] = add_n_111101;
+
+    fn add_n_111110(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, false, row, col + 1, 5)
+    }
+    ops[0b111110] = add_n_111110;
+
+    fn add_n_111111(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, false, row, col, 6)
+    }
+    ops[0b111111] = add_n_111111;
+
+    fn add_n_1000000(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, false, row, col + 6, 1)
+    }
+    ops[0b1000000] = add_n_1000000;
+
+    fn add_n_1000001(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 1, col + 6, 1)
+    }
+    ops[0b1000001] = add_n_1000001;
+
+    fn add_n_1000010(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 1, 1, col + 6, 1)
+    }
+    ops[0b1000010] = add_n_1000010;
+
+    fn add_n_1000011(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 2, col + 6, 1)
+    }
+    ops[0b1000011] = add_n_1000011;
+
+    fn add_n_1000100(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 2, 1, col + 6, 1)
+    }
+    ops[0b1000100] = add_n_1000100;
+
+    fn add_n_1000101(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, false, row, col, 1, col + 2, 1, col + 6, 1)
+    }
+    ops[0b1000101] = add_n_1000101;
+
+    fn add_n_1000110(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 1, 2, col + 6, 1)
+    }
+    ops[0b1000110] = add_n_1000110;
+
+    fn add_n_1000111(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 3, col + 6, 1)
+    }
+    ops[0b1000111] = add_n_1000111;
+
+    fn add_n_1001000(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 3, 1, col + 6, 1)
+    }
+    ops[0b1001000] = add_n_1001000;
+
+    fn add_n_1001001(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, false, row, col, 1, col + 3, 1, col + 6, 1)
+    }
+    ops[0b1001001] = add_n_1001001;
+
+    fn add_n_1001010(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, false, row, col + 1, 1, col + 3, 1, col + 6, 1)
+    }
+    ops[0b1001010] = add_n_1001010;
+
+    fn add_n_1001011(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, false, row, col, 2, col + 3, 1, col + 6, 1)
+    }
+    ops[0b1001011] = add_n_1001011;
+
+    fn add_n_1001100(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 2, 2, col + 6, 1)
+    }
+    ops[0b1001100] = add_n_1001100;
+
+    fn add_n_1001101(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, false, row, col, 1, col + 2, 2, col + 6, 1)
+    }
+    ops[0b1001101] = add_n_1001101;
+
+    fn add_n_1001110(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 1, 3, col + 6, 1)
+    }
+    ops[0b1001110] = add_n_1001110;
+
+    fn add_n_1001111(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 4, col + 6, 1)
+    }
+    ops[0b1001111] = add_n_1001111;
+
+    fn add_n_1010000(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 4, 1, col + 6, 1)
+    }
+    ops[0b1010000] = add_n_1010000;
+
+    fn add_n_1010001(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, false, row, col, 1, col + 4, 1, col + 6, 1)
+    }
+    ops[0b1010001] = add_n_1010001;
+
+    fn add_n_1010010(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, false, row, col + 1, 1, col + 4, 1, col + 6, 1)
+    }
+    ops[0b1010010] = add_n_1010010;
+
+    fn add_n_1010011(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, false, row, col, 2, col + 4, 1, col + 6, 1)
+    }
+    ops[0b1010011] = add_n_1010011;
+
+    fn add_n_1010100(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, false, row, col + 2, 1, col + 4, 1, col + 6, 1)
+    }
+    ops[0b1010100] = add_n_1010100;
+
+    fn add_n_1010101(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_four(rles, open, false, row, col, 1, col + 2, 1, col + 4, 1, col + 6, 1)
+    }
+    ops[0b1010101] = add_n_1010101;
+
+    fn add_n_1010110(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, false, row, col + 1, 2, col + 4, 1, col + 6, 1)
+    }
+    ops[0b1010110] = add_n_1010110;
+
+    fn add_n_1010111(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, false, row, col, 3, col + 4, 1, col + 6, 1)
+    }
+    ops[0b1010111] = add_n_1010111;
+
+    fn add_n_1011000(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 3, 2, col + 6, 1)
+    }
+    ops[0b1011000] = add_n_1011000;
+
+    fn add_n_1011001(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, false, row, col, 1, col + 3, 2, col + 6, 1)
+    }
+    ops[0b1011001] = add_n_1011001;
+
+    fn add_n_1011010(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, false, row, col + 1, 1, col + 3, 2, col + 6, 1)
+    }
+    ops[0b1011010] = add_n_1011010;
+
+    fn add_n_1011011(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, false, row, col, 2, col + 3, 2, col + 6, 1)
+    }
+    ops[0b1011011] = add_n_1011011;
+
+    fn add_n_1011100(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 2, 3, col + 6, 1)
+    }
+    ops[0b1011100] = add_n_1011100;
+
+    fn add_n_1011101(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, false, row, col, 1, col + 2, 3, col + 6, 1)
+    }
+    ops[0b1011101] = add_n_1011101;
+
+    fn add_n_1011110(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 1, 4, col + 6, 1)
+    }
+    ops[0b1011110] = add_n_1011110;
+
+    fn add_n_1011111(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 5, col + 6, 1)
+    }
+    ops[0b1011111] = add_n_1011111;
+
+    fn add_n_1100000(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, false, row, col + 5, 2)
+    }
+    ops[0b1100000] = add_n_1100000;
+
+    fn add_n_1100001(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 1, col + 5, 2)
+    }
+    ops[0b1100001] = add_n_1100001;
+
+    fn add_n_1100010(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 1, 1, col + 5, 2)
+    }
+    ops[0b1100010] = add_n_1100010;
+
+    fn add_n_1100011(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 2, col + 5, 2)
+    }
+    ops[0b1100011] = add_n_1100011;
+
+    fn add_n_1100100(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 2, 1, col + 5, 2)
+    }
+    ops[0b1100100] = add_n_1100100;
+
+    fn add_n_1100101(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, false, row, col, 1, col + 2, 1, col + 5, 2)
+    }
+    ops[0b1100101] = add_n_1100101;
+
+    fn add_n_1100110(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 1, 2, col + 5, 2)
+    }
+    ops[0b1100110] = add_n_1100110;
+
+    fn add_n_1100111(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 3, col + 5, 2)
+    }
+    ops[0b1100111] = add_n_1100111;
+
+    fn add_n_1101000(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 3, 1, col + 5, 2)
+    }
+    ops[0b1101000] = add_n_1101000;
+
+    fn add_n_1101001(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, false, row, col, 1, col + 3, 1, col + 5, 2)
+    }
+    ops[0b1101001] = add_n_1101001;
+
+    fn add_n_1101010(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, false, row, col + 1, 1, col + 3, 1, col + 5, 2)
+    }
+    ops[0b1101010] = add_n_1101010;
+
+    fn add_n_1101011(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, false, row, col, 2, col + 3, 1, col + 5, 2)
+    }
+    ops[0b1101011] = add_n_1101011;
+
+    fn add_n_1101100(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 2, 2, col + 5, 2)
+    }
+    ops[0b1101100] = add_n_1101100;
+
+    fn add_n_1101101(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, false, row, col, 1, col + 2, 2, col + 5, 2)
+    }
+    ops[0b1101101] = add_n_1101101;
+
+    fn add_n_1101110(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 1, 3, col + 5, 2)
+    }
+    ops[0b1101110] = add_n_1101110;
+
+    fn add_n_1101111(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 4, col + 5, 1)
+    }
+    ops[0b1101111] = add_n_1101111;
+
+    fn add_n_1110000(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, false, row, col + 4, 3)
+    }
+    ops[0b1110000] = add_n_1110000;
+
+    fn add_n_1110001(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 1, col + 4, 3)
+    }
+    ops[0b1110001] = add_n_1110001;
+
+    fn add_n_1110010(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 1, 1, col + 4, 3)
+    }
+    ops[0b1110010] = add_n_1110010;
+
+    fn add_n_1110011(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 2, col + 4, 3)
+    }
+    ops[0b1110011] = add_n_1110011;
+
+    fn add_n_1110100(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 2, 1, col + 4, 3)
+    }
+    ops[0b1110100] = add_n_1110100;
+
+    fn add_n_1110101(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, false, row, col, 1, col + 2, 1, col + 4, 3)
+    }
+    ops[0b1110101] = add_n_1110101;
+
+    fn add_n_1110110(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 1, 2, col + 4, 3)
+    }
+    ops[0b1110110] = add_n_1110110;
+
+    fn add_n_1110111(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 3, col + 4, 3)
+    }
+    ops[0b1110111] = add_n_1110111;
+
+    fn add_n_1111000(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, false, row, col + 3, 4)
+    }
+    ops[0b1111000] = add_n_1111000;
+
+    fn add_n_1111001(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 1, col + 3, 4)
+    }
+    ops[0b1111001] = add_n_1111001;
+
+    fn add_n_1111010(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col + 1, 1, col + 3, 4)
+    }
+    ops[0b1111010] = add_n_1111010;
+
+    fn add_n_1111011(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 2, col + 3, 4)
+    }
+    ops[0b1111011] = add_n_1111011;
+
+    fn add_n_1111100(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, false, row, col + 2, 5)
+    }
+    ops[0b1111100] = add_n_1111100;
+
+    fn add_n_1111101(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, false, row, col, 1, col + 2, 5)
+    }
+    ops[0b1111101] = add_n_1111101;
+
+    fn add_n_1111110(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, false, row, col + 1, 6)
+    }
+    ops[0b1111110] = add_n_1111110;
+
+    fn add_n_1111111(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, false, row, col, 7)
+    }
+    ops[0b1111111] = add_n_1111111;
+
+    fn add_n_10000000(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, true, row, col + 7, 1)
+    }
+    ops[0b10000000] = add_n_10000000;
+
+    fn add_n_10000001(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col, 1, col + 7, 1)
+    }
+    ops[0b10000001] = add_n_10000001;
+
+    fn add_n_10000010(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 1, 1, col + 7, 1)
+    }
+    ops[0b10000010] = add_n_10000010;
+
+    fn add_n_10000011(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col, 2, col + 7, 1)
+    }
+    ops[0b10000011] = add_n_10000011;
+
+    fn add_n_10000100(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 2, 1, col + 7, 1)
+    }
+    ops[0b10000100] = add_n_10000100;
+
+    fn add_n_10000101(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 1, col + 2, 1, col + 7, 1)
+    }
+    ops[0b10000101] = add_n_10000101;
+
+    fn add_n_10000110(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 1, 2, col + 7, 1)
+    }
+    ops[0b10000110] = add_n_10000110;
+
+    fn add_n_10000111(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col, 3, col + 7, 1)
+    }
+    ops[0b10000111] = add_n_10000111;
+
+    fn add_n_10001000(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 3, 1, col + 7, 1)
+    }
+    ops[0b10001000] = add_n_10001000;
+
+    fn add_n_10001001(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 1, col + 3, 1, col + 7, 1)
+    }
+    ops[0b10001001] = add_n_10001001;
+
+    fn add_n_10001010(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col + 1, 1, col + 3, 1, col + 7, 1)
+    }
+    ops[0b10001010] = add_n_10001010;
+
+    fn add_n_10001011(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 2, col + 3, 1, col + 7, 1)
+    }
+    ops[0b10001011] = add_n_10001011;
+
+    fn add_n_10001100(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 2, 2, col + 7, 1)
+    }
+    ops[0b10001100] = add_n_10001100;
+
+    fn add_n_10001101(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 1, col + 2, 2, col + 7, 1)
+    }
+    ops[0b10001101] = add_n_10001101;
+
+    fn add_n_10001110(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 1, 3, col + 7, 1)
+    }
+    ops[0b10001110] = add_n_10001110;
+
+    fn add_n_10001111(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col, 4, col + 7, 1)
+    }
+    ops[0b10001111] = add_n_10001111;
+
+    fn add_n_10010000(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 4, 1, col + 7, 1)
+    }
+    ops[0b10010000] = add_n_10010000;
+
+    fn add_n_10010001(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 1, col + 4, 1, col + 7, 1)
+    }
+    ops[0b10010001] = add_n_10010001;
+
+    fn add_n_10010010(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col + 1, 1, col + 4, 1, col + 7, 1)
+    }
+    ops[0b10010010] = add_n_10010010;
+
+    fn add_n_10010011(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 2, col + 4, 1, col + 7, 1)
+    }
+    ops[0b10010011] = add_n_10010011;
+
+    fn add_n_10010100(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col + 2, 1, col + 4, 1, col + 7, 1)
+    }
+    ops[0b10010100] = add_n_10010100;
+
+    fn add_n_10010101(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_four(rles, open, true, row, col, 1, col + 2, 1, col + 4, 1, col + 7, 1)
+    }
+    ops[0b10010101] = add_n_10010101;
+
+    fn add_n_10010110(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col + 1, 2, col + 4, 1, col + 7, 1)
+    }
+    ops[0b10010110] = add_n_10010110;
+
+    fn add_n_10010111(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 3, col + 4, 1, col + 7, 1)
+    }
+    ops[0b10010111] = add_n_10010111;
+
+    fn add_n_10011000(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 3, 2, col + 7, 1)
+    }
+    ops[0b10011000] = add_n_10011000;
+
+    fn add_n_10011001(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 1, col + 3, 2, col + 7, 1)
+    }
+    ops[0b10011001] = add_n_10011001;
+
+    fn add_n_10011010(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col + 1, 1, col + 3, 2, col + 7, 1)
+    }
+    ops[0b10011010] = add_n_10011010;
+
+    fn add_n_10011011(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 2, col + 3, 2, col + 7, 1)
+    }
+    ops[0b10011011] = add_n_10011011;
+
+    fn add_n_10011100(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 2, 3, col + 7, 1)
+    }
+    ops[0b10011100] = add_n_10011100;
+
+    fn add_n_10011101(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 1, col + 2, 3, col + 7, 1)
+    }
+    ops[0b10011101] = add_n_10011101;
+
+    fn add_n_10011110(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 1, 4, col + 7, 1)
+    }
+    ops[0b10011110] = add_n_10011110;
+
+    fn add_n_10011111(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col, 5, col + 7, 1)
+    }
+    ops[0b10011111] = add_n_10011111;
+
+    fn add_n_10100000(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 5, 1, col + 7, 1)
+    }
+    ops[0b10100000] = add_n_10100000;
+
+    fn add_n_10100001(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 1, col + 5, 1, col + 7, 1)
+    }
+    ops[0b10100001] = add_n_10100001;
+
+    fn add_n_10100010(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col + 1, 1, col + 5, 1, col + 7, 1)
+    }
+    ops[0b10100010] = add_n_10100010;
+
+    fn add_n_10100011(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 2, col + 5, 1, col + 7, 1)
+    }
+    ops[0b10100011] = add_n_10100011;
+
+    fn add_n_10100100(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col + 2, 1, col + 5, 1, col + 7, 1)
+    }
+    ops[0b10100100] = add_n_10100100;
+
+    fn add_n_10100101(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_four(rles, open, true, row, col, 1, col + 2, 1, col + 5, 1, col + 7, 1)
+    }
+    ops[0b10100101] = add_n_10100101;
+
+    fn add_n_10100110(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col + 1, 2, col + 5, 1, col + 7, 1)
+    }
+    ops[0b10100110] = add_n_10100110;
+
+    fn add_n_10100111(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 3, col + 5, 1, col + 7, 1)
+    }
+    ops[0b10100111] = add_n_10100111;
+
+    fn add_n_10101000(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col + 3, 1, col + 5, 1, col + 7, 1)
+    }
+    ops[0b10101000] = add_n_10101000;
+
+    fn add_n_10101001(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_four(rles, open, true, row, col, 1, col + 3, 1, col + 5, 1, col + 7, 1)
+    }
+    ops[0b10101001] = add_n_10101001;
+
+    fn add_n_10101010(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_four(rles, open, true, row, col + 1, 1, col + 3, 1, col + 5, 1, col + 7, 1)
+    }
+    ops[0b10101010] = add_n_10101010;
+
+    fn add_n_10101011(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_four(rles, open, true, row, col, 2, col + 3, 1, col + 5, 1, col + 7, 1)
+    }
+    ops[0b10101011] = add_n_10101011;
+
+    fn add_n_10101100(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col + 2, 2, col + 5, 1, col + 7, 1)
+    }
+    ops[0b10101100] = add_n_10101100;
+
+    fn add_n_10101101(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_four(rles, open, true, row, col, 1, col + 2, 2, col + 5, 1, col + 7, 1)
+    }
+    ops[0b10101101] = add_n_10101101;
+
+    fn add_n_10101110(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col + 1, 3, col + 5, 1, col + 7, 1)
+    }
+    ops[0b10101110] = add_n_10101110;
+
+    fn add_n_10101111(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 4, col + 5, 1, col + 7, 1)
+    }
+    ops[0b10101111] = add_n_10101111;
+
+    fn add_n_10110000(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 4, 2, col + 7, 1)
+    }
+    ops[0b10110000] = add_n_10110000;
+
+    fn add_n_10110001(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 1, col + 4, 2, col + 7, 1)
+    }
+    ops[0b10110001] = add_n_10110001;
+
+    fn add_n_10110010(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col + 1, 1, col + 4, 2, col + 7, 1)
+    }
+    ops[0b10110010] = add_n_10110010;
+
+    fn add_n_10110011(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 2, col + 4, 2, col + 7, 1)
+    }
+    ops[0b10110011] = add_n_10110011;
+
+    fn add_n_10110100(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col + 2, 1, col + 4, 2, col + 7, 1)
+    }
+    ops[0b10110100] = add_n_10110100;
+
+    fn add_n_10110101(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_four(rles, open, true, row, col, 1, col + 2, 1, col + 4, 2, col + 7, 1)
+    }
+    ops[0b10110101] = add_n_10110101;
+
+    fn add_n_10110110(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col + 1, 2, col + 4, 2, col + 7, 1)
+    }
+    ops[0b10110110] = add_n_10110110;
+
+    fn add_n_10110111(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 3, col + 4, 2, col + 7, 1)
+    }
+    ops[0b10110111] = add_n_10110111;
+
+    fn add_n_10111000(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 3, 3, col + 7, 1)
+    }
+    ops[0b10111000] = add_n_10111000;
+
+    fn add_n_10111001(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 1, col + 3, 3, col + 7, 1)
+    }
+    ops[0b10111001] = add_n_10111001;
+
+    fn add_n_10111010(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col + 1, 1, col + 3, 3, col + 7, 1)
+    }
+    ops[0b10111010] = add_n_10111010;
+
+    fn add_n_10111011(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 2, col + 3, 3, col + 7, 1)
+    }
+    ops[0b10111011] = add_n_10111011;
+
+    fn add_n_10111100(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 2, 4, col + 7, 1)
+    }
+    ops[0b10111100] = add_n_10111100;
+
+    fn add_n_10111101(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 1, col + 2, 4, col + 7, 1)
+    }
+    ops[0b10111101] = add_n_10111101;
+
+    fn add_n_10111110(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 1, 5, col + 7, 1)
+    }
+    ops[0b10111110] = add_n_10111110;
+
+    fn add_n_10111111(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col, 6, col + 7, 1)
+    }
+    ops[0b10111111] = add_n_10111111;
+
+    fn add_n_11000000(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, true, row, col + 6, 2)
+    }
+    ops[0b11000000] = add_n_11000000;
+
+    fn add_n_11000001(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col, 1, col + 6, 2)
+    }
+    ops[0b11000001] = add_n_11000001;
+
+    fn add_n_11000010(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 1, 1, col + 6, 2)
+    }
+    ops[0b11000010] = add_n_11000010;
+
+    fn add_n_11000011(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col, 2, col + 6, 2)
+    }
+    ops[0b11000011] = add_n_11000011;
+
+    fn add_n_11000100(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 2, 1, col + 6, 2)
+    }
+    ops[0b11000100] = add_n_11000100;
+
+    fn add_n_11000101(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 1, col + 2, 1, col + 6, 2)
+    }
+    ops[0b11000101] = add_n_11000101;
+
+    fn add_n_11000110(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 1, 2, col + 6, 2)
+    }
+    ops[0b11000110] = add_n_11000110;
+
+    fn add_n_11000111(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col, 3, col + 6, 2)
+    }
+    ops[0b11000111] = add_n_11000111;
+
+    fn add_n_11001000(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 3, 1, col + 6, 2)
+    }
+    ops[0b11001000] = add_n_11001000;
+
+    fn add_n_11001001(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 1, col + 3, 1, col + 6, 2)
+    }
+    ops[0b11001001] = add_n_11001001;
+
+    fn add_n_11001010(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col + 1, 1, col + 3, 1, col + 6, 2)
+    }
+    ops[0b11001010] = add_n_11001010;
+
+    fn add_n_11001011(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 2, col + 3, 1, col + 6, 2)
+    }
+    ops[0b11001011] = add_n_11001011;
+
+    fn add_n_11001100(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 2, 2, col + 6, 2)
+    }
+    ops[0b11001100] = add_n_11001100;
+
+    fn add_n_11001101(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 1, col + 2, 2, col + 6, 2)
+    }
+    ops[0b11001101] = add_n_11001101;
+
+    fn add_n_11001110(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 1, 3, col + 6, 2)
+    }
+    ops[0b11001110] = add_n_11001110;
+
+    fn add_n_11001111(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col, 4, col + 6, 2)
+    }
+    ops[0b11001111] = add_n_11001111;
+
+    fn add_n_11010000(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 4, 1, col + 6, 2)
+    }
+    ops[0b11010000] = add_n_11010000;
+
+    fn add_n_11010001(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 1, col + 4, 1, col + 6, 2)
+    }
+    ops[0b11010001] = add_n_11010001;
+
+    fn add_n_11010010(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col + 1, 1, col + 4, 1, col + 6, 2)
+    }
+    ops[0b11010010] = add_n_11010010;
+
+    fn add_n_11010011(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 2, col + 4, 1, col + 6, 2)
+    }
+    ops[0b11010011] = add_n_11010011;
+
+    fn add_n_11010100(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col + 2, 1, col + 4, 1, col + 6, 2)
+    }
+    ops[0b11010100] = add_n_11010100;
+
+    fn add_n_11010101(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_four(rles, open, true, row, col, 1, col + 2, 1, col + 4, 1, col + 6, 2)
+    }
+    ops[0b11010101] = add_n_11010101;
+
+    fn add_n_11010110(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col + 1, 2, col + 4, 1, col + 6, 2)
+    }
+    ops[0b11010110] = add_n_11010110;
+
+    fn add_n_11010111(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 3, col + 4, 1, col + 6, 2)
+    }
+    ops[0b11010111] = add_n_11010111;
+
+    fn add_n_11011000(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 3, 2, col + 6, 2)
+    }
+    ops[0b11011000] = add_n_11011000;
+
+    fn add_n_11011001(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 1, col + 3, 2, col + 6, 2)
+    }
+    ops[0b11011001] = add_n_11011001;
+
+    fn add_n_11011010(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col + 1, 1, col + 3, 2, col + 6, 2)
+    }
+    ops[0b11011010] = add_n_11011010;
+
+    fn add_n_11011011(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 2, col + 3, 2, col + 6, 2)
+    }
+    ops[0b11011011] = add_n_11011011;
+
+    fn add_n_11011100(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 2, 3, col + 6, 2)
+    }
+    ops[0b11011100] = add_n_11011100;
+
+    fn add_n_11011101(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 1, col + 2, 3, col + 6, 2)
+    }
+    ops[0b11011101] = add_n_11011101;
+
+    fn add_n_11011110(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 1, 4, col + 6, 2)
+    }
+    ops[0b11011110] = add_n_11011110;
+
+    fn add_n_11011111(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col, 5, col + 6, 2)
+    }
+    ops[0b11011111] = add_n_11011111;
+
+    fn add_n_11100000(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, true, row, col + 5, 3)
+    }
+    ops[0b11100000] = add_n_11100000;
+
+    fn add_n_11100001(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col, 1, col + 5, 3)
+    }
+    ops[0b11100001] = add_n_11100001;
+
+    fn add_n_11100010(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 1, 1, col + 5, 3)
+    }
+    ops[0b11100010] = add_n_11100010;
+
+    fn add_n_11100011(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col, 2, col + 5, 3)
+    }
+    ops[0b11100011] = add_n_11100011;
+
+    fn add_n_11100100(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 2, 1, col + 5, 3)
+    }
+    ops[0b11100100] = add_n_11100100;
+
+    fn add_n_11100101(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 1, col + 2, 1, col + 5, 3)
+    }
+    ops[0b11100101] = add_n_11100101;
+
+    fn add_n_11100110(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 1, 2, col + 5, 3)
+    }
+    ops[0b11100110] = add_n_11100110;
+
+    fn add_n_11100111(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col, 3, col + 5, 3)
+    }
+    ops[0b11100111] = add_n_11100111;
+
+    fn add_n_11101000(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 3, 1, col + 5, 3)
+    }
+    ops[0b11101000] = add_n_11101000;
+
+    fn add_n_11101001(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 1, col + 3, 1, col + 5, 3)
+    }
+    ops[0b11101001] = add_n_11101001;
+
+    fn add_n_11101010(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col + 1, 1, col + 3, 1, col + 5, 3)
+    }
+    ops[0b11101010] = add_n_11101010;
+
+    fn add_n_11101011(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 2, col + 3, 1, col + 5, 3)
+    }
+    ops[0b11101011] = add_n_11101011;
+
+    fn add_n_11101100(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 2, 2, col + 5, 3)
+    }
+    ops[0b11101100] = add_n_11101100;
+
+    fn add_n_11101101(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 1, col + 2, 2, col + 5, 3)
+    }
+    ops[0b11101101] = add_n_11101101;
+
+    fn add_n_11101110(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 1, 3, col + 5, 3)
+    }
+    ops[0b11101110] = add_n_11101110;
+
+    fn add_n_11101111(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col, 4, col + 5, 3)
+    }
+    ops[0b11101111] = add_n_11101111;
+
+    fn add_n_11110000(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, true, row, col + 4, 4)
+    }
+    ops[0b11110000] = add_n_11110000;
+
+    fn add_n_11110001(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col, 1, col + 4, 4)
+    }
+    ops[0b11110001] = add_n_11110001;
+
+    fn add_n_11110010(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 1, 1, col + 4, 4)
+    }
+    ops[0b11110010] = add_n_11110010;
+
+    fn add_n_11110011(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col, 2, col + 4, 4)
+    }
+    ops[0b11110011] = add_n_11110011;
+
+    fn add_n_11110100(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 2, 1, col + 4, 4)
+    }
+    ops[0b11110100] = add_n_11110100;
+
+    fn add_n_11110101(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_three(rles, open, true, row, col, 1, col + 2, 1, col + 4, 4)
+    }
+    ops[0b11110101] = add_n_11110101;
+
+    fn add_n_11110110(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 1, 2, col + 4, 4)
+    }
+    ops[0b11110110] = add_n_11110110;
+
+    fn add_n_11110111(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col, 3, col + 4, 4)
+    }
+    ops[0b11110111] = add_n_11110111;
+
+    fn add_n_11111000(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, true, row, col + 3, 5)
+    }
+    ops[0b11111000] = add_n_11111000;
+
+    fn add_n_11111001(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col, 1, col + 3, 5)
+    }
+    ops[0b11111001] = add_n_11111001;
+
+    fn add_n_11111010(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col + 1, 1, col + 3, 5)
+    }
+    ops[0b11111010] = add_n_11111010;
+
+    fn add_n_11111011(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col, 2, col + 3, 5)
+    }
+    ops[0b11111011] = add_n_11111011;
+
+    fn add_n_11111100(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, true, row, col + 2, 6)
+    }
+    ops[0b11111100] = add_n_11111100;
+
+    fn add_n_11111101(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_two(rles, open, true, row, col, 1, col + 2, 6)
+    }
+    ops[0b11111101] = add_n_11111101;
+
+    fn add_n_11111110(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, true, row, col + 1, 7)
+    }
+    ops[0b11111110] = add_n_11111110;
+
+    fn add_n_11111111(rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize) {
+        add_one(rles, open, true, row, col, 8)
+    }
+    ops[0b11111111] = add_n_11111111;
+
+    ops
+}
+
+type FPtr = fn(&mut Vec<RunLength>, &mut bool, usize,  usize);
+
+fn populate_rle_lut8() -> RLEOpLut8 {
     let mut ops = [(&|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
     }) as FPtrDyn; 256];
     ops[0b0] = &(|rles : &mut Vec<RunLength>, open : &mut bool, row : usize, col : usize| {
@@ -1233,7 +2635,7 @@ fn lossy_encode_bitonal_pixel(
 }
 
 #[inline(always)]
-fn lossless_encode_bitonal_pixel(
+fn lossless_encode_bitonal_pixel_8(
     lut : &[FPtrDyn],
     row_ix : usize,
     col_ix : usize,
@@ -1255,6 +2657,31 @@ fn lossless_encode_bitonal_pixel(
     }
 }
 
+fn lossless_encode_bitonal_pixel_16(
+    lut : &[BPtrDyn],
+    row_ix : usize,
+    col_ix : usize,
+    row : &[u16],
+    open : &mut bool,
+    rles : &mut Vec<RunLength>,
+) {
+    unsafe {
+        let px = row.get_unchecked(col_ix);
+        if *open {
+            let ones = px.trailing_ones() as usize;
+            if ones > 8 {
+
+            }
+            rles.last_mut().unwrap().length += ones;
+            if ones < 16 {
+                (&*lut[(px >> ones) as usize])(rles, open, row_ix, col_ix*16 + ones);
+            }
+        } else {
+            (&*lut[*px as usize])(rles, open, row_ix, col_ix*16);
+        }
+    }
+}
+
 /* Note the encoding is in reverse order: Empty spaces at the front of the RunLength
 is examined with trailing_zeros, and empty spaces at the end of the RunLength are examined
 with leading_zeros. This representation is lossy because it misses zeroed bits inside each
@@ -1270,10 +2697,23 @@ fn lossy_encode_bitonal_row(row : &[u8], row_ix : usize, rles : &mut Vec<RunLeng
     // assert!(curr_rle.is_none());
 }
 
-fn lossless_encode_bitonal_row(lut : &[FPtrDyn], row : &[u8], row_ix : usize, rles : &mut Vec<RunLength>) {
+fn lossless_encode_bitonal_row_8(lut : &[FPtrDyn], row : &[u8], row_ix : usize, rles : &mut Vec<RunLength>) {
     let mut open = false;
     for col_ix in 0..row.len() {
-        lossless_encode_bitonal_pixel(lut, row_ix, col_ix, row, &mut open, rles);
+        lossless_encode_bitonal_pixel_8(lut, row_ix, col_ix, row, &mut open, rles);
+    }
+}
+
+/* Alternatively, use slice::align_to to get sub-slice that is aligned. */
+fn lossless_encode_bitonal_row_16(lut : &[BPtrDyn], row : &[u8], row_ix : usize, rles : &mut Vec<RunLength>) {
+    let mut open = false;
+    let row_16 = bytemuck::cast_slice::<u8, u16>(row);
+
+    // let (_, row_16, _) = unsafe { row.align_to::<u16>() };
+    unsafe { assert!(std::mem::transmute::<_,usize>(row.as_ptr()) & (std::mem::align_of::<u16>() - 1) == 0); }
+
+    for col_ix in 0..(row.len()/2) {
+        lossless_encode_bitonal_pixel_16(lut, row_ix, col_ix, row_16, &mut open, rles);
     }
 }
 
@@ -1286,11 +2726,11 @@ fn bitonal_encoder() {
 
     let mut img = ImageBuf::<u8>::new_constant(128, 128, 0);
     img.draw(Mark::Dot((64, 64), 32), 255);
-    // img.window_mut((64 - 16, 64 - 16), (32, 32)).unwrap().fill(0);
-    /*img.window_mut((10, 10), (20, 20)).unwrap().fill(255);
+    img.window_mut((64 - 16, 64 - 16), (32, 32)).unwrap().fill(0);
+    img.window_mut((10, 10), (20, 20)).unwrap().fill(255);
     img.window_mut((10, 35), (20, 20)).unwrap().fill(255);
     img.window_mut((10, 100), (20, 20)).unwrap().fill(255);
-    img.window_mut((100, 10), (20, 20)).unwrap().fill(255);*/
+    img.window_mut((100, 10), (20, 20)).unwrap().fill(255);
 
     /*let mut t = Timer::start();
     let mut enc = ChainEncoder::new(img.height(), img.width());
@@ -1823,7 +3263,7 @@ fn bit_encoding() {
     }
     t.time("draw");
 
-    let _ = rles.split();
+    let _ = rles.split(Connectivity::Four);
     t.time("split");
 
     let _ = rles.graph();
@@ -3958,7 +5398,7 @@ pub struct RunLength {
 impl RunLength {
 
     pub fn contains(&self, pt : (usize, usize)) -> bool {
-        pt.0 == self.start.0 && pt.1 >= self.start.1 && pt.1 < self.start.1 + self.length
+        pt.0 == self.start.0 && pt.1 >= self.start.1 && pt.1 <= self.end_col()
     }
 
     pub fn bounds(&self) -> ((usize, usize), (usize, usize)) {
@@ -4025,6 +5465,14 @@ impl RunLength {
     pub fn interval_overlap(&self, other : &Self) -> bool {
         // crate::region::raster::interval_overlap(self.interval(), other.interval())
         self.interval().intersect(other.interval()).is_some()
+    }
+
+    // Evaluates the column overlap of two RunLengths (disregarding their row).
+    // The final RunLength will have row of Self.
+    pub fn overlap(&self, other : &Self) -> Option<Self> {
+        // crate::region::raster::interval_overlap(self.interval(), other.interval())
+        let intv = self.interval().intersect(other.interval())?;
+        Some(RunLength { start : (self.start.0, intv.0), length : intv.1 - intv.0 })
     }
 
 }
@@ -4170,16 +5618,18 @@ pub fn vertical_nonzero_bound_window<'a>(w : &'a Window<'a, u8>) -> Window<'a, u
     w.sub_window((min_r, min_c), shape).unwrap()
 }
 
-// A compact representation for a set of coordinates. Can be used
-// to represent the foreground pixels of a binary image. Each RunLength
-// represents a set of horizontally contiguous points by the first point
+// A compact representation for a set of foregroud binary image pixels.
+// Each RunLength represents a set of horizontally contiguous points by the first point
 // in the sequence and the number of points in the sequence. To speed up
 // search, also carry a set of ranges that signals RunLengths that
 // are part of the same row. RunLengths are always sorted by rows, then
-// by columns within rows.
-// RunLength encodings are sorted by starting points within rows
-// and also by rows, so to determine if a pixel is positive can be
-// done by bisection.
+// by columns within rows, so to determine if a pixel is included
+// in the foreground set can be done by bisection.
+// Connectivity analysis is much faster with a RunLength representation,
+// since horizontal connectivity between pixels is implied by having
+// them packed into separate RunLengths (therefore only the vertical overlap
+// across pairs of rows need to be evaluated to determine connectivity).
+// Binary transitions used in shape analysis are also readily available.
 #[derive(Debug, Clone, Default)]
 pub struct RunLengthCode {
     pub rles : Vec<RunLength>,
@@ -4608,7 +6058,125 @@ fn rle_include() {
 
 }
 
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub enum Connectivity {
+    Four,
+    Eight
+}
+
+const fn mmt_incr() -> [u32; 128] {
+    let mut dst = [0; 128];
+    let mut i = 1;
+    while i < 128 {
+        dst[i] = dst[i-1] + (i as u32);
+        i += 1;
+    }
+    dst
+}
+
+const fn mmt_incr_sq() -> [u32; 128] {
+    let mut dst = [0; 128];
+    let mut i = 1;
+    while i < 128 {
+        dst[i] = dst[i-1] + (i as u32).pow(2);
+        i += 1;
+    }
+    dst
+}
+
+const fn mmt_crossed() -> [[u32; 128];128] {
+    let mut dst = [[0; 128];128];
+    let mut row = 1;
+    while row < 128 {
+        let mut i = 1;
+        while i < 128 {
+            dst[row][i] = dst[row][i-1] + (i as u32)*(row as u32);
+            i += 1;
+        }
+        row += 1;
+    }
+    dst
+}
+
+const MMT_ORD_1 : [u32; 128] = mmt_incr();
+
+const MMT_ORD_2 : [u32; 128] = mmt_incr_sq();
+
+const MMT_CROSSED : [[u32; 128];128] = mmt_crossed();
+
+fn rle_contrib_mmt(rle : &RunLength, mmt : &mut CentralMoments) {
+    mmt.zero += rle.length as f32;
+    mmt.center.0 += (rle.start.0 * rle.length) as f32;
+    mmt.center.1 += (MMT_ORD_1[rle.start.1 + rle.length] - MMT_ORD_1[rle.start.1]) as f32;
+    mmt.xx += (MMT_ORD_2[rle.start.1 + rle.length] - MMT_ORD_2[rle.start.1]) as f32;
+    mmt.yy += (rle.start.0 as f32).powf(2.) * rle.length as f32;
+    mmt.xy += (MMT_CROSSED[rle.start.0][rle.start.1 + rle.length] - MMT_CROSSED[rle.start.0][rle.start.1]) as f32;
+}
+
 impl RunLengthCode {
+
+    pub fn overlap(&self, other : &Self) -> Option<Self> {
+        let mut ix_a = 0;
+        let mut ix_b = 0;
+        let mut ovrlp_rles = Vec::new();
+        let mut ovrlp_rows = Vec::new();
+        while ix_a < self.rows.len() && ix_b < other.rows.len() {
+            let row_a = self.rles[self.rows[ix_a].start].start.0;
+            let row_b = other.rles[other.rows[ix_b].start].start.0;
+            match row_a.cmp(&row_b) {
+                Ordering::Equal => {
+                    let ovrlp_len = ovrlp_rles.len();
+                    for rle_a in &self.rles[self.rows[ix_a].clone()] {
+                        for rle_b in &other.rles[other.rows[ix_b].clone()] {
+                            if let Some(ovrlp) = rle_a.overlap(&rle_b) {
+                                ovrlp_rles.push(ovrlp);
+                            }
+                        }
+                    }
+
+                    if ovrlp_rles.len() > ovrlp_len {
+                        let fresh_range = Range { start : ovrlp_len, end : ovrlp_rles.len() };
+                        ovrlp_rles[fresh_range.clone()].sort_by(|a, b| a.start.1.cmp(&b.start.1) );
+                        ovrlp_rows.push(fresh_range);
+                    }
+
+                    ix_a += 1;
+                },
+                Ordering::Less => {
+                    ix_a += 1;
+                },
+                Ordering::Greater => {
+                    ix_b += 1;
+                }
+            }
+        }
+
+        if ovrlp_rles.len() > 0 {
+            Some(Self {
+                rles : ovrlp_rles,
+                rows : ovrlp_rows
+            })
+        } else {
+            None
+        }
+    }
+
+    // The algorithm uses a LUT to verify the contribution of each RLE to
+    // the binary image momentum. The evaluation of the contribution of
+    // a single RLE is O(1).
+    // TODO Panics if any index is greater than 128.
+    pub fn momentum(&self) -> CentralMoments {
+        let mut mmt = CentralMoments::default();
+        for r in &self.rles {
+            rle_contrib_mmt(r, &mut mmt);
+        }
+        mmt.center.0 /= mmt.zero;
+        mmt.center.1 /= mmt.zero;
+        mmt.xx /= mmt.zero;
+        mmt.yy /= mmt.zero;
+        mmt.xy /= mmt.zero;
+        mmt
+    }
 
     // Adds a single point to this RLE (if not already present).
     // Either increment an existing RLE or innaugurate a new one.
@@ -4722,11 +6290,20 @@ impl RunLengthCode {
     }
 
     pub fn contains(&self, pt : (usize, usize)) -> bool {
-        match self.rows.binary_search_by(|r| self.rles[r.clone()][0].start.0.cmp(&pt.0) ) {
-            Ok(row) => {
-                self.rles[self.rows[row].clone()]
-                    .binary_search_by(|rle| if rle.contains(pt) { Ordering::Equal } else { rle.start.1.cmp(&pt.1) } )
-                    .is_ok()
+        match self.rows.binary_search_by(|r| self.rles[r.start].start.0.cmp(&pt.0) ) {
+            Ok(row_ix) => {
+                for r in self.rles[self.rows[row_ix].clone()].iter() {
+                    match (pt.1.cmp(&r.start.1), pt.1.cmp(&r.end_col())) {
+                        (Ordering::Greater | Ordering::Equal, Ordering::Less | Ordering::Equal) => {
+                            return true;
+                        },
+                        (_, Ordering::Greater) => {
+                            return false;
+                        },
+                        _ => { }
+                    }
+                }
+                false
             },
             Err(_) => false
         }
@@ -4767,6 +6344,11 @@ impl RunLengthCode {
 
     pub fn region(&self) -> Option<crate::shape::Region> {
         self.outer_rect().as_ref().map(|r| crate::shape::Region::from_rect_tuple(r) )
+    }
+
+    pub fn outer_region(&self) -> Option<Region> {
+        let rect = self.outer_rect()?;
+        Some(Region::new((rect.0, rect.1), (rect.2, rect.3)))
     }
 
     pub fn outer_rect(&self) -> Option<(usize, usize, usize, usize)> {
@@ -5168,14 +6750,18 @@ impl RunLengthCode {
         self.rles.iter().fold(0, |m, r| m + r.length )
     }
 
-    // Split this RLE into others based on 4-connectivity
+    // Split this RLE into others based on a connectivity
     // of the pixels inside them.
-    pub fn split(&self) -> BTreeMap<usize, RunLengthCode> {
+    pub fn split(&self, conn : Connectivity) -> BTreeMap<usize, RunLengthCode> {
         let nrows = self.rows.len();
         let mut uf = UnionFind::new(self.rles.len());
         if self.rows.len() == 0 {
             return BTreeMap::new();
         }
+        let side_incr = match conn {
+            Connectivity::Four => 0,
+            Connectivity::Eight => 1
+        };
         let mut last_matched_above : Option<&RunLength> = None;
         let row_pair_iter = self.rows[0..(nrows-1)].iter()
             .zip(self.rows[1..nrows].iter());
@@ -5197,8 +6783,8 @@ impl RunLengthCode {
                     let iter_above = self.rles[row_above.clone()].iter().enumerate();
                     for (local_ix_above, above) in iter_above {
 
-                        if above.end_col() >= rl_below.start.1 {
-                            if above.start.1 <= rl_below.end_col() {
+                        if above.end_col() >= rl_below.start.1.saturating_sub(side_incr) {
+                            if above.start.1 <= rl_below.end_col().saturating_add(side_incr) {
                                 uf.union(row_above.start + local_ix_above, row_below.start + local_ix_below);
                             } else {
                                 // If above start col > below end col, there is
@@ -5206,10 +6792,6 @@ impl RunLengthCode {
                                 break;
                             }
                         }
-                        /*if rl_below.range().intersects(above.range()) {
-                            uf.union(row_above.start + local_ix_above, row_below.start + local_ix_below);
-                        }*/
-
                     }
                 }
             }
@@ -5386,7 +6968,9 @@ impl RunLengthCode {
     /// Returns the RLE lateral points (left points occupy even indices,
     /// right points occupy odd indices). If each row contains more than
     /// one RLE, returns the most extreme points at different RLEs. This
-    /// means the (start, end) points might not be connected.
+    /// means the (start, end) points might not be connected. Contiguous
+    /// pairs are points of the same RLE line, with the even index containing
+    /// the left point and odd indices containing the right point.
     pub fn lateral_points(&self) -> Vec<(usize, usize)> {
         let mut pts = Vec::with_capacity(self.rows.len() * 2);
         for row in &self.rows {
@@ -5523,7 +7107,7 @@ fn rle_split() {
 
     let mut colors : Vec<_> = (50..255).step_by(40).collect();
     let mut i = 0;
-    for (_, rle) in rle.split() {
+    for (_, rle) in rle.split(Connectivity::Four) {
         for pt in rle.points() {
             buf[pt] = colors[i];
         }

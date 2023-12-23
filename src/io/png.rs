@@ -20,7 +20,7 @@ pub fn file_dimensions(path : &str) -> Option<(usize, usize)> {
 pub fn encode_to_file(dec : ImageBuf<u8>, path : &str) -> Result<(),&'static str> {
     let mut f = File::create(path)
         .map_err(|_| { "Error creating file." })?;
-    let buff : Vec<u8> = encode(dec)?;
+    let buff : Vec<u8> = encode(&dec)?;
     f.write(&buff[..]).map_err(
         |_| { "Error writing to file." })?;
     Ok(())
@@ -65,6 +65,13 @@ pub fn decode(
             let gray_image: image::GrayImage = rgbimg.convert();
             Ok(ImageBuf::from_vec(gray_image.into_raw(), ncols))
         },
+        ExtendedColorType::La8 => {
+            let mut buf = Vec::<u8>::from_iter((0..(nrows * ncols * 2)).map(|_| 0 ));
+            let img = dec.read_image(&mut buf[..]).map_err(|_| { "Error reading image" })?;
+            let gaimg = image::GrayAlphaImage::from_raw(ncols as u32, nrows as u32, buf).unwrap();
+            let gray_image: image::GrayImage = gaimg.convert();
+            Ok(ImageBuf::from_vec(gray_image.into_raw(), ncols))
+        },
         _ => {
             Err("Image import error: Unsupported color type. Convert image to L8/RGB/RGBA first.")
         }
@@ -84,8 +91,37 @@ pub fn decode(
 
 }
 
-pub fn encode(
+pub fn to_rgb_raw(dec : ImageBuf<u8>) -> Vec<u8> {
+    let mut dec3 = Vec::<u8>::with_capacity(dec.height() * dec.width() * 3);
+    for px in dec.pixels(1) {
+        for i in 0..3 {
+            dec3.push(*px);
+        }
+    }
+    dec3
+}
+
+pub fn encode_rgb(
     dec : ImageBuf<u8>
+) -> Result<Vec<u8>, &'static str> {
+    let dec3 = to_rgb_raw(dec.clone());
+    assert!(dec3.len() == dec.width() * dec.height() * 3);
+    let mut dst : Vec<u8> = Vec::new();
+    {
+        let ref mut writ = BufWriter::new(&mut dst);
+        let encoder = png::PngEncoder::new(writ);
+        encoder.encode(
+            dec3.as_slice(),
+            dec.width() as u32,
+            dec.height() as u32,
+            image::ColorType::Rgb8
+        ).map_err(|e|{ println!("{:?}", e); "Could not encode image" } )?;
+    }
+    Ok(dst)
+}
+
+pub fn encode(
+    dec : &ImageBuf<u8>
 ) -> Result<Vec<u8>, &'static str> {
     let mut dst : Vec<u8> = Vec::new();
     {

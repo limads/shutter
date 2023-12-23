@@ -1,6 +1,6 @@
 use std::cmp::{PartialEq, Ordering};
 use nalgebra::*;
-use bayes::fit::cluster::{Manhattan, Metric};
+use bayes::fit::ca::{Manhattan, Metric};
 use nalgebra::geometry::Rotation2;
 use nalgebra::Vector2;
 use std::cmp::Ord;
@@ -717,6 +717,7 @@ impl IppiCentralMoments {
     pub unsafe fn get_spatial_moment(&self, m : i32, n : i32) -> Option<f32> {
         let channel = 0;
         let mut val : f64 = 0.;
+        assert!(m + n <= 3 );
         let offset = crate::foreign::ipp::ippi::IppiPoint { x : 0, y : 0 };
         let ans = crate::foreign::ipp::ippi::ippiGetSpatialMoment_64f(
             mem::transmute(self.state.as_ptr()),
@@ -788,7 +789,7 @@ impl IppiCentralMoments {
         Some(val as f32)
     }
 
-    pub fn calculate(&mut self, win : &Window<u8>) -> Option<CentralMoments> {
+    pub fn calculate(&mut self, win : &Window<u8>, snd : bool) -> Option<CentralMoments> {
         unsafe {
             let (step, sz) = crate::image::ipputils::step_and_size_for_window(win);
             let ans = crate::foreign::ipp::ippi::ippiMoments64f_8u_C1R(
@@ -801,10 +802,21 @@ impl IppiCentralMoments {
 
             // 0th moment = area = number of pixels
             let zero = self.get_spatial_moment(0, 0)?;
+            if zero == 0.0 {
+                return None;
+            }
             let m10 = self.get_spatial_moment(1, 0)?;
             let m01 = self.get_spatial_moment(0, 1)?;
             let center_x = m10 / zero;
             let center_y = m01 / zero;
+            let (xx, yy, xy) = if snd {
+                let xx = self.get_spatial_moment(2, 0)? / zero;
+                let yy = self.get_spatial_moment(0, 2)? / zero;
+                let xy = self.get_spatial_moment(1, 1)? / zero;
+                (xx, yy, xy)
+            } else {
+                (0., 0., 0.)
+            };
 
            // let disp_x = self.get_spatial_moment(2, 0)? / zero - center_x * m10;
            // let disp_y = self.get_spatial_moment(0, 2)? / zero - center_y * m01;
@@ -825,9 +837,9 @@ impl IppiCentralMoments {
             Some(CentralMoments {
                 center : (center_y, center_x),
                 zero,
-                xx : 0.0,
-                yy : 0.0,
-                xy : 0.0,
+                xx,
+                yy,
+                xy,
                 xxy : 0.0,
                 yyx : 0.0,
                 xxx : 0.0,
@@ -843,6 +855,7 @@ impl IppiCentralMoments {
 // to pixels at the edge and weight zero for pixels outside it. For a binary image,
 // the moment 0,1/(0,0) and 1,0/(0,0) are the centroid. For a grayscale image,
 // it is the center of gravity (point of equilibrium of the image terrain surface).
+#[derive(Debug, Clone, Default)]
 pub struct CentralMoments {
 
     // (row, col) just convert to f32
@@ -867,6 +880,29 @@ pub struct CentralMoments {
 }
 
 impl CentralMoments {
+
+    pub fn orientation(&self, img_height : usize) -> Option<Orientation> {
+        // let c = (m.center.0, m.center.1);
+        let my = self.center.0;
+        let mx = self.center.1;
+        let mtx = Matrix2::from_row_slice(&[self.xx - mx.powf(2.), self.xy - mx*my, self.xy - mx*my, self.yy - my.powf(2.)]);
+        let Some(sm) = nalgebra::SymmetricEigen::try_new(mtx, 0.0001, 100) else { return None };
+
+        // The orientation of the fst eigenvec gives the ellipse orientation.
+        let u1 = sm.eigenvectors.column(0).clone_owned();
+        let u2 = sm.eigenvectors.column(1).clone_owned();
+
+        let (lambda_1, lambda_2) = (sm.eigenvalues[0], sm.eigenvalues[1]);
+        Some(Orientation {
+            u1,
+            u2,
+            lambda_1,
+            lambda_2,
+            center : self.center,
+            img_height,
+            mass : self.zero as f32
+        })
+    }
 
     pub fn area(&self) -> f32 {
         self.zero
@@ -1398,7 +1434,11 @@ where
         let ovlp_len = joint.end.checked_sub(joint.start)?
             .checked_sub(self.start.abs_diff(other.start))?
             .checked_sub(self.end.abs_diff(other.end))?;
-        Some(Range { start : ovlp_start, end : ovlp_start + ovlp_len })
+        if ovlp_len >= 1 {
+            Some(Range { start : ovlp_start, end : ovlp_start + ovlp_len })
+        } else {
+            None
+        }
     }
 
     fn overlapping_range(&self, b_ranges : &[Range<usize>]) -> Option<RangeInclusive<usize>> {
@@ -1487,18 +1527,18 @@ where
 pub fn enclosing_rect_for_rects(
     qs : impl IntoIterator<Item=(usize, usize, usize, usize)>
 ) -> Option<(usize, usize, usize, usize)> {
-    let mut qs = qs.into_iter();
+    /*let mut qs = qs.into_iter();
     let fst = qs.next()?;
     let mut tl = (fst.0, fst.1);
-    let mut bl = (fst.0 + fst.2, fst.1 + fst.3);
+    let mut br = (fst.0 + fst.2, fst.1 + fst.3);
     while let Some(q) = qs.next() {
         let this_tl = (q.0, q.1);
-        let this_bl = (q.0 + q.2, q.1 + q.3);
-        if this_bl.0 > bl.0 {
-            bl.0 = this_bl.0;
+        let this_br = (q.0 + q.2, q.1 + q.3);
+        if this_br.0 > br.0 {
+            br.0 = this_br.0;
         }
-        if this_bl.1 > bl.1 {
-            bl.1 = this_bl.1;
+        if this_br.1 > br.1 {
+            br.1 = this_br.1;
         }
         if this_tl.0 < tl.0 {
             tl.0 = this_tl.0;
@@ -1507,7 +1547,13 @@ pub fn enclosing_rect_for_rects(
             tl.1 = this_tl.1;
         }
     }
-    Some((tl.0, tl.1, bl.0 - tl.0, bl.1 - tl.1))
+    Some((tl.0, tl.1, br.0 - tl.0, br.1 - tl.1))*/
+    let mut rects : Vec<_> = qs.into_iter().collect();
+    let min_row = rects.iter().map(|r| r.0 ).min()?;
+    let min_col = rects.iter().map(|r| r.1 ).min()?;
+    let max_row = rects.iter().map(|r| r.0+r.2 ).max()?;
+    let max_col = rects.iter().map(|r| r.1+r.3 ).max()?;
+    Some((min_row, min_col, max_row - min_row, max_col - min_col))
 }
 
 #[test]
@@ -1599,10 +1645,10 @@ pub enum Proximity {
     Exclude
 }
 
-/* Represents a cartesian plane with an origin (bottom-left point) and target
+/* Represents a subset of the cartesian plane by an origin (bottom-left point) and target
 (top-right point). This is the floating-point, cartesian plane counterpart
 of the image plane struct Region and Plane. */
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct Area {
     pub origin : Vector2<f32>,
     pub target : Vector2<f32>
@@ -1616,10 +1662,12 @@ impl Area {
     }
 
     pub fn region(&self, size : (usize, usize)) -> Option<crate::shape::Region> {
-        let bl = (size.0.checked_sub(self.origin[0] as usize)?, self.origin[1] as usize);
-        let tr = (size.0.checked_sub(self.target[0] as usize)?, self.target[1] as usize);
-        if tr.0 > bl.0 && tr.1 > bl.1 {
-            Some(crate::shape::Region { cols : Range { start : bl.1, end : tr.1 }, rows : Range { start : bl.0, end : tr.0 } })
+        let bl = (size.0.checked_sub(self.origin[1] as usize)?, self.origin[0] as usize);
+        let tr = (size.0.checked_sub(self.target[1] as usize)?, self.target[0] as usize);
+        if tr.0 < bl.0 && tr.1 > bl.1 {
+            let off = (tr.0, bl.1);
+            let sz = (bl.0.checked_sub(tr.0)?, tr.1.checked_sub(bl.1)?);
+            Some(crate::shape::Region::new(off, sz))
         } else {
             None
         }
@@ -1631,7 +1679,7 @@ impl Area {
 Used to index images. This is equivalent to a rect, containing
 a pair of horizontal (h) and vertical (v) ranges.
 **/
-#[derive(Debug, Clone, Default, PartialEq, Eq, std::hash::Hash)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, std::hash::Hash, serde::Serialize, serde::Deserialize)]
 pub struct Region {
     pub rows : Range<usize>,
     pub cols : Range<usize>
@@ -1646,6 +1694,46 @@ impl From<(usize, usize, usize, usize)> for Region {
 }
 
 impl Region {
+
+    pub fn enclosing(pts : &[(usize, usize)]) -> Option<Self> {
+        let mut r = Self::containing(*pts.get(0)?);
+        for i in 1..pts.len() {
+            r.expand(pts[i]);
+        }
+        Some(r)
+    }
+
+    // Creates a region that just encloses the given point.
+    pub fn containing(pos_u : (usize, usize)) -> Self {
+        Self {
+            rows : Range { start : pos_u.0, end : pos_u.0+1 },
+            cols : Range { start : pos_u.1, end : pos_u.1 + 1}
+        }
+    }
+
+    // Expand this region so it contains this new point.
+    pub fn expand(&mut self, pos_u : (usize, usize)) {
+        if pos_u.0 < self.rows.start {
+            self.rows.start = pos_u.0;
+        }
+        if pos_u.1 < self.cols.start {
+            self.cols.start = pos_u.1;
+        }
+        if pos_u.0 >= self.rows.end {
+            self.rows.end = pos_u.0 + 1;
+        }
+        if pos_u.1 >= self.cols.end {
+            self.cols.end = pos_u.1 + 1;
+        }
+    }
+
+    pub fn last_row(&self) -> usize {
+        self.rows.end.saturating_sub(1)
+    }
+
+    pub fn last_col(&self) -> usize {
+        self.cols.end.saturating_sub(1)
+    }
 
     pub fn is_valid(&self) -> bool {
         self.rows.end > self.rows.start && self.cols.end > self.cols.start
@@ -2258,7 +2346,7 @@ fn vertex_opening() {
 /// m3 = [x1 - x2, y1 - y2; x3 - x4, y3 - y4]
 /// Calculates intersection of two lines, where each line is defined by two points
 /// stacked into a 2x2 matrix (one at each row as [[x y], [x,y]]).
-pub fn line_intersection(m1 : Matrix2<f64>, m2 : Matrix2<f64>) -> Option<Vector2<f64>> {
+pub fn line_intersection(m1 : Matrix2<f32>, m2 : Matrix2<f32>) -> Option<Vector2<f32>> {
     // let diff_x_l1 = line1_pt1.1 as f64 - line1_pt2.1 as f64;
     let diff_x_l1 = m1[(0,0)] - m1[(1,0)];
 
@@ -2302,12 +2390,12 @@ pub fn line_intersection_usize(
     (line2_pt1, line2_pt2) : ((usize, usize), (usize, usize))
 ) -> Option<(usize, usize)> {
     let m1 = Matrix2::from_rows(&[
-        RowVector2::new(line1_pt1.1 as f64, line1_pt1.0 as f64 * -1.),
-        RowVector2::new(line1_pt2.1 as f64, line1_pt2.0 as f64 * -1.)
+        RowVector2::new(line1_pt1.1 as f32, line1_pt1.0 as f32 * -1.),
+        RowVector2::new(line1_pt2.1 as f32, line1_pt2.0 as f32 * -1.)
     ]);
     let m2 = Matrix2::from_rows(&[
-        RowVector2::new(line2_pt1.1 as f64, line2_pt1.0 as f64 * -1.),
-        RowVector2::new(line2_pt2.1 as f64, line2_pt2.0 as f64 * -1.)
+        RowVector2::new(line2_pt1.1 as f32, line2_pt1.0 as f32 * -1.),
+        RowVector2::new(line2_pt2.1 as f32, line2_pt2.0 as f32 * -1.)
     ]);
     let out = line_intersection(m1, m2)?;
     let (x, mut y) = (out[0], out[1]);
@@ -2978,6 +3066,7 @@ pub struct CircleCoords {
     pub radius : usize
 }
 
+#[repr(C)]
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Circle {
     pub center : Vector2<f32>,
@@ -3003,6 +3092,14 @@ pub fn centroid(ptsf : &[Vector2<f32>]) -> Vector2<f32> {
     center
 }
 
+/* A sector (subset of a disk) delimited by two angles. */
+#[derive(Debug, Clone, Copy)]
+pub struct Sector {
+    pub circ : Circle,
+    pub a1 : f64,
+    pub a2 : f64
+}
+
 /* A triangle represents as a triplet of vertices. No
 spatial relationship between the vertices is specified,
 except that they must not be all collinear. */
@@ -3020,7 +3117,11 @@ fn height_equilateral(edge : f32) -> f32 {
 
 impl Triangle {
 
-    pub fn edges(&self) -> [f32; 3] {
+    pub fn new(v1 : Vector2<f32>, v2 : Vector2<f32>, v3 : Vector2<f32>) -> Self {
+        Self { v1, v2, v3 }
+    }
+
+    pub fn edge_lenghts(&self) -> [f32; 3] {
         [
             self.v1.metric_distance(&self.v2),
             self.v2.metric_distance(&self.v3),
@@ -3036,14 +3137,94 @@ impl Triangle {
         ]
     }
 
-    // Finds the Fermat-Torricelli point for a triangle.
-    // https://en.wikipedia.org/wiki/Fermat_point
-    pub fn median_point(&self) -> Vector2<f32> {
-        let [e1, e2, _] = self.edges();
-        let [m12, m23, _] = self.edge_midpoints();
-        unimplemented!()
+    // Find the lengths of the triangle's median lines (mutually intersecting bisectors
+    // from a vertex to the midpoint of the opposite side)
+    pub fn bisector_lines(&self) -> [Line2; 3] {
+        let midpoints = self.edge_midpoints();
+        [
+            Line2 { p1 : self.v3, p2 : midpoints[0] },
+            Line2 { p1 : self.v1, p2 : midpoints[1] },
+            Line2 { p1 : self.v2, p2 : midpoints[2] }
+        ]
     }
 
+    // Finds the Fermat-Torricelli point for a triangle.
+    // https://en.wikipedia.org/wiki/Fermat_point
+    // Original Code by Aaron Becker
+    // (https://www.mathworks.com/matlabcentral/fileexchange/131254-calculate-fermat-point)
+    // A=v3, B=v1, C=v2
+    pub fn geometric_median(&self) -> Vector2<f32> {
+        let [a, b, c] = self.edge_lenghts();
+        // let (ax, ay) = self.v3[0], self.v3[1];
+        // let (bx, by) = self.v1[0], self.v1[1];
+        // let (cx, cy) = self.v2[0], self.v2[1];
+        let fabc = first_isogonic_center(a,b,c);
+        let fbca = first_isogonic_center(b,c,a);
+        let fcab = first_isogonic_center(c,a,b);
+        let fs = (fabc+fbca+fcab);
+        let fic1 = fabc/fs;
+        let fic2 = fbca/fs;
+
+        // Barycentric coords of ffp
+        let ffp1 = median3(0., fic1, 1.);
+        let ffp2 = median3(0., fic2, 1.);
+        let ffp3 = 1. - ffp1 - ffp2;
+
+        // Convert barycentric to cartesian
+        self.v3*ffp1 + self.v1*ffp2 + self.v2*ffp3
+
+    }
+
+    /*pub fn geometric_median(&self) -> Option<Vector2<f32>> {
+        let d_ab = self.v1 - self.v2;
+        let d_bc = self.v2 - self.v3;
+        let mut p_ab = to_polar(&d_ab);
+        let mut p_bc = to_polar(&d_bc);
+
+        // Rotate edges by 60º to get opposite-side vertex. Counter-clockwise (positive angle)
+        // if difference is at upper half-circle; clockwise (negative angle) if difference is at
+        // lower-half circle.
+        p_ab[1] += (std::f32::consts::PI/3.)*d_ab[1].signum();
+        p_bc[1] += (std::f32::consts::PI/3.)*d_bc[1].signum();
+        let vert_ab = to_cartesian(&p_ab) + self.v2;
+        let vert_bc = to_cartesian(&p_bc) + self.v3;
+
+        Line2 { p1 : vert_ab, p2 : self.v3 }.intersection(&Line2 { p1 : vert_bc, p2 : self.v1 })
+    }*/
+
+}
+
+// cargo test --lib -- trigeomedian --nocapture
+#[test]
+fn trigeomedian() {
+    let a = Vector2::new(-0.5, 0.0);
+    let b = Vector2::new(0.5, 0.0);
+    let c = Vector2::new(0.0, 0.86602);
+    let tr = Triangle::new(a, b, c);
+    let m = tr.geometric_median();
+    println!("{}", m);
+    println!("ma = {}", m.metric_distance(&a));
+    println!("mb = {}", m.metric_distance(&b));
+    println!("mc = {}", m.metric_distance(&c));
+}
+
+fn median3(a : f32, b : f32, c : f32) -> f32 {
+    (2.*a + 2.*b + (a+b-2.*c - (a-b).abs()).abs() - (a+b-2.*c+(a-b).abs()).abs()) / 4.
+}
+
+fn first_isogonic_center(a : f32, b : f32, c : f32) -> f32 {
+    a.powf(4.) - 2.*(b.powf(2.) - c.powf(2.)).powf(2.) +
+        a.powf(2.)*(b.powf(2.) + c.powf(2.) +
+            (3.*(-a+b+c)*(a+b-c)*(a-b+c)*(a+b+c)).sqrt()
+        )
+}
+
+fn to_polar(v : &Vector2<f32>) -> Vector2<f32> {
+    Vector2::new(v.magnitude(), v[1].atan2(v[0]))
+}
+
+fn to_cartesian(v : &Vector2<f32>) -> Vector2<f32> {
+    Vector2::new(v[1].cos() * v[0], v[1].sin() * v[0])
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -3057,10 +3238,14 @@ fn guess_or_avg(pts : &[Vector2<f32>], guess : Option<Vector2<f32>>) -> Vector2<
     if let Some(guess) = guess {
         guess
     } else {
-        let mut avg = pts.iter().fold(Vector2::new(0.0, 0.0), |s, pt| s + pt );
-        avg.scale_mut(1. / (pts.len() as f32));
-        avg
+        point_average(pts)
     }
+}
+
+pub fn point_average(pts : &[Vector2<f32>]) -> Vector2<f32> {
+    let mut avg = pts.iter().fold(Vector2::new(0.0, 0.0), |s, pt| s + pt );
+    avg.scale_mut(1. / (pts.len() as f32));
+    avg
 }
 
 // This is f(x) at Cohen's paper.
@@ -3494,6 +3679,12 @@ pub struct Line2 {
 
 impl Line2 {
 
+    pub fn intersection(&self, other : &Self) -> Option<Vector2<f32>> {
+        let l1 = Matrix2::from_rows(&[self.p1.transpose(), self.p2.transpose()]);
+        let l2 = Matrix2::from_rows(&[other.p1.transpose(), other.p2.transpose()]);
+        line_intersection(l1, l2)
+    }
+
     pub fn midpoint(&self) -> Vector2<f32> {
         self.p1.scale(0.5) + self.p2.scale(0.5)
     }
@@ -3534,6 +3725,50 @@ fn test_circle() {
     let c = Circle { center : Vector2::new(10.0, 10.0), radius : 10.0 };
     let l = Line2 { p1 : Vector2::new(1.0, 1.0), p2 : Vector2::new(30.0, 30.0) };
     println!("{:?}", c.incidence(&l, 0.01));
+}
+
+pub fn circular_trace(
+    center : (usize, usize),
+    radius : usize,
+    img_sz : (usize, usize),
+    n_pts : usize
+) -> Vec<(usize, usize)> {
+    (0..n_pts).filter_map(|ix| circular_coord(ix, n_pts, center, radius, img_sz) ).collect()
+}
+
+const TWO_PI : f64 = 6.283185307;
+
+pub fn circular_coord_at_theta(
+    theta : f64,
+    center : (usize, usize),
+    radius : usize,
+    (height, width) : (usize, usize)
+) -> Option<(usize, usize)> {
+    let x = center.1 as f64 + theta.cos() * radius as f64;
+    let y = height.checked_sub(center.0)? as f64 + theta.sin() * radius as f64;
+    if x >= 0.0 && x < width as f64 {
+        if y >= 0.0 && y < height as f64 {
+            let i = height.checked_sub(y as usize)?;
+            let j = x as usize;
+            Some((i, j))
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+
+// Ix: Coordinate over 0..n_points
+pub(crate) fn circular_coord(
+    ix : usize,
+    n_points : usize,
+    center : (usize, usize),
+    radius : usize,
+    (height, width) : (usize, usize)
+) -> Option<(usize, usize)> {
+    let theta = (ix as f64 / n_points as f64) * TWO_PI;
+    circular_coord_at_theta(theta, center, radius, (height, width))
 }
 
 impl Circle {
@@ -3742,3 +3977,178 @@ fn handle_site_event(site : &Vector2<f32>) {
 fn handle_circle_event(lower_pt : &Vector2<f32>) {
 
 }
+
+/* Note orientation follows y-down convention */
+#[derive(Debug, Clone)]
+pub struct Orientation {
+    pub u1 : Vector2<f32>,
+    pub u2 : Vector2<f32>,
+    pub center : (f32, f32),
+    pub mass : f32,
+    pub lambda_1 : f32,
+    pub lambda_2 : f32,
+    img_height : usize,
+}
+
+impl Orientation {
+
+    pub fn bounded_region(&self) -> Region {
+        let c_u = (self.center.0.round() as usize, self.center.1.round() as usize);
+        let el = self.ellipse();
+        let dy = el.major[1].max(el.minor[1]).abs().ceil() as usize;
+        let dx = el.major[0].max(el.minor[0]).abs().ceil() as usize;
+        Region::new(
+            (c_u.0.saturating_sub(dy), c_u.1.saturating_sub(dx)),
+            (2*dy, 2*dx)
+        )
+    }
+
+    // The central point, in y-up orientation.
+    pub fn center(&self) -> Vector2<f32> {
+        Vector2::new(self.center.1, self.img_height as f32 - self.center.0)
+    }
+
+    // The return ellipse follows y-up orientation.
+    pub fn ellipse(&self) -> ellipse::Ellipse {
+        let center = self.center();
+        let a1 = (2.*self.lambda_1.sqrt())*self.u1;
+        let a2 = (2.*self.lambda_2.sqrt())*self.u2;
+        let u1_rev = Vector2::new(a1[0], -1.0*a1[1]);
+        let u2_rev = Vector2::new(a2[0], -1.0*a2[1]);
+        ellipse::Ellipse { center, major : u1_rev, minor : u2_rev }
+    }
+
+    /* Gives angle over the top-right quadrant */
+    pub fn angle(&self) -> f32 {
+        self.u1[1].asin().abs()
+    }
+
+    // For circle, eccentricity=0
+    // For ellipse, eccentricity \in [0,1]
+    pub fn eccentricity(&self) -> f32 {
+        (1.0 - (self.lambda_2 / self.lambda_1)).sqrt()
+    }
+
+    pub fn largest_radius(&self) -> f32 {
+        let r = self.radii();
+        r.0.max(r.1)
+    }
+
+    pub fn smallest_radius(&self) -> f32 {
+        let r = self.radii();
+        r.0.min(r.1)
+    }
+
+    pub fn radii(&self) -> (f32, f32) {
+        (2.*self.lambda_1.sqrt(), 2.*self.lambda_2.sqrt())
+    }
+
+}
+
+/*/* Convert to an ellipse in y-up coordinate space. */
+impl Into<ellipse::Ellipse> for Orientation {
+
+    fn into(self) -> ellipse::Ellipse {
+
+    }
+
+}*/
+
+impl<S> Image<u8, S>
+where
+    S : crate::image::Storage<u8>
+{
+
+    #[cfg(feature="ipp")]
+    pub fn orientation(
+        &self,
+        mt : Option<&mut IppiCentralMoments>,
+    ) -> Option<Orientation> {
+        let mut mt = Brief::from(mt, || IppiCentralMoments::new() );
+        let m = mt.calculate(&self.full_window(), true)?;
+        m.orientation(self.height())
+    }
+
+}
+
+use std::ops::{Deref, DerefMut};
+
+/* Similar to std::borrow::Cow, provides two variants, one for an allocated object
+and another for its reference (but mutable in this case). On construction, takes a closure
+that allocates lazily when a mutable reference is not informed. The object is
+de-allocated after its use, hence its name. Useful when a method requires a work buffer-type
+structure, when the allocation logic is known or can be inferred from the arguments,
+and the user might not want/need to explicitly allocate it on some occasions (unique runs,
+in which the user does not need to explicitly allocate the structure, therefore increasing
+code simplicity and minimizing the errors from mismatches of the structure parameters
+and the function parameteers), or might want to explicitly allocate it (method called many times). */
+pub enum Brief<'a, T> {
+    Borrowed(&'a mut T),
+    Owned(T)
+}
+
+impl<'a, T> From<Option<&'a mut T>> for Brief<'a, T>
+where
+    T : Default
+{
+
+    fn from(opt_mut : Option<&'a mut T>) -> Self {
+        match opt_mut {
+            Some(m) => Brief::Borrowed(m),
+            None => Brief::Owned(T::default())
+        }
+    }
+
+}
+
+impl<'a, T> Brief<'a, T> {
+
+    pub fn from(opt_mut : Option<&'a mut T>, alloc : impl Fn()->T) -> Self {
+        match opt_mut {
+            Some(m) => Brief::Borrowed(m),
+            None => Brief::Owned(alloc())
+        }
+    }
+
+}
+
+impl<'a, T> Deref for Brief<'a, T> {
+
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        match self {
+            Brief::Borrowed(m) => &*m,
+            Brief::Owned(ref m) => m
+        }
+    }
+
+}
+
+impl<'a, T> DerefMut for Brief<'a, T> {
+
+    fn deref_mut(&mut self) -> &mut T {
+        match self {
+            Brief::Borrowed(m) => m,
+            Brief::Owned(ref mut m) => m
+        }
+    }
+
+}
+
+pub fn path(src : (usize, usize), dst : (usize, usize), nrow : usize) -> Vec<(usize, usize)> {
+    let (dist, theta) = crate::image::index::index_distance(src, dst, nrow);
+    let d_max = dist as usize;
+    (0..=d_max).map(|i| line_position(src, theta, i) ).collect()
+}
+
+/* Returns the position (y, x) when starting at src and walking
+straight along angle theta and arriving at position i */
+pub fn line_position(src : (usize, usize), theta : f64, i : usize) -> (usize, usize) {
+    let x_incr = theta.cos() * i as f64;
+    let y_incr = theta.sin() * i as f64;
+    let x_pos = (src.1 as i32 + x_incr as i32) as usize;
+    let y_pos = (src.0 as i32 - y_incr as i32) as usize;
+    (y_pos, x_pos)
+}
+

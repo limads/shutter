@@ -117,6 +117,8 @@ pub mod dct;
 
 pub mod norm;
 
+pub mod ann;
+
 /// Common optical manipulations (calculation of focal depth, magnification, camera calibration, lens distortion correction),
 // pub mod optics;
 

@@ -285,7 +285,19 @@ const CROSS_5_ARR : [u8; 25] = [
     0, 0, 255, 0, 0,
 ];
 
+const CROSS_7_ARR : [u8; 49] = [
+    0, 0, 0, 255, 0, 0, 0,
+    0, 0, 0, 255, 0, 0, 0,
+    0, 0, 0, 255, 0, 0, 0,
+    255, 255, 255, 255, 255, 255, 255,
+    0, 0, 0, 255, 0, 0, 0,
+    0, 0, 0, 255, 0, 0, 0,
+    0, 0, 0, 255, 0, 0, 0,
+];
+
 pub const CROSS_5_KERNEL : Window<'static, u8> = Window::from_static::<25, 5>(&CROSS_5_ARR);
+
+pub const CROSS_7_KERNEL : Window<'static, u8> = Window::from_static::<49, 7>(&CROSS_7_ARR);
 
 pub const NEG_CROSS_5_KERNEL : Window<'static, u8> = Window::from_static::<25, 5>(&negate_array(CROSS_5_ARR));
 

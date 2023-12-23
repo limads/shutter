@@ -92,6 +92,7 @@ where
         #[cfg(feature="ipp")]
         unsafe {
             let mut new_img = ImageBuf::<P>::new_empty(self.height(), self.width());
+            // let mut new_img = ImageBuf::<P>::new_constant(self.height(), self.width(), P::zero());
             new_img.copy_from(self);
             return new_img;
         }

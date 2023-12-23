@@ -38,7 +38,7 @@ statrs="0.16.0"
 
 # gstreamer-gl = { version = "0.17.0" }
 # anyhow = "1.0.38"
-once_cell = { version = "1.5.2", optional = true }
+once_cell = { version = "1.5.2" }
 # lazy_static = "1.0"
 # structopt = "0.3"
 ripple = { path = "../ripple" }
@@ -53,6 +53,7 @@ image = "0.23.14"
 # rhai =  { path = "/home/diego/Downloads/rhai", features = ["sync", "metadata", "internals"] }
 # rhai = { version = "1.3.0", features = ["sync", "metadata", "internals"] }
 tempfile = "*"
+prost = "0.12.1"
 # mlua = { version = "0.7.3", features = ["lua54", "serialize", "module"], optional=true }
 # smartstring = { version = "0.2.7", default-features = false }
 # nohash-hasher = "0.2.0"
@@ -64,7 +65,7 @@ rand = "0.8.5"
 vlfeat = { path = "deps/vlfeat" }
 smallvec="1.10.0"
 rangetools = "0.1.4"
-
+bytemuck="1.13.1"
 # euclid = "0.2.6"
 
 [features]

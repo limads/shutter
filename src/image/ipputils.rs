@@ -179,6 +179,7 @@ pub fn row_size_bytes<T>(ncol : usize) -> i32 {
     (ncol * mem::size_of::<T>()) as i32
 }
 
+#[derive(Clone)]
 pub struct IppiResize {
     spec_bytes : Vec<u8>,
     init_buf_bytes : Vec<u8>,

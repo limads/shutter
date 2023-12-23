@@ -51,6 +51,11 @@ where
         }
     }
 
+    pub fn mark(&mut self, mark : Mark, color : u8) {
+        self.draw(mark, color);
+    }
+
+    // TODO rename to mark (uses only integer coordinates).
     pub fn draw(&mut self, mark : Mark, color : u8) {
         match mark {
             Mark::Cross(pos, sz) => {
@@ -109,6 +114,9 @@ where
                 self.draw(Mark::Line(br, bl), color);
                 self.draw(Mark::Line(bl, tl), color);
             },
+            Mark::Region(r) => {
+                self.draw(Mark::Rect(r.offset(), r.size()), color);
+            },
             Mark::Digit(pos, val, sz) => {
                 // let tl_pos = (self.offset().0 + pos.0, self.offset().1 + pos.1);
                 
@@ -164,15 +172,8 @@ where
 
                 let n_points = (TWO_PI * radius as f64) as usize + 4;
                 for ix in 0..=n_points {
-                    let theta = (ix as f64 / n_points as f64) * TWO_PI;
-                    let x = pos.1 as f64 + theta.cos() * radius as f64;
-                    let y = (self.height() - pos.0) as f64 + theta.sin() * radius as f64;
-                    if x >= 0.0 && x < self.width() as f64 {
-                        if y >= 0.0 && y < self.height() as f64 {
-                            let i = self.height() - y as usize;
-                            let j = x as usize;
-                            self[(i, j)] = color;
-                        }
+                    if let Some((i, j)) = crate::shape::circular_coord(ix, n_points, pos, radius, self.size()) {
+                        self[(i, j)] = color;
                     }
                 }
             },
@@ -248,7 +249,7 @@ where
                 for r in 0..self.height() {
                     for c in 0..self.width() {
                         let pt = Vector2::new(c as f32, (self.height() - r) as f32);
-                        if crate::shape::ellipse::contains(&el, &pt) {
+                        if el.contains(&pt) {
                             self[(r, c)] = color;
                         }
                     }
@@ -267,9 +268,41 @@ where
         }
     }
 
+    // TODO rename to draw (uses floating point coordinates)
+    pub fn draw_shape(&mut self, shape : Shape, color : u8) {
+        match shape {
+            Shape::Point(pt) => {
+                let c = (self.height() - pt[1] as usize, pt[0] as usize);
+                self.draw(Mark::Cross(c, 3), color);
+            },
+            Shape::Ellipse(el) => {
+                let n = (el.major.magnitude().max(el.minor.magnitude()).ceil() as usize).max(8);
+                self.draw(Mark::Ellipse(el.into(), n), color);
+            },
+            Shape::Circle(circ) => {
+                if self.height() as f32 - circ.center[1] < 0.0 {
+                    return;
+                }
+                let c = (self.height() - circ.center[1] as usize, circ.center[0] as usize);
+                self.draw(Mark::Circle(c, circ.radius as usize), color);
+            }
+        }
+    }
+
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub enum Shape {
+
+    Point(Vector2<f32>),
+
+    Ellipse(crate::shape::ellipse::Ellipse),
+
+    Circle(crate::shape::Circle)
+
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Mark {
 
     // Position, square lenght and color
@@ -296,6 +329,8 @@ pub enum Mark {
     /// TL pos, size and color
     Rect((usize, usize), (usize, usize)),
 
+    Region(crate::shape::Region),
+
     /// Arbitrary shape coordinates; whether to close it; and color
     Shape(Vec<(usize, usize)>, bool),
 
@@ -307,7 +342,7 @@ pub enum Mark {
 
     FilledEllipse(crate::shape::ellipse::Ellipse),
 
-    Ellipse(OrientedEllipse, usize)
+    Ellipse(OrientedEllipse, usize),
 
 }
 
@@ -536,10 +571,7 @@ pub fn draw_line(
     let (dist, theta) = index::index_distance(src, dst, nrow);
     let d_max = dist as usize;
     for i in 0..=d_max {
-        let x_incr = theta.cos() * i as f64;
-        let y_incr = theta.sin() * i as f64;
-        let x_pos = (src.1 as i32 + x_incr as i32) as usize;
-        let y_pos = (src.0 as i32 - y_incr as i32) as usize;
+        let (y_pos, x_pos) = crate::shape::line_position(src, theta, i);
         buf[y_pos*ncol + x_pos] = color;
     }
 }

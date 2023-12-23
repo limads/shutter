@@ -71,7 +71,7 @@ impl ImageGrid {
 
 pub fn to_html(win : &Window<'_, u8>) -> String {
     let img = win.clone_owned();
-    let png = encode(img).unwrap();
+    let png = encode(&img).unwrap();
     format!("<img src='data:image/png;base64,{}' />", base64::encode(png))
 }
 

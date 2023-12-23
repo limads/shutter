@@ -240,6 +240,20 @@ where
         })
     }
 
+    /*pub fn complement_windows<'a>(
+        &'a self,
+        tl : (usize, usize),
+        sz : (usize, usize)
+    ) -> Option<WindowNeighborhood<'a, P>> {
+        Some(WindowNeighborhood {
+            center : self.window(center_tl, sz)?,
+            left : self.window((center_tl.0, center_tl.1 - sz.1), horiz_sz)?,
+            top : self.window((center_tl.0 - sz.0, center_tl.1), vert_sz)?,
+            right : self.window((center_tl.0, center_tl.1 + sz.1), horiz_sz)?,
+            bottom : self.window((center_tl.0 + sz.0, center_tl.1), vert_sz)?
+        })
+    }*/
+
     // Get the four windows at top, left, bottom and right of a center window
     // identified by its top-left position, where top/bottom neighboring windows are
     // neigh_ext x sz.1 and left/right neighboring windows are sz.0 x sz.0

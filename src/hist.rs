@@ -5,7 +5,7 @@ use std::cmp::{Ord, Ordering};
 use num_traits::AsPrimitive;
 use std::ops::Range;
 use bayes::calc::rank::Rank;
-use bayes::calc::running::Accumulated;
+// use bayes::calc::running::Accumulated;
 
 // TODO perhaps use space = "0.18.0"
 
@@ -669,7 +669,7 @@ impl ColorProfile {
 
     pub fn dense_regions(&self, min_count_per_px : usize, min_dist : f64, min_cluster_sz : usize) -> Vec<(u8, u8)> {
     
-        use bayes::fit::cluster::SpatialClustering;
+        use bayes::fit::ca::SpatialClustering;
         
         let pts : Vec<[f64; 1]> = self.0.iter()
             .enumerate()

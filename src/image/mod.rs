@@ -361,6 +361,8 @@ where
     P : Pixel
 {
     
+    /* Returns the underlying slice. Danger: This will output pixels that are
+    not accessible from the original window. Perhaps it is best to lave to ImageBuf. */
     pub fn as_slice(&self) -> &[P] {
         self.slice.as_ref()
     }
@@ -467,6 +469,14 @@ where
     ) -> Option<ImageRef<P>> {
         let (y, x, h, w) = area.region(self.sz)?.to_rect_tuple();
         self.window((y, x), (h, w))
+    }
+
+    // Perhaps rename to inner_window?
+    pub fn central_window(
+        &self,
+        sz : (usize, usize)
+    ) -> Option<ImageRef<P>> {
+        self.centered_window((self.height() / 2, self.width() / 2), sz)
     }
 
     pub fn centered_window(
@@ -821,6 +831,7 @@ pub trait FloatPixel where Self : Pixel + num_traits::Float { }
 
 impl FloatPixel for f32 { }
 
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub enum Depth {
     U8,
     I8,
@@ -829,6 +840,27 @@ pub enum Depth {
     I32,
     U32,
     F32
+}
+
+impl std::str::FromStr for Depth {
+
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "u8" => Ok(Self::U8),
+            _ => unimplemented!()
+        }
+    }
+}
+
+impl std::string::ToString for Depth {
+    fn to_string(&self) -> String {
+        match self {
+            Self::U8 => "u8".to_string(),
+            _ => unimplemented!()
+        }
+    }
 }
 
 pub use storage::*;
@@ -994,7 +1026,20 @@ where
     pub fn transpose_mut(&mut self) {
         // let original = self.clone();
         // self.transpose_from(&original.full_window());
-        unimplemented!()
+        // unimplemented!()
+        #[cfg(feature="ipp")]
+        unsafe {
+            if self.pixel_is::<u8>() {
+                let ans = crate::foreign::ipp::ippi::ippiTranspose_8u_C1IR(
+                    std::mem::transmute(self.as_mut_ptr()),
+                    self.byte_stride() as i32,
+                    self.size().into()
+                );
+                assert!(ans == 0);
+                return;
+            }
+        }
+        unimplemented!();
     }
 
     // Splits this image over S owning, memory-contiguous blocks. This does not
@@ -1257,7 +1302,7 @@ impl ImageBuf<u8> {
         use tempfile;
 
         let mut tf = tempfile::NamedTempFile::new().unwrap();
-        let png = crate::io::encode(self.clone()).unwrap();
+        let png = crate::io::encode(&self).unwrap();
         tf.write_all(&png).unwrap();
         let path = tf.path();
         let new_path = format!("{}.png", path.to_str().unwrap());
@@ -1505,6 +1550,10 @@ impl<'a, P> ImageRef<'a, P> {
         } else {
             None
         }
+    }
+
+    pub fn from_slice_symmetric(src : &'a [P]) -> Option<Self> {
+        Self::from_square_slice(src)
     }
 
     /// Creates a window that cover the whole slice src, assuming it represents a square image.
@@ -2088,6 +2137,8 @@ where
     S : StorageMut<P>,
 {
 
+    /* Returns the underlying slice. Danger: This will output pixels that are
+    not accessible from the original window. Perhaps it is best to lave to ImageBuf. */
     pub fn as_mut_slice(&mut self) -> &mut [P] {
         self.slice.as_mut()
     }
@@ -3334,24 +3385,6 @@ pub fn coords_across_line(
             (y_pos, x_pos)
         }))
     }
-}
-
-impl ImageBuf<u8> {
-
-    pub fn filter_max(&self, height : usize, width : usize) -> Self {
-        let mut dst = ImageBuf::new_constant_like(&self, 0);
-        crate::local::IppiFilterMinMax::new(self.height(), self.width(), (height, width), false)
-            .apply(&self, &mut dst);
-        dst
-    }
-
-    pub fn filter_box(&self, height : usize, width : usize) -> Self {
-        let mut dst = ImageBuf::new_constant_like(&self, 0);
-        crate::local::IppiFilterBox::new(self.height(), self.width(), (height, width))
-            .apply(&self, &mut dst);
-        dst
-    }
-
 }
 
 /*impl rhai::CustomType for ImageBuf<u8> {

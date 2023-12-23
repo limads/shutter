@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::ops::Range;
 use crate::image::WindowMut;
 // use crate::segmentation;
-use bayes::fit::{cluster::KMeans, cluster::KMeansSettings, Estimator};
-use bayes::fit::cluster::SpatialClustering;
+use bayes::fit::{ca::KMeans, ca::KMeansSettings, Estimator};
+use bayes::fit::ca::SpatialClustering;
 use std::cmp::Ordering;
 use crate::hist::ColorProfile;
 use serde::{Serialize, Deserialize};
@@ -2456,7 +2456,7 @@ pub fn extract_extreme_colors(
     km : &KMeans,
     sample : impl Iterator<Item=impl Borrow<[f64]>> + Clone
 ) -> Vec<(u8, u8)> {
-    (0..km.means().count()).map(|ix| bayes::fit::cluster::extremes(&km, sample.clone(), ix).unwrap() )
+    (0..km.means().count()).map(|ix| bayes::fit::ca::extremes(&km, sample.clone(), ix).unwrap() )
         .map(|(low, high)| (flatten_to_8bit(&low), flatten_to_8bit(&high)) )
         .collect::<Vec<_>>()
 }

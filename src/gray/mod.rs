@@ -2,10 +2,12 @@ use crate::image::*;
 use std::default::Default;
 // use crate::prelude::Raster;
 use std::mem;
+use std::mem::transmute;
 use bayes::calc::*;
 use std::collections::BTreeMap;
 use std::ops::Sub;
 use crate::hist::{GrayHistogram, GridHistogram, ColorProfile};
+use std::cmp::Ordering;
 
 // Alt name to truncate towards extremes: clipping (but really to max and min). This
 // might be a special case of conditional_fill (but take as argument a scalar foreground
@@ -13,7 +15,7 @@ use crate::hist::{GrayHistogram, GridHistogram, ColorProfile};
 // Alt name to invert: negative.
 // 
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub enum Foreground {
 
     Exactly(u8),
@@ -152,7 +154,101 @@ where
     
 }
 
-impl<S> Image<u8, S> 
+impl<S> Image<f32, S>
+where
+    S : Storage<f32>
+{
+
+    pub fn approx_eq_to<T, U>(&mut self, other : &Image<f32, T>, eps : f32, dst : &mut Image<u8, U>)
+    where
+        T : Storage<f32>,
+        U : StorageMut<u8>
+    {
+        unsafe {
+            let ans = crate::foreign::ipp::ippi::ippiCompareEqualEps_32f_C1R(
+                self.as_ptr(),
+                self.byte_stride() as i32,
+                other.as_ptr(),
+                other.byte_stride() as i32,
+                dst.as_mut_ptr(),
+                dst.byte_stride() as i32,
+                self.size().into(), eps
+            );
+            assert!(ans == 0);
+        }
+    }
+
+    pub fn scalar_approx_eq_to<T>(&mut self, scalar : f32, eps : f32, dst : &mut Image<u8, T>)
+    where
+        T : StorageMut<u8>
+    {
+        unsafe {
+            let ans = crate::foreign::ipp::ippi::ippiCompareEqualEpsC_32f_C1R(
+                self.as_ptr(),
+                self.byte_stride() as i32,
+                scalar,
+                dst.as_mut_ptr(),
+                dst.byte_stride() as i32,
+                self.size().into(),
+                eps
+            );
+            assert!(ans == 0);
+        }
+    }
+
+}
+
+impl<P, S> Image<P, S>
+where
+    P : Pixel,
+    S : Storage<P>
+{
+
+    // This is same as img.threshold_to. Perhaps reserve the name threshold
+    // to a function that writes only the matching values, and the function
+    // that overwrites everything is called cmp_to. This writes to a binary
+    // image if cmp == Equal, cmp == Less or cmp == Greater.
+    pub fn scalar_cmp_to<T>(&self, ord : Ordering, scalar : P, dst : &mut Image<u8, T>)
+    where
+        T : StorageMut<u8>
+    {
+        let cmp_op = match ord {
+            Ordering::Less => crate::foreign::ipp::ippi::IppCmpOp_ippCmpLessEq,
+            Ordering::Equal => crate::foreign::ipp::ippi::IppCmpOp_ippCmpEq,
+            Ordering::Greater => crate::foreign::ipp::ippi::IppCmpOp_ippCmpGreaterEq
+        };
+        unsafe {
+            if self.pixel_is::<u8>() {
+                let ans = crate::foreign::ipp::ippi::ippiCompareC_8u_C1R(
+                    transmute(self.as_ptr()),
+                    self.byte_stride() as i32,
+                    *transmute::<_, &u8>(&scalar),
+                    dst.as_mut_ptr(),
+                    dst.byte_stride() as i32,
+                    self.size().into(),
+                    cmp_op
+                );
+                assert!(ans == 0);
+            } else if self.pixel_is::<f32>() {
+                let ans = crate::foreign::ipp::ippi::ippiCompareC_32f_C1R(
+                    transmute(self.as_ptr()),
+                    self.byte_stride() as i32,
+                    *transmute::<_, &f32>(&scalar),
+                    dst.as_mut_ptr(),
+                    dst.byte_stride() as i32,
+                    self.size().into(),
+                    cmp_op
+                );
+                assert!(ans == 0);
+            } else {
+                unimplemented!()
+            }
+        }
+    }
+
+}
+
+impl<S> Image<u8, S>
 where
     S : Storage<u8>
 {

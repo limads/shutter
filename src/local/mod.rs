@@ -9,6 +9,79 @@ pub use ripple::conv::*;
 use std::fmt::Debug;
 use std::ops::Add;
 
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub enum Axis {
+    Vertical,
+    Horizontal,
+    Both
+}
+
+#[cfg(feature="ipp")]
+impl<S : Storage<u8>> Image<u8, S> {
+
+    pub fn filter_sobel(&self, axs : Axis, mask_sz : usize) -> ImageBuf<i16> {
+        let mut dst = ImageBuf::<i16>::new_constant(self.height(), self.width(), 0);
+        match axs {
+            Axis::Both => {
+                let mut sobel = IppFilterSobel::new((self.height(), self.width()), mask_sz);
+                sobel.apply(self, &mut dst);
+            },
+            Axis::Vertical => {
+                let mut sobel = IppFilterSobelVert::new((self.height(), self.width()), mask_sz);
+                sobel.apply(self, &mut dst);
+            },
+            Axis::Horizontal => {
+                let mut sobel = IppFilterSobelHoriz::new((self.height(), self.width()), mask_sz);
+                sobel.apply(self, &mut dst);
+            }
+        }
+        dst
+    }
+
+}
+
+#[cfg(feature="ipp")]
+impl<S : Storage<u8>> Image<u8, S> {
+
+    pub fn filter_maximum(&self, height : usize, width : usize) -> ImageBuf<u8> {
+        let mut dst = ImageBuf::new_constant_like(&self, 0);
+        crate::local::IppiFilterMinMax::new(self.height(), self.width(), (height, width), false)
+            .apply(&self, &mut dst);
+        dst
+    }
+
+    pub fn filter_minimum(&self, height : usize, width : usize) -> ImageBuf<u8> {
+        let mut dst = ImageBuf::new_constant_like(&self, 0);
+        crate::local::IppiFilterMinMax::new(self.height(), self.width(), (height, width), true)
+            .apply(&self, &mut dst);
+        dst
+    }
+
+    pub fn filter_box(&self, height : usize, width : usize) -> ImageBuf<u8> {
+        let mut dst = ImageBuf::new_constant_like(&self, 0);
+        crate::local::IppiFilterBox::new(self.height(), self.width(), (height, width))
+            .apply(&self, &mut dst);
+        dst
+    }
+
+    pub fn filter_sobel_abs(&self, axis : Axis, mask_sz : usize) -> ImageBuf<u8> {
+        let mut sobel_abs = self.clone_owned();
+        let sobel = self.filter_sobel(axis, mask_sz);
+        sobel.abs_convert_to(&mut sobel_abs);
+        sobel_abs
+    }
+
+    pub fn filter_weiner(&self) -> ImageBuf<u8> {
+        // let mut sobel =
+        unimplemented!()
+    }
+
+    pub fn filter_median(&self) -> ImageBuf<u8> {
+        unimplemented!()
+    }
+
+}
+
 #[test]
 pub fn sum_row() {
     let side = 4;
@@ -586,6 +659,13 @@ where
     pub fn indexed_maximum(&self) -> ((usize, usize), N) {
         let (_, Some((r, c, val))) = min_max_idx(&self.full_window(), false, true) else { panic!() };
         ((r, c), val)
+    }
+
+    pub fn masked_indexed_extrema<T:Storage<u8>>(&self, mask : &Image<u8, T>) -> (((usize, usize), N), ((usize, usize), N)) {
+        let (Some((rmin, cmin, valmin)), Some((rmax, cmax, valmax))) = masked_min_max_idx(&self.full_window(), mask) else {
+            panic!()
+        };
+        (((rmin, cmin), valmin), ((rmax, cmax), valmax))
     }
 
     pub fn indexed_extrema(&self) -> (((usize, usize), N), ((usize, usize), N)) {
@@ -1404,6 +1484,7 @@ impl IppFilterSobel {
 
 }
 
+
 #[derive(Clone, Debug)]
 pub struct IppFilterSobelHoriz {
     buf : Vec<u8>,
@@ -1512,6 +1593,234 @@ impl IppFilterSobelVert {
                 src.size().into(),
                 self.mask,
                 // self.norm,
+                crate::foreign::ipp::ippi::_IppiBorderType_ippBorderConst,
+                border_val,
+                self.buf.as_mut_ptr()
+            );
+            assert!(ans == 0);
+        }
+    }
+
+}
+
+#[derive(Clone, Debug)]
+pub struct IppFilterPrewittHoriz {
+    buf : Vec<u8>,
+    mask : crate::foreign::ipp::ippi::IppiMaskSize,
+    norm : crate::foreign::ipp::ippi::IppNormType
+}
+
+impl IppFilterPrewittHoriz {
+
+    pub fn new(sz : (usize, usize), mask_sz : usize) -> Self {
+        let mask = if mask_sz == 3 {
+            crate::foreign::ipp::ippi::_IppiMaskSize_ippMskSize3x3
+        } else {
+            crate::foreign::ipp::ippi::_IppiMaskSize_ippMskSize5x5
+        };
+        let num_channels = 1;
+        let norm = crate::foreign::ipp::ippi::IppNormType_ippNormL1;
+        unsafe {
+            let mut buf_sz = 0;
+            let ans = crate::foreign::ipp::ippi::ippiFilterPrewittHorizBorderGetBufferSize(
+                sz.into(),
+                mask,
+                crate::foreign::ipp::ippi::IppDataType_ipp8u,
+                crate::foreign::ipp::ippi::IppDataType_ipp16s,
+                num_channels,
+                &mut buf_sz
+            );
+            assert!(ans == 0);
+            let mut buf : Vec<u8> = (0..(buf_sz as usize)).map(|_| 0u8 ).collect();
+            Self { buf, mask, norm }
+        }
+    }
+
+    pub fn apply(
+        &mut self,
+        src : &Image<u8, impl Storage<u8>>,
+        dst : &mut Image<i16, impl StorageMut<i16>>
+    ) {
+        unsafe {
+            let border_val = 0;
+            let ans = crate::foreign::ipp::ippi::ippiFilterPrewittHorizBorder_8u16s_C1R(
+                src.as_ptr(),
+                src.byte_stride() as i32,
+                dst.as_mut_ptr(),
+                dst.byte_stride() as i32,
+                src.size().into(),
+                self.mask,
+                crate::foreign::ipp::ippi::_IppiBorderType_ippBorderConst,
+                border_val,
+                self.buf.as_mut_ptr()
+            );
+            assert!(ans == 0);
+        }
+    }
+
+}
+
+#[derive(Clone, Debug)]
+pub struct IppFilterPrewittVert {
+    buf : Vec<u8>,
+    mask : crate::foreign::ipp::ippi::IppiMaskSize,
+    norm : crate::foreign::ipp::ippi::IppNormType
+}
+
+impl IppFilterPrewittVert {
+
+    pub fn new(sz : (usize, usize), mask_sz : usize) -> Self {
+        let mask = if mask_sz == 3 {
+            crate::foreign::ipp::ippi::_IppiMaskSize_ippMskSize3x3
+        } else {
+            crate::foreign::ipp::ippi::_IppiMaskSize_ippMskSize5x5
+        };
+        let num_channels = 1;
+        let norm = crate::foreign::ipp::ippi::IppNormType_ippNormL1;
+        unsafe {
+            let mut buf_sz = 0;
+            let ans = crate::foreign::ipp::ippi::ippiFilterPrewittVertBorderGetBufferSize(
+                sz.into(),
+                mask,
+                crate::foreign::ipp::ippi::IppDataType_ipp8u,
+                crate::foreign::ipp::ippi::IppDataType_ipp16s,
+                num_channels,
+                &mut buf_sz
+            );
+            assert!(ans == 0);
+            let mut buf : Vec<u8> = (0..(buf_sz as usize)).map(|_| 0u8 ).collect();
+            Self { buf, mask, norm }
+        }
+    }
+
+    pub fn apply(
+        &mut self,
+        src : &Image<u8, impl Storage<u8>>,
+        dst : &mut Image<i16, impl StorageMut<i16>>
+    ) {
+        unsafe {
+            let border_val = 0;
+            let ans = crate::foreign::ipp::ippi::ippiFilterPrewittVertBorder_8u16s_C1R(
+                src.as_ptr(),
+                src.byte_stride() as i32,
+                dst.as_mut_ptr(),
+                dst.byte_stride() as i32,
+                src.size().into(),
+                self.mask,
+                crate::foreign::ipp::ippi::_IppiBorderType_ippBorderConst,
+                border_val,
+                self.buf.as_mut_ptr()
+            );
+            assert!(ans == 0);
+        }
+    }
+
+}
+
+#[derive(Clone, Debug)]
+pub struct IppFilterRobertsHoriz {
+    buf : Vec<u8>,
+    mask : crate::foreign::ipp::ippi::IppiMaskSize,
+    norm : crate::foreign::ipp::ippi::IppNormType
+}
+
+impl IppFilterRobertsHoriz {
+
+    pub fn new(sz : (usize, usize), mask_sz : usize) -> Self {
+        let mask = if mask_sz == 3 {
+            crate::foreign::ipp::ippi::_IppiMaskSize_ippMskSize3x3
+        } else {
+            crate::foreign::ipp::ippi::_IppiMaskSize_ippMskSize5x5
+        };
+        let num_channels = 1;
+        let norm = crate::foreign::ipp::ippi::IppNormType_ippNormL1;
+        unsafe {
+            let mut buf_sz = 0;
+            let ans = crate::foreign::ipp::ippi::ippiFilterRobertsDownBorderGetBufferSize(
+                sz.into(),
+                mask,
+                crate::foreign::ipp::ippi::IppDataType_ipp8u,
+                crate::foreign::ipp::ippi::IppDataType_ipp16s,
+                num_channels,
+                &mut buf_sz
+            );
+            assert!(ans == 0);
+            let mut buf : Vec<u8> = (0..(buf_sz as usize)).map(|_| 0u8 ).collect();
+            Self { buf, mask, norm }
+        }
+    }
+
+    pub fn apply(
+        &mut self,
+        src : &Image<u8, impl Storage<u8>>,
+        dst : &mut Image<i16, impl StorageMut<i16>>
+    ) {
+        unsafe {
+            let border_val = 0;
+            let ans = crate::foreign::ipp::ippi::ippiFilterRobertsDownBorder_8u16s_C1R(
+                src.as_ptr(),
+                src.byte_stride() as i32,
+                dst.as_mut_ptr(),
+                dst.byte_stride() as i32,
+                src.size().into(),
+                self.mask,
+                crate::foreign::ipp::ippi::_IppiBorderType_ippBorderConst,
+                border_val,
+                self.buf.as_mut_ptr()
+            );
+            assert!(ans == 0);
+        }
+    }
+
+}
+
+#[derive(Clone, Debug)]
+pub struct IppFilterRobertsVert {
+    buf : Vec<u8>,
+    mask : crate::foreign::ipp::ippi::IppiMaskSize,
+    norm : crate::foreign::ipp::ippi::IppNormType
+}
+
+impl IppFilterRobertsVert {
+
+    pub fn new(sz : (usize, usize), mask_sz : usize) -> Self {
+        let mask = if mask_sz == 3 {
+            crate::foreign::ipp::ippi::_IppiMaskSize_ippMskSize3x3
+        } else {
+            crate::foreign::ipp::ippi::_IppiMaskSize_ippMskSize5x5
+        };
+        let num_channels = 1;
+        let norm = crate::foreign::ipp::ippi::IppNormType_ippNormL1;
+        unsafe {
+            let mut buf_sz = 0;
+            let ans = crate::foreign::ipp::ippi::ippiFilterRobertsUpBorderGetBufferSize(
+                sz.into(),
+                mask,
+                crate::foreign::ipp::ippi::IppDataType_ipp8u,
+                crate::foreign::ipp::ippi::IppDataType_ipp16s,
+                num_channels,
+                &mut buf_sz
+            );
+            assert!(ans == 0);
+            let mut buf : Vec<u8> = (0..(buf_sz as usize)).map(|_| 0u8 ).collect();
+            Self { buf, mask, norm }
+        }
+    }
+
+    pub fn apply(
+        &mut self,
+        src : &Image<u8, impl Storage<u8>>,
+        dst : &mut Image<i16, impl StorageMut<i16>>
+    ) {
+        unsafe {
+            let border_val = 0;
+            let ans = crate::foreign::ipp::ippi::ippiFilterRobertsUpBorder_8u16s_C1R(
+                src.as_ptr(),
+                src.byte_stride() as i32,
+                dst.as_mut_ptr(),
+                dst.byte_stride() as i32,
+                src.size().into(),
+                self.mask,
                 crate::foreign::ipp::ippi::_IppiBorderType_ippBorderConst,
                 border_val,
                 self.buf.as_mut_ptr()
@@ -1722,4 +2031,284 @@ impl IppWiener {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct MaxPoolTree {
+    niter : usize,
+    pool_sz : (usize, usize),
+    pub imgs : Vec<ImageBuf<u8>>
+}
+
+fn increment_original<const N : usize, S : Storage<u8>>(
+    pos : (usize, usize),
+    pool_sz : (usize, usize),
+    img : &Image<u8,S>,
+    v : u8
+) -> [Option<(usize, usize)>;N] {
+    let mut n = 0;
+    let mut ixs = [None; N];
+    let off = (pos.0*pool_sz.0, pos.1*pool_sz.1);
+    for i in off.0..(off.0+pool_sz.0) {
+        for j in off.1..(off.1+pool_sz.1) {
+            if img[(i, j)] == v {
+                ixs[n] = Some((i, j));
+                n += 1;
+                if n == N {
+                    return ixs;
+                }
+            }
+        }
+    }
+    ixs
+}
+
+impl MaxPoolTree {
+
+    // Returns the point and the first maximum found, ignoring the others.
+    pub fn next_original_unique<S : Storage<u8>>(
+        &mut self,
+        img : &Image<u8,S>
+    ) -> ((usize, usize), u8) {
+        let ans = self.next_original::<1,_>(img);
+        (ans.0[0].unwrap(), ans.1)
+    }
+
+    /* Returns the next N original indices, all contained in the next relevant local region,
+    whose value equals the next maximum value. If N is chosen to be pool_sz*pool_sz, then all
+    pixels with value equal to the next maximum value are returned. If N is 1, then only the
+    first pixel in raster order matching the maximum value is chosen, and any others having
+    the same value are ignored. Since the tree does not store the original image, you must
+    pass the same image used during the update(.) call, or else the result will be meaningless. */
+    pub fn next_original<const N : usize, S : Storage<u8>>(
+        &mut self,
+        img : &Image<u8,S>
+    ) -> ([Option<(usize, usize)>;N], u8) {
+        let (pos, v) = self.next();
+        let ixs = increment_original(pos, self.pool_sz, img, v);
+        // assert!(ixs[0].is_some());
+        (ixs,v)
+    }
+
+    pub fn next(&mut self) -> ((usize, usize), u8) {
+        let ((r, c), v) = self.imgs.last().unwrap().indexed_maximum();
+        if self.imgs.len() == 1 {
+            self.imgs[0][(r, c)] = 0;
+            return ((r, c), v);
+        }
+        let curr_max = search_recursive(
+            &self.imgs[..(self.imgs.len()-1)],
+            (r, c),
+            self.pool_sz,
+            |img| img.indexed_maximum()
+        );
+        self.imgs[0][curr_max.0] = 0;
+        propagate_recursive(&mut self.imgs, curr_max.0, self.pool_sz, |img| img.indexed_maximum() );
+        // assert_integrity(&self.imgs[..]);
+        curr_max
+    }
+
+    pub fn update<S : Storage<u8>>(&mut self, img : &Image<u8, S>) {
+        pool_cascade(img, &mut self.imgs, |src, mut dst| src.local_maxima_to(&mut dst) );
+        // assert_integrity(&self.imgs[..]);
+    }
+
+    pub fn new(
+        img_sz : (usize, usize),
+        pool_sz : (usize, usize),
+        niter : usize
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        is_pool_valid(img_sz, pool_sz, niter)?;
+        let imgs = create_cascade(img_sz, pool_sz, niter);
+        Ok(Self {
+            pool_sz,
+            niter,
+            imgs
+        })
+    }
+
+}
+
+/* A spatial tree representing recursive calls to local minima. Each node
+of the tree represents the minimum pixel of a pool_sz region at the next
+level. This is relevant for iterated search of global minima pixels, where
+previously selected pixels are not considered further. The tree can
+easily be generalized to a MaxPoolTree as well (use indexed_local_maximum) and
+reset selected pixels to 0. */
+#[derive(Clone, Debug)]
+pub struct MinPoolTree {
+    niter : usize,
+    pool_sz : (usize, usize),
+    pub imgs : Vec<ImageBuf<u8>>
+}
+
+impl MinPoolTree {
+
+    // Returns the point and the first maximum found, ignoring the others.
+    pub fn next_original_unique<S : Storage<u8>>(
+        &mut self,
+        img : &Image<u8,S>
+    ) -> ((usize, usize), u8) {
+        let ans = self.next_original::<1,_>(img);
+        (ans.0[0].unwrap(), ans.1)
+    }
+
+    /* Returns the next N original indices, all contained in the next relevant local region,
+    whose value equals the next maximum value. If N is chosen to be pool_sz*pool_sz, then all
+    pixels with value equal to the next maximum value are returned. If N is 1, then only the
+    first pixel in raster order matching the maximum value is chosen, and any others having
+    the same value are ignored. Since the tree does not store the original image, you must
+    pass the same image used during the update(.) call, or else the result will be meaningless. */
+    pub fn next_original<const N : usize, S : Storage<u8>>(
+        &mut self,
+        img : &Image<u8,S>
+    ) -> ([Option<(usize, usize)>;N], u8) {
+        let (pos, v) = self.next();
+        let ixs = increment_original(pos, self.pool_sz, img, v);
+        // assert!(ixs[0].is_some());
+        (ixs,v)
+    }
+
+    pub fn next(&mut self) -> ((usize, usize), u8) {
+        let ((r, c), v) = self.imgs.last().unwrap().indexed_minimum();
+        if self.imgs.len() == 1 {
+            self.imgs[0][(r, c)] = 255;
+            return ((r, c), v);
+        }
+        let curr_min = search_recursive(
+            &self.imgs[..(self.imgs.len()-1)],
+            (r, c),
+            self.pool_sz,
+            |img| img.indexed_minimum()
+        );
+        self.imgs[0][curr_min.0] = 255;
+        propagate_recursive(&mut self.imgs, curr_min.0, self.pool_sz, |img| img.indexed_minimum() );
+        // assert_integrity(&self.imgs[..]);
+        curr_min
+    }
+
+    pub fn update<S : Storage<u8>>(&mut self, img : &Image<u8, S>) {
+        pool_cascade(img, &mut self.imgs, |src, mut dst| src.local_minima_to(&mut dst) );
+        // assert_integrity(&self.imgs[..]);
+    }
+
+    pub fn new(
+        img_sz : (usize, usize),
+        pool_sz : (usize, usize),
+        niter : usize
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        is_pool_valid(img_sz, pool_sz, niter)?;
+        let imgs = create_cascade(img_sz, pool_sz, niter);
+        Ok(Self {
+            pool_sz,
+            niter,
+            imgs
+        })
+    }
+
+}
+
+fn is_pool_valid(
+    img_sz : (usize, usize),
+    pool_sz : (usize, usize),
+    niter : usize
+) -> Result<(), Box<dyn std::error::Error>> {
+    if niter == 0 {
+        Err(format!("Invalid number of iterations"))?;
+    }
+    if img_sz.0 % pool_sz.0 != 0 {
+        Err(format!("Height of {} not divisible by pool size {} at iteration {}", img_sz.0, pool_sz.0, niter))?;
+    }
+    if img_sz.1 % pool_sz.1 != 0 {
+        Err(format!("Width of {} not divisible by pool size {} at iteration {}", img_sz.1, pool_sz.1, niter))?;
+    }
+    if niter == 1 {
+        Ok(())
+    } else {
+        is_pool_valid((img_sz.0 / pool_sz.0, img_sz.1 / pool_sz.1), pool_sz, niter - 1)
+    }
+}
+
+// ix is the position of the minimum at the previous level.
+// The imgs slice contains the current search at its last position.
+// The search keeps a size of 4x4
+fn search_recursive<F>(
+    imgs : &[ImageBuf<u8>],
+    ix : (usize, usize),
+    pool_sz : (usize, usize),
+    op : F
+) -> ((usize, usize), u8)
+where
+    F : Fn(ImageRef<u8>)->((usize, usize), u8)
+{
+    let last_img = imgs.last().unwrap();
+    let off = (ix.0 * pool_sz.0, ix.1 * pool_sz.1);
+
+    // let ((r, c), min) = last_img.window(off, pool_sz).unwrap().indexed_minimum();
+    let ((r, c), min) = op(last_img.window(off, pool_sz).unwrap());
+
+    let off_ix = (r + off.0, c + off.1);
+    if imgs.len() > 1 {
+        search_recursive(&imgs[..(imgs.len()-1)], off_ix, pool_sz, op)
+    } else {
+        (off_ix, min)
+    }
+}
+
+// Updates upward are *always* required.
+fn propagate_recursive<F>(
+    imgs : &mut [ImageBuf<u8>],
+    ix : (usize, usize),
+    pool_sz : (usize, usize),
+    op : F
+) where
+    F : Fn(ImageRef<u8>)->((usize, usize), u8)
+{
+    let fst_img = &imgs[0];
+    let off = (ix.0 - ix.0 % pool_sz.0, ix.1 - ix.1 % pool_sz.1);
+    // let mut curr_min = fst_img.window(off, pool_sz).unwrap().indexed_minimum();
+    let mut curr_extr = op(fst_img.window(off, pool_sz).unwrap());
+    curr_extr.0.0 += off.0;
+    curr_extr.0.1 += off.1;
+    let next_off = (curr_extr.0.0 / pool_sz.0, curr_extr.0.1 / pool_sz.1);
+    imgs[1][next_off] = curr_extr.1;
+    if imgs.len() > 2 {
+        propagate_recursive(&mut imgs[1..], (curr_extr.0.0 / pool_sz.0, curr_extr.0.1 / pool_sz.1), pool_sz, op);
+    }
+}
+
+fn create_cascade(img_dims : (usize, usize), pool_sz : (usize, usize), niter : usize) -> Vec<ImageBuf<u8>> {
+    let mut imgs = Vec::with_capacity(niter);
+    for i in 0..niter {
+        imgs.push(ImageBuf::<u8>::new_constant(
+            img_dims.0 / pool_sz.0.pow((i+1) as u32),
+            img_dims.1 / pool_sz.1.pow((i+1) as u32),
+            0
+        ));
+    }
+    imgs
+}
+
+fn pool_cascade<S, F>(src : &Image<u8,S>, imgs : &mut [ImageBuf<u8>], op : F)
+where
+    F : Fn(&ImageRef<u8>, &mut ImageBuf<u8>),
+    S : Storage<u8>
+{
+    // src.local_minima_to(&mut imgs[0]);
+    op(&src.full_window(), &mut imgs[0]);
+    for i in 0..(imgs.len()-1) {
+        let new_src = std::mem::take(&mut imgs[i]);
+        // new_src.local_minima_to(&mut imgs[i+1]);
+        op(&new_src.full_window(), &mut imgs[i+1]);
+        imgs[i] = new_src;
+    }
+}
+
+fn assert_integrity(imgs : &[ImageBuf<u8>]) {
+    for i in 0..(imgs.len()-1) {
+        for (w1, (r, c, w2)) in imgs[i].windows((imgs[i].height()/imgs[i+1].height(),imgs[i].width()/imgs[i+1].width()))
+            .zip(imgs[i+1].labeled_pixels::<usize, _>(1))
+        {
+            let min = w1.min_max().0;
+        }
+    }
+}
 

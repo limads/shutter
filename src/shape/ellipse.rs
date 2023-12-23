@@ -4,11 +4,16 @@ use nalgebra_lapack;
 use serde::{Serialize, Deserialize};
 use std::mem;
 use nalgebra::linalg::SVD;
+use std::collections::BTreeSet;
+use crate::shape::Region;
+use crate::shape::Area;
 
 pub trait Ellipsoid {
 
     fn elongation(&self) -> f32;
     
+    fn area(&self) -> f32;
+
     fn orientation(&self) -> f32;
     
     fn orientation_along_largest(&self) -> f32;
@@ -33,6 +38,10 @@ pub struct AlignedEllipse {
 }
 
 impl AlignedEllipse {
+
+    fn area(&self) -> f32 {
+        self.major_scale * self.minor_scale * PI
+    }
 
     pub fn major_scale(&self) -> f32 {
         self.major_scale
@@ -91,7 +100,53 @@ pub struct OrientedEllipse {
     
 }
 
+// cargo test --lib -- el_limits --nocapture
+#[test]
+fn el_limits() {
+    let ori = OrientedEllipse::new(Vector2::new(0., 0.), 2., 1., 0.);
+    let bounds = ori.bounds();
+    println!("{:?}", bounds);
+
+    let ori = OrientedEllipse::new(Vector2::new(0., 0.), 2., 1., PI/2.);
+    let bounds = ori.bounds();
+    println!("{:?}", bounds);
+}
+
 impl OrientedEllipse {
+
+    pub fn bounds(&self) -> Area {
+        let xs = self.x_limits();
+        let ys = self.y_limits();
+        Area {
+            origin : Vector2::new(xs.0, ys.0),
+            target : Vector2::new(xs.1, ys.1)
+        }
+    }
+
+    // https://math.stackexchange.com/questions/91132/how-to-get-the-limits-of-rotated-ellipse
+    fn x_limits(&self) -> (f32, f32) {
+        let v = (self.aligned.major_scale.powf(2.) * self.theta.cos().powf(2.) +
+            self.aligned.minor_scale.powf(2.) * self.theta.sin().powf(2.)).sqrt();
+        (self.aligned.center[0] - v, self.aligned.center[1] + v)
+    }
+
+    // https://math.stackexchange.com/questions/91132/how-to-get-the-limits-of-rotated-ellipse
+    fn y_limits(&self) -> (f32, f32) {
+        let v = (self.aligned.major_scale.powf(2.) * self.theta.sin().powf(2.) +
+            self.aligned.minor_scale.powf(2.) * self.theta.cos().powf(2.)).sqrt();
+        (self.aligned.center[1] - v, self.aligned.center[1] + v)
+    }
+
+    fn area(&self) -> f32 {
+        self.aligned.area()
+    }
+
+    pub fn new(center : Vector2<f32>, major_scale : f32, minor_scale : f32, angle : f32) -> Self {
+        Self {
+            aligned : AlignedEllipse { center, major_scale, minor_scale },
+            theta : angle
+        }
+    }
 
     pub fn major_scale(&self) -> f32 {
         self.aligned.major_scale
@@ -136,7 +191,8 @@ impl Default for OrientedEllipse {
 /// do not mean one is larger than the other, but rather that the "major" is the axis that
 /// should be aligned to the x-axis in the corresponding OrientedEllipse repr; and the "minor"
 /// is the axis that should be aligned to the y-axis in the corresponding OrientedEllipse repr.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Ellipse {
     pub center : Vector2<f32>,
     pub major : Vector2<f32>,
@@ -272,6 +328,39 @@ impl EllipseEstimator {
 }
 
 impl Ellipse {
+
+    pub fn bounds(&self) -> Area {
+        let ori : OrientedEllipse = self.clone().into();
+        ori.bounds()
+    }
+
+    pub fn new_centered_symmetric(magn : f32) -> Self {
+        Self {
+            center : Vector2::zeros(),
+            major : Vector2::new(1.0, 0.0).scale(magn),
+            minor : Vector2::new(0.0, 1.0).scale(magn)
+        }
+    }
+
+    pub fn new_symmetric(center : Vector2<f32>, magn : f32) -> Self {
+        Self {
+            center,
+            major : Vector2::new(1.0, 0.0).scale(magn),
+            minor : Vector2::new(0.0, 1.0).scale(magn)
+        }
+    }
+
+    pub fn new_centered(major : Vector2<f32>, minor : Vector2<f32>) -> Self {
+        Self { center : Vector2::zeros(), major, minor }
+    }
+
+    pub fn contains(&self, pt : &Vector2<f32>) -> bool {
+        radial_deviation(self, pt) > 0.0
+    }
+
+    pub fn area(&self) -> f32 {
+        self.major.magnitude() * self.minor.magnitude() * PI
+    }
 
     /*// Returns a rect represented as an vector with origin at the ellipse
     // center and pointing to the top-right coordinate. Reflecting this vector
@@ -472,6 +561,18 @@ pub struct EllipseCoords {
     pub center : (usize, usize),
     pub major : (usize, usize),
     pub minor : (usize, usize)
+}
+
+impl EllipseCoords {
+
+    pub fn bounds(&self) -> Region {
+        let left = self.major.1.min(self.minor.1);
+        let right = self.major.1.max(self.minor.1);
+        let top = self.major.0.min(self.minor.0);
+        let bottom = self.major.0.max(self.minor.0);
+        Region::new((top, left), (bottom.saturating_sub(top), right.saturating_sub(left)))
+    }
+
 }
 
 /// Represents the elliptical axes after a translation is applied
@@ -777,6 +878,7 @@ fn fit_ellipse_no_direct(
 
     if(A_svd.singular_values[0]*std::f32::EPSILON > A_svd.singular_values[4]) {
         let eps = ( s / (n as f32 * 2.) * 1.0e-3);
+        // let eps = ( s / (n as f32 * 2.) * 1.0e-4);
         for i in 0..n {
             let p = points[i] + get_ofs(i as i32, eps);
             points[i] = p;
@@ -917,10 +1019,6 @@ pub fn abs_radial_deviation(el : &Ellipse, pt : &Vector2<f32>) -> f32 {
     radial_deviation(el, pt).abs()
 }
 
-pub fn contains(el : &Ellipse, pt : &Vector2<f32>) -> bool {
-    radial_deviation(el, pt) > 0.0
-}
-
 use std::ops::Range;
 
 
@@ -1019,3 +1117,88 @@ fn fit_ellipse_test() {
     img.show();
 
 }*/
+
+const MAX_BOUNDARY_ELEMENTS : usize = 5;
+
+/* In center form, a conic C = (p-c)^T M (p-c) - z = 0 for z = c^T M c - w, with det(M) > 0 is
+an ellipse with area pi/sqrt(det(A)) with A diagonal (factorization with principal axes of M)
+For support with size 3, the samllest ellipse has rational form. For support size 5, the smallest
+ellipse is the unique conic  through these points. For support size 4, the ellipse is not represented
+*/
+
+fn ellipse_contains(
+    pts : &[Vector2<f32>],
+    support : &BTreeSet<usize>,
+    pt : usize
+) -> bool {
+    unimplemented!()
+}
+
+pub fn welzl_step(
+    pts : &[Vector2<f32>],
+    inliers : &mut BTreeSet<usize>,
+    support : &mut BTreeSet<usize>,
+    outliers : &mut BTreeSet<usize>
+) {
+    use rand::prelude::IteratorRandom;
+    if outliers.is_empty() || support.len() == 5 {
+        return;
+    }
+    let new_ix = *outliers.iter().choose(&mut rand::thread_rng()).unwrap();
+    outliers.remove(&new_ix);
+    welzl_step(pts, inliers, support, outliers);
+    if ellipse_contains(pts, support, new_ix) {
+        return;
+    } else {
+        inliers.insert(new_ix);
+        welzl_step(pts, inliers, support, outliers);
+    }
+}
+
+/* Algo. 2.2 of Gartner & Schonherr (1997) */
+pub fn welzl_enclosing_ellipse(pts : &[Vector2<f32>]) -> Option<Ellipse> {
+    if pts.len() < 3 {
+        return None;
+    }
+    let mut inliers = BTreeSet::new();
+    let mut outliers = BTreeSet::new();
+
+    for i in 0..pts.len() {
+        outliers.insert(i);
+    }
+
+    let mut support = init_enclosing_ellipse(pts);
+
+    welzl_step(pts, &mut inliers, &mut support, &mut outliers);
+    unimplemented!()
+}
+
+fn init_enclosing_ellipse(pts : &[Vector2<f32>]) -> BTreeSet<usize> {
+    let mut largest_dist = (0, 1, 0.0);
+    for i in 0..(pts.len()-1) {
+        for j in (i+1)..pts.len() {
+            let d = pts[i].metric_distance(&pts[j]);
+            if d > largest_dist.2 {
+                largest_dist = (i, j, d);
+            }
+        }
+    }
+    let mut best_proj = (0, 0.0);
+    let axis = pts[largest_dist.0] - pts[largest_dist.1];
+    for i in 0..pts.len() {
+        if i != largest_dist.0 && i != largest_dist.1 {
+            let v = pts[i] - pts[largest_dist.1];
+            let proj_axis = axis.scale(v.dot(&axis));
+            let normal = v - proj_axis;
+            let magn = normal.magnitude();
+            if magn > best_proj.1 {
+                best_proj = (i, magn)
+            }
+        }
+    }
+    let mut support = BTreeSet::new();
+    support.insert(largest_dist.0);
+    support.insert(largest_dist.1);
+    support.insert(best_proj.0);
+    support
+}

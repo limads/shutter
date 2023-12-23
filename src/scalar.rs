@@ -3,6 +3,12 @@ use crate::image::*;
 use std::mem;
 use num_traits::ToPrimitive;
 
+/* scale factor: Functions that take a scale factor mean the output is multiplied by 2^(-scale_factor), which
+is realized by a left or right shift, which preserves the output data range.
+Perhaps rename scaling ops as shl_op, shr_op where shift is an u8 value. If shift=0,
+the operation is applied without scaling. In Ipp nomeclature, positive scale factors
+shift to the right (divide); negative scale factors shift to the left (multiply). */
+
 fn apply_to<P, S>(src : &Image<P, S>, f : impl Fn(&Image<P, S>, &mut ImageBuf<P>)) -> ImageBuf<P>
 where
     P : Pixel,
@@ -403,6 +409,27 @@ where
                 );
                 assert!(ans == 0);
                 return;
+            }
+        }
+    }
+
+    // This differs from mul in that operations are done with a higher precision,
+    // therefore it supports fractional scale values.
+    #[cfg(feature="ipp")]
+    pub fn scalar_add_mul_mut(&mut self, offset : f64, scale : f64) {
+        unsafe {
+            if self.pixel_is::<u8>() {
+                let ans = crate::foreign::ipp::ippi::ippiScaleC_8u_C1IR(
+                    std::mem::transmute(self.as_mut_ptr()),
+                    self.byte_stride() as i32,
+                    scale,
+                    offset,
+                    self.size().into(),
+                    crate::foreign::ipp::ippi::IppHintAlgorithm_ippAlgHintFast
+                );
+                assert!(ans == 0);
+            } else {
+                unimplemented!()
             }
         }
     }

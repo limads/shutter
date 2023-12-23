@@ -519,7 +519,7 @@ where
         let (lhs_stride, lhs_roi) = crate::image::ipputils::step_and_size_for_image(lhs);
         let (rhs_stride, rhs_roi) = crate::image::ipputils::step_and_size_for_image(rhs);
         let (dst_stride, dst_roi) = crate::image::ipputils::step_and_size_for_image(dst);
-        let scale = 0;
+        let scale = 1;
         unsafe {
             if lhs.pixel_is::<u8>() {
                 let ans = crate::foreign::ipp::ippi::ippiSub_8u_C1RSfs(

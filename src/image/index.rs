@@ -3,6 +3,35 @@
 use super::*;
 use std::ops::{Sub, Add, Mul};
 use num_traits::ToPrimitive;
+use crate::code::RunLength;
+
+impl<P, S> Index<RunLength> for Image<P, S>
+where
+    S : Storage<P>,
+    P : Pixel
+{
+
+    type Output = [P];
+
+    fn index(&self, rl: RunLength) -> &Self::Output {
+        assert!(rl.start.1 + rl.length <= self.width() && rl.start.0 < self.height());
+        &self.row(rl.start.0).unwrap()[rl.range()]
+    }
+
+}
+
+impl<P, S> IndexMut<RunLength> for Image<P, S>
+where
+    S : StorageMut<P>,
+    P : Pixel
+{
+
+    fn index_mut(&mut self, rl: RunLength) -> &mut Self::Output {
+        assert!(rl.start.1 + rl.length <= self.width() && rl.start.0 < self.height());
+        &mut self.row_mut(rl.start.0).unwrap()[rl.range()]
+    }
+
+}
 
 impl<P, S> Index<(usize, usize)> for Image<P, S>
 //where
