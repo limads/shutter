@@ -353,6 +353,18 @@ where
                 return;
             }
 
+            if self.pixel_is::<u16>() {
+                let ans = crate::foreign::ipp::ippi::ippiAddC_16u_C1IRSfs(
+                    *mem::transmute::<_, &u16>(&by),
+                    mem::transmute(self.as_mut_ptr()),
+                    byte_stride,
+                    roi,
+                    scale_factor
+                );
+                assert!(ans == 0);
+                return;
+            }
+
             if self.pixel_is::<f32>() {
                 let ans = crate::foreign::ipp::ippi::ippiAddC_32f_C1IR(
                     *mem::transmute::<_, &f32>(&by),

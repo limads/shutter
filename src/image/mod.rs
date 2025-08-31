@@ -1521,6 +1521,25 @@ where
 
 impl<'a, P> ImageRef<'a, P> {
 
+    pub fn linear_indices_cmp(&self, cmp : std::cmp::Ordering, v : P) -> Vec<usize>
+    where
+        P : std::cmp::Ord + Pixel
+    {
+        let mut ixs = Vec::with_capacity(16);
+        let mut i = 0;
+        if cmp == std::cmp::Ordering::Greater {
+            for px in self.pixels(1) {
+                if *px > v {
+                    ixs.push(i);
+                }
+                i += 1;
+            }
+            ixs
+        } else {
+            unimplemented!();
+        }
+    }
+
     pub unsafe fn from_ptr(
         ptr : *const P, 
         len : usize, 

@@ -5397,6 +5397,10 @@ pub struct RunLength {
 
 impl RunLength {
 
+    pub fn contains_col(&self, col : usize) -> bool {
+        col >= self.start.1 && col <= self.end_col()
+    }
+
     pub fn contains(&self, pt : (usize, usize)) -> bool {
         pt.0 == self.start.0 && pt.1 >= self.start.1 && pt.1 <= self.end_col()
     }
@@ -5648,7 +5652,26 @@ impl Encoding for RunLengthCode {
     }
 
     fn encode_distinct<T>(img : &Image<u8, T>) -> BTreeMap<u8, Self> {
-        unimplemented!()
+        let mut curr_col = 0;
+        let mut rles = BTreeMap::new();
+        let mut row_colors = Vec::new();
+        for i in 0..img.nrows() {
+            let row = img.row(i);
+            let mut row_rles = Vec::new();
+            let mut rle = RunLength { start : (i, 0), length: 1 };
+            row_colors.clear();
+            for j in 1..row.cols() {
+                if row[j] == row[j-1] {
+                    rle.length += 1;
+                } else {
+                    row_rles.push(rle);
+                    row_colors.push(row[j]);
+                    rle = RunLength { start : (i, j), length : 1 };
+                }
+            }
+            row_rles.push(rle);
+            row_colors.push(row[row.ncols()-1]);
+        }
     }
 
     fn encode_from<T>(&mut self, img : &Image<u8, T>) {

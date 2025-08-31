@@ -3679,6 +3679,22 @@ pub struct Line2 {
 
 impl Line2 {
 
+    pub fn reversed(&self) -> Self {
+        Line2 { p2 : self.p1, p1 : self.p2 }
+    }
+
+    pub fn projection(&self, pt : &Vector2<f32>) -> Vector2<f32> {
+        let line_vector = self.p2 - self.p1;
+        let point_vector = pt - self.p1;
+        let t = point_vector.dot(&line_vector) / line_vector.dot(&line_vector);
+        self.p1 + t * line_vector
+    }
+
+    pub fn projected_distance(&self, pt : &Vector2<f32>) -> f32 {
+        let proj = self.projection(pt);
+        (proj - pt).norm()
+    }
+
     pub fn intersection(&self, other : &Self) -> Option<Vector2<f32>> {
         let l1 = Matrix2::from_rows(&[self.p1.transpose(), self.p2.transpose()]);
         let l2 = Matrix2::from_rows(&[other.p1.transpose(), other.p2.transpose()]);
