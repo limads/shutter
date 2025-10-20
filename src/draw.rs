@@ -4,9 +4,9 @@ use std::convert::{TryFrom, AsMut};
 use std::ops::Range;
 use crate::image::*;
 use serde::{Serialize, Deserialize};
-use crate::shape::*;
-use crate::shape::ellipse::EllipseCoords;
-use crate::shape::ellipse::OrientedEllipse;
+use polygeo::*;
+use polygeo::ellipse::EllipseCoords;
+use polygeo::ellipse::OrientedEllipse;
 use nalgebra::Vector2;
 
 pub const DARK : u8 = 0;
@@ -172,7 +172,7 @@ where
 
                 let n_points = (TWO_PI * radius as f64) as usize + 4;
                 for ix in 0..=n_points {
-                    if let Some((i, j)) = crate::shape::circular_coord(ix, n_points, pos, radius, self.size()) {
+                    if let Some((i, j)) = polygeo::circular_coord(ix, n_points, pos, radius, self.size()) {
                         self[(i, j)] = color;
                     }
                 }
@@ -180,7 +180,7 @@ where
             Mark::Dot(pos, radius) => {
                 for i in pos.0.saturating_sub(radius)..(pos.0 + radius).min(self.width()) {
                     for j in pos.1.saturating_sub(radius)..(pos.1 + radius).min(self.height()) {
-                        if crate::shape::point_euclidian((i, j), pos) <= radius as f32 {
+                        if polygeo::point_euclidian((i, j), pos) <= radius as f32 {
                             self[(i, j)] = color;
                         }
                     }
@@ -256,10 +256,10 @@ where
                 }
             },
             Mark::Ellipse(el, n) => {
-                let pts = crate::shape::ellipse::generate_ellipse_points(&el, n);
+                let pts = polygeo::ellipse::generate_ellipse_points(&el, n);
                 for n in 0..(pts.len()-1) {
-                    let a = crate::shape::coord::point_to_coord(&pts[n], self.shape());
-                    let b = crate::shape::coord::point_to_coord(&pts[n+1], self.shape());
+                    let a = polygeo::coord::point_to_coord(&pts[n], self.shape());
+                    let b = polygeo::coord::point_to_coord(&pts[n+1], self.shape());
                     if let (Some(coord_a), Some(coord_b)) = (a, b) {
                         self.draw(Mark::Line(coord_a, coord_b), color);
                     }
@@ -296,9 +296,9 @@ pub enum Shape {
 
     Point(Vector2<f32>),
 
-    Ellipse(crate::shape::ellipse::Ellipse),
+    Ellipse(polygeo::ellipse::Ellipse),
 
-    Circle(crate::shape::Circle)
+    Circle(polygeo::Circle)
 
 }
 
@@ -329,7 +329,7 @@ pub enum Mark {
     /// TL pos, size and color
     Rect((usize, usize), (usize, usize)),
 
-    Region(crate::shape::Region),
+    Region(polygeo::Region),
 
     /// Arbitrary shape coordinates; whether to close it; and color
     Shape(Vec<(usize, usize)>, bool),
@@ -340,7 +340,7 @@ pub enum Mark {
 
     EllipseArrows(EllipseCoords),
 
-    FilledEllipse(crate::shape::ellipse::Ellipse),
+    FilledEllipse(polygeo::ellipse::Ellipse),
 
     Ellipse(OrientedEllipse, usize),
 
@@ -571,7 +571,7 @@ pub fn draw_line(
     let (dist, theta) = index::index_distance(src, dst, nrow);
     let d_max = dist as usize;
     for i in 0..=d_max {
-        let (y_pos, x_pos) = crate::shape::line_position(src, theta, i);
+        let (y_pos, x_pos) = polygeo::line_position(src, theta, i);
         buf[y_pos*ncol + x_pos] = color;
     }
 }

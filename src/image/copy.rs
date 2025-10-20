@@ -28,7 +28,7 @@ use num_traits::bounds::Bounded;
 use std::clone::Clone;
 use std::any::{TypeId};
 use std::marker::PhantomData;
-use crate::shape::Region;
+use polygeo::Region;
 
 impl<P> Clone for ImageBuf<P> 
 where

@@ -24,8 +24,7 @@ use crate::pyr::*;
 use once_cell;
 use std::rc::Rc;
 use std::sync::Arc;
-use crate::shape::Region;
-use crate::shape::CentralMoments;
+use polygeo::*;
 
 #[derive(Debug, Clone)]
 pub struct PyrBitonalEncoder {
@@ -4314,7 +4313,8 @@ impl Encoding for PointCode {
         PointIter(Box::new(self.pts.clone().into_iter()))
     }
 
-    fn encode_distinct<S>(img : &Image<u8, S>) -> BTreeMap<u8, Self> {
+    fn encode_distinct<S>(img : &Image<u8, S>) -> BTreeMap<u8, Self>
+    where S : Storage<u8>{
         unimplemented!()
     }
 
@@ -5041,7 +5041,9 @@ impl Encoding for ChainCode {
         ))
     }
 
-    fn encode_distinct<S>(img : &Image<u8, S>) -> BTreeMap<u8, Self> {
+    fn encode_distinct<S>(img : &Image<u8, S>) -> BTreeMap<u8, Self>
+    where S : Storage<u8>
+    {
         unimplemented!()
     }
 
@@ -5085,7 +5087,7 @@ where
     // equal to 1, and unmatched pixels are represented by zero, then encode_distinct
     // should return a set of distinct encodings that map to each label, as if each labeled
     // pixel were a binary image encoded as "this label against all others".
-    fn encode_distinct<S>(img : &Image<u8, S>) -> BTreeMap<u8, Self>;
+    fn encode_distinct<S>(img : &Image<u8, S>) -> BTreeMap<u8, Self> where S : Storage<u8>;
 
     fn encode_from<S>(&mut self, img : &Image<u8, S>);
 
@@ -5651,11 +5653,12 @@ impl Encoding for RunLengthCode {
         PointIter(Box::new(self.rles.iter().map(move |rle| rle.points() ).flatten()))
     }
 
-    fn encode_distinct<T>(img : &Image<u8, T>) -> BTreeMap<u8, Self> {
-        let mut curr_col = 0;
+    fn encode_distinct<T>(img : &Image<u8, T>) -> BTreeMap<u8, Self>
+    where T : Storage<u8> {
+        /*let mut curr_col = 0;
         let mut rles = BTreeMap::new();
         let mut row_colors = Vec::new();
-        for i in 0..img.nrows() {
+        for i in 0..img.height() {
             let row = img.row(i);
             let mut row_rles = Vec::new();
             let mut rle = RunLength { start : (i, 0), length: 1 };
@@ -5671,7 +5674,8 @@ impl Encoding for RunLengthCode {
             }
             row_rles.push(rle);
             row_colors.push(row[row.ncols()-1]);
-        }
+        }*/
+        unimplemented!()
     }
 
     fn encode_from<T>(&mut self, img : &Image<u8, T>) {
@@ -6193,11 +6197,13 @@ impl RunLengthCode {
         for r in &self.rles {
             rle_contrib_mmt(r, &mut mmt);
         }
-        mmt.center.0 /= mmt.zero;
-        mmt.center.1 /= mmt.zero;
-        mmt.xx /= mmt.zero;
-        mmt.yy /= mmt.zero;
-        mmt.xy /= mmt.zero;
+        if mmt.zero > 1. {
+            mmt.center.0 /= mmt.zero;
+            mmt.center.1 /= mmt.zero;
+            mmt.xx /= mmt.zero;
+            mmt.yy /= mmt.zero;
+            mmt.xy /= mmt.zero;
+        }
         mmt
     }
 
@@ -6365,8 +6371,8 @@ impl RunLengthCode {
         max_w
     }
 
-    pub fn region(&self) -> Option<crate::shape::Region> {
-        self.outer_rect().as_ref().map(|r| crate::shape::Region::from_rect_tuple(r) )
+    pub fn region(&self) -> Option<polygeo::Region> {
+        self.outer_rect().as_ref().map(|r| polygeo::Region::from_rect_tuple(r) )
     }
 
     pub fn outer_region(&self) -> Option<Region> {
@@ -6724,7 +6730,7 @@ impl RunLengthCode {
     // that is covered by its overlap with the smallest row. If no rows satisfy the
     // condition, returns a vector with the unique RunLength unchanged.
     pub fn split_vertically(mut self, ratio : f32) -> SmallVec<[RunLengthCode;4]> {
-        use crate::shape::HalfOpen;
+        use polygeo::HalfOpen;
         let nrows = self.rows.len();
         let mut split_points : SmallVec<[usize; 4]> = SmallVec::new();
         let row_pair_iter = self.rows[0..(nrows-1)].iter()

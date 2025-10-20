@@ -1085,3 +1085,133 @@ impl IppDeconv {
     }
 
 }
+
+/*pub fn conv2d_u8_wide(img: &[u8], w: usize, h: usize, kernel: &[f32], k_w: usize, k_h: usize) -> Vec<u8> {
+    assert_eq!(img.len(), w * h);
+    assert_eq!(kernel.len(), k_w * k_h);
+    assert!(k_w > 0 && k_h > 0);
+
+    let mut out = vec![0u8; w * h];
+
+    // padding implícito: processamos só região válida; bordas ficam 0
+    let pad_x = k_w / 2;
+    let pad_y = k_h / 2;
+
+    // helpers para conversão
+    #[inline]
+    fn load_u8_as_f32x8(slice: &[u8]) -> f32x8 {
+        // converte 8 bytes consecutivos em f32x8 (0..255)
+        debug_assert!(slice.len() >= 8);
+        let a = [
+            slice[0] as f32, slice[1] as f32, slice[2] as f32, slice[3] as f32,
+            slice[4] as f32, slice[5] as f32, slice[6] as f32, slice[7] as f32,
+        ];
+        f32x8::from(a)
+    }
+
+    #[inline]
+    fn store_f32x8_clamped_u8(v: f32x8, dst: &mut [u8]) {
+        // clamp [0,255], arredonda (round to nearest), escreve 8 u8
+        let zero = f32x8::splat(0.0);
+        let two_five_five = f32x8::splat(255.0);
+        let clamped = v.max(zero).min(two_five_five);
+        let arr: [f32; 8] = clamped.into();
+        for i in 0..8 {
+            dst[i] = arr[i].round() as u8;
+        }
+    }
+
+    if w < pad_x * 2 + 8 || h < pad_y * 2 + 1 {
+        // imagem pequena demais para vetorizar; cai no escalar simples
+        return conv2d_u8_scalar(img, w, h, kernel, k_w, k_h);
+    }
+
+    // região válida (sem tocar bordas)
+    let x_start = pad_x;
+    let x_end = w - pad_x;
+    let y_start = pad_y;
+    let y_end = h - pad_y;
+
+    // processa linha a linha
+    for y in y_start..y_end {
+        let mut x = x_start;
+
+        // vetoriza em blocos de 8 pixels
+        while x + 8 <= x_end {
+            let mut acc = f32x8::splat(0.0);
+
+            for ky in 0..k_h {
+                let src_y = y + ky - pad_y;
+                let row_off = src_y * w;
+
+                for kx in 0..k_w {
+                    let src_x = x + kx - pad_x;
+                    let k = kernel[ky * k_w + kx];
+
+                    // lê 8 pixels consecutivos da imagem
+                    let base = row_off + src_x;
+                    let px = load_u8_as_f32x8(&img[base..base + 8]);
+
+                    acc = acc + px * f32x8::splat(k);
+                }
+            }
+
+            // grava resultado
+            let out_off = y * w + x;
+            store_f32x8_clamped_u8(acc, &mut out[out_off..out_off + 8]);
+            x += 8;
+        }
+
+        // tail escalar para o resto da faixa válida (se w não múltiplo de 8)
+        for x_tail in x..x_end {
+            let mut sum = 0.0f32;
+            for ky in 0..k_h {
+                let src_y = y + ky - pad_y;
+                let row_off = src_y * w;
+                for kx in 0..k_w {
+                    let src_x = x_tail + kx - pad_x;
+                    let k = kernel[ky * k_w + kx];
+                    sum += img[row_off + src_x] as f32 * k;
+                }
+            }
+            out[y * w + x_tail] = sum.clamp(0.0, 255.0).round() as u8;
+        }
+        // bordas (0..x_start) e (x_end..w) ficam 0
+    }
+    // linhas de borda (0..y_start) e (y_end..h) já estão 0
+
+    out
+}
+
+/// Fallback escalar (para imagens muito pequenas ou para comparar resultados).
+pub fn conv2d_u8_scalar(img: &[u8], w: usize, h: usize, kernel: &[f32], k_w: usize, k_h: usize) -> Vec<u8> {
+    let mut out = vec![0u8; w * h];
+    let pad_x = k_w / 2;
+    let pad_y = k_h / 2;
+
+    for y in 0..h {
+        for x in 0..w {
+            let mut sum = 0.0f32;
+
+            for ky in 0..k_h {
+                let sy = y as isize + ky as isize - pad_y as isize;
+                if sy < 0 || sy >= h as isize { continue; }
+                let sy = sy as usize;
+
+                for kx in 0..k_w {
+                    let sx = x as isize + kx as isize - pad_x as isize;
+                    if sx < 0 || sx >= w as isize { continue; }
+                    let sx = sx as usize;
+
+                    let k = kernel[ky * k_w + kx];
+                    sum += img[sy * w + sx] as f32 * k;
+                }
+            }
+
+            out[y * w + x] = sum.clamp(0.0, 255.0).round() as u8;
+        }
+    }
+    out
+}*/
+
+

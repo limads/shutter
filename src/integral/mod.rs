@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use petgraph::unionfind::UnionFind;
 use std::cmp::{PartialEq, Eq};
 use smallvec::SmallVec;
-use crate::shape::Region;
+use polygeo::*;
 
 #[cfg(feature="ipp")]
 fn ipp_integral(win : &Window<u8>, dst : &mut WindowMut<i32>) {
@@ -590,7 +590,7 @@ impl IntegralQuad {
 
     /// Returns all leaves of the graph that either contain mixed or filled content.
     pub fn leaves_with_content(&self) -> BTreeMap<usize, SmallVec<[Quad; 4]>> {
-        use crate::shape::*;
+        use polygeo::*;
 
         let mut externals : Vec<NodeIndex<u32>> = self.0.externals(Direction::Outgoing).collect();
         externals.retain(|n| self.0[*n].content.contains_any() );
@@ -638,7 +638,7 @@ impl IntegralQuad {
         let btm = self.leaves_with_content();
         let mut rects = Vec::new();
         for (_, qs) in &btm {
-            let outer = crate::shape::enclosing_rect_for_rects(qs.iter().map(|q| q.rect.clone() )).unwrap();
+            let outer = polygeo::enclosing_rect_for_rects(qs.iter().map(|q| q.rect.clone() )).unwrap();
             rects.push(outer);
         }
         rects

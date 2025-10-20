@@ -25,7 +25,7 @@ use std::marker::PhantomData;
 use nalgebra::Vector2;
 use nalgebra::Complex;
 use std::borrow::ToOwned;
-use crate::shape::Region;
+use polygeo::Region;
 
 #[cfg(feature="opencv")]
 use nalgebra::{Matrix3, Vector3};
@@ -457,7 +457,7 @@ where
 
     pub fn region(
         &self,
-        region : &crate::shape::Region
+        region : &polygeo::Region
     ) -> Option<ImageRef<P>> {
         let (y, x, h, w) = region.to_rect_tuple();
         self.window((y, x), (h, w))
@@ -465,7 +465,7 @@ where
 
     pub fn area_(
         &self,
-        area : &crate::shape::Area
+        area : &polygeo::Area
     ) -> Option<ImageRef<P>> {
         let (y, x, h, w) = area.region(self.sz)?.to_rect_tuple();
         self.window((y, x), (h, w))
@@ -2214,7 +2214,7 @@ where
     
     pub fn area_mut(
         &mut self,
-        area : &crate::shape::Area
+        area : &polygeo::Area
     ) -> Option<ImageMut<P>> {
         let (y, x, h, w) = area.region(self.sz)?.to_rect_tuple();
         self.window_mut((y, x), (h, w))
@@ -2222,7 +2222,7 @@ where
 
     pub fn region_mut(
         &mut self,
-        region : &crate::shape::Region
+        region : &polygeo::Region
     ) -> Option<ImageMut<P>> {
         let (y, x, h, w) = region.to_rect_tuple();
         self.window_mut((y, x), (h, w))
@@ -3448,12 +3448,34 @@ pub fn coords_across_line(
 
 impl<S> Image<u8, S>
 where
+    S : StorageMut<u8>
+{
+
+    pub fn packed_pixels_mut32<'a>(&'a mut self) -> Option<impl Iterator<Item=&'a mut [u8;32]>> {
+        if self.width() % 32 == 0 {
+            Some(self.rows_mut().map(|row| unsafe { row.as_chunks_unchecked_mut::<32>().iter_mut() } ).flatten() )
+        } else {
+            None
+        }
+    }
+}
+
+impl<S> Image<u8, S>
+where
     S : Storage<u8>
 {
 
     pub fn packed_pixels<'a>(&'a self) -> Option<impl Iterator<Item=wide::u8x16> + 'a> {
         if self.width() % 16 == 0 {
-            Some(self.rows().map(|row| row.chunks(16).map(|ch| wide::u8x16::from(ch) ) ).flatten())
+            Some(self.rows().map(|row| row.chunks_exact(16).map(|ch| wide::u8x16::from(ch) ) ).flatten())
+        } else {
+            None
+        }
+    }
+
+    pub fn packed_pixels_32<'a>(&'a self) -> Option<impl Iterator<Item=wide::u8x32> + 'a> {
+        if self.width() % 32 == 0 {
+            Some(self.rows().map(|row| row.chunks_exact(32).map(|ch| wide::u8x32::from(ch) ) ).flatten())
         } else {
             None
         }

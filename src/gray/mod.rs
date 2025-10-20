@@ -426,6 +426,18 @@ where
 
 }
 
+impl<S> Image<u8, S>
+where
+    S : Storage<u8>
+{
+
+    pub fn vectorized_threshold_to<T : StorageMut<u8>>(&self, ord : Ordering, scalar : u8, dst : &mut Image<u8, T>) {
+        let ref_val = wide::u8x32::splat(scalar);
+
+    }
+
+}
+
 pub trait AdadptiveThreshold {
 
     fn new(

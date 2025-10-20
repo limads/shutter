@@ -77,7 +77,7 @@ pub mod hist;
 
 pub mod draw;
 
-pub mod shape;
+// pub mod shape;
 
 pub mod conv;
 
@@ -85,7 +85,7 @@ pub mod local;
 
 pub mod morph;
 
-pub mod patch;
+// pub mod patch;
 
 pub mod code;
 

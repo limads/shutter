@@ -394,6 +394,44 @@ impl IppSumWindow {
     
 }
 
+impl<'a> Window<'a, u8> {
+
+    pub fn vectorized_local_max_to(&self, dst: &mut WindowMut<u8>) {
+        assert!(self.width() % dst.width() == 0);
+        assert!(self.height() % dst.height() == 0);
+        let block_sz = (self.height() / dst.height(), self.width() / dst.width());
+        if self.width() % 32 == 0 {
+            for (dst_px, w) in dst.pixels_mut(1).zip(self.windows((block_sz.0, block_sz.1))) {
+                let mut maximum = wide::u8x32::splat(0);
+                for pxs in w.packed_pixels_32().unwrap() {
+                    maximum = maximum.max(pxs);
+                }
+                *dst_px = *maximum.to_array().iter().max_by(|a, b| a.cmp(&b) ).unwrap();
+            }
+            return;
+        }
+        unimplemented!()
+    }
+
+    pub fn vectorized_local_min_to(&self, dst: &mut WindowMut<u8>) {
+        assert!(self.width() % dst.width() == 0);
+        assert!(self.height() % dst.height() == 0);
+        let block_sz = (self.height() / dst.height(), self.width() / dst.width());
+        if self.width() % 32 == 0 {
+            for (dst_px, w) in dst.pixels_mut(1).zip(self.windows((block_sz.0, block_sz.1))) {
+                let mut minimum = wide::u8x32::splat(255);
+                for pxs in w.packed_pixels_32().unwrap() {
+                    minimum = minimum.min(pxs);
+                }
+                *dst_px = *minimum.to_array().iter().min_by(|a, b| a.cmp(&b) ).unwrap();
+            }
+            return;
+        }
+        unimplemented!()
+    }
+
+}
+
 pub fn local_sum(src : &Window<'_, u8>, dst : &mut WindowMut<'_, i32>) {
 
     assert!(src.height() % dst.height() == 0);
