@@ -47,5 +47,5 @@ fn main() {
     // try_link_vlfeat();
     // try_link_gsl();
     // try_link_mkl();
-    try_link_ippi();
+    // try_link_ippi();
 }

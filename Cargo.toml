@@ -32,7 +32,7 @@ wide = "0.8.1"
 tuples = "1.6.0"
 either="1.0"
 statrs="0.16.0"
-polygeo = { path = "../polygeo" }
+polygeo = { git = "https://github.com/limads/polygeo.git" }
 # gstreamer-app = { version = "0.17.0" }
 # rustdct = "0.7.0"
 # rustfft = "0.7.0"
@@ -42,9 +42,9 @@ polygeo = { path = "../polygeo" }
 once_cell = { version = "1.5.2" }
 # lazy_static = "1.0"
 # structopt = "0.3"
-ripple = { path = "../ripple" }
+ripple = { git = "https://github.com/limads/ripple.git" }
 # away = { path = "../away" }
-bayes = { path = "../bayes" }
+# bayes = { git = "https://github.com/limads/bayes.git" }
 itertools = "0.10.1"
 parry2d="0.9.0"
 base64 = "0.13.0"
