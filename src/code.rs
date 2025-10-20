@@ -15,7 +15,7 @@ use std::cmp::Ordering;
 use num_traits::bounds::Bounded;
 use nalgebra::{Point2, Vector2};
 use std::ops::AddAssign;
-use crate::gray::Foreground;
+// use crate::gray::Foreground;
 use crate::local::IppSumWindow;
 use smallvec::SmallVec;
 use rangetools::Rangetools;
@@ -6551,7 +6551,7 @@ impl RunLengthCode {
         let mut r = 0;
     }
 
-    /* pixel values 255 and 0 cannot be used as a labels. This algorithm first calculates a binary
+    /*/* pixel values 255 and 0 cannot be used as a labels. This algorithm first calculates a binary
     image with continuities in labels set to 255 and discontinuities between labels set to zero.
     It verifies the actual color labels only once per RLE. It does not represent the discontinuities
     between label patches, nor does it represents RLEs with size smaller than 3. Optionally receive
@@ -6603,7 +6603,7 @@ impl RunLengthCode {
         }
         
         color_rles
-    }
+    }*/
     
     // Find RLEs by bisecting over running sum over rows only (each new row
     // start at zero, and goes up to 256 at the final column if we are at a u8 image).
