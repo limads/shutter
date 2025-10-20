@@ -71,9 +71,9 @@ pub mod stat;
 
 pub mod scalar;
 
-pub mod gray;
+// pub mod gray;
 
-pub mod hist;
+// pub mod hist;
 
 pub mod draw;
 
@@ -91,7 +91,7 @@ pub mod code;
 
 pub mod graph;
 
-pub mod texture;
+// pub mod texture;
 
 pub mod warp;
 
