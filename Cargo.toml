@@ -42,7 +42,7 @@ polygeo = { git = "https://github.com/limads/polygeo.git" }
 once_cell = { version = "1.5.2" }
 # lazy_static = "1.0"
 # structopt = "0.3"
-ripple = { git = "https://github.com/limads/ripple.git" }
+ripple = { git = "https://github.com/limads/ripple.git", features=[] }
 # away = { path = "../away" }
 # bayes = { git = "https://github.com/limads/bayes.git" }
 itertools = "0.10.1"
