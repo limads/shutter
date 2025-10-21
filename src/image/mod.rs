@@ -2619,6 +2619,7 @@ where
 
         // TODO use std::intrinsic::write_bytes?
 
+        /*
         #[cfg(feature="ipp")]
         unsafe {
             let (step, sz) = crate::image::ipputils::step_and_size_for_image(self);
@@ -2645,7 +2646,8 @@ where
                 return;
             }
         }
-
+        */
+        
         self.pixels_mut(1).for_each(|px| *px = color );
     }
 

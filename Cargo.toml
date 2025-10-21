@@ -70,7 +70,6 @@ bytemuck="1.13.1"
 # euclid = "0.2.6"
 
 [features]
-default = ["mkl", "ipp"]
 mkl=[]
 # gsl=[]
 ipp=[]
