@@ -6091,32 +6091,32 @@ pub enum Connectivity {
     Eight
 }
 
-const fn mmt_incr() -> [u32; 128] {
-    let mut dst = [0; 128];
+const fn mmt_incr() -> [u32; 2048] {
+    let mut dst = [0; 2048];
     let mut i = 1;
-    while i < 128 {
+    while i < 2048 {
         dst[i] = dst[i-1] + (i as u32);
         i += 1;
     }
     dst
 }
 
-const fn mmt_incr_sq() -> [u32; 128] {
-    let mut dst = [0; 128];
+const fn mmt_incr_sq() -> [u32; 2048] {
+    let mut dst = [0; 2048];
     let mut i = 1;
-    while i < 128 {
+    while i < 2048 {
         dst[i] = dst[i-1] + (i as u32).pow(2);
         i += 1;
     }
     dst
 }
 
-const fn mmt_crossed() -> [[u32; 128];128] {
-    let mut dst = [[0; 128];128];
+const fn mmt_crossed() -> [[u32; 256];256] {
+    let mut dst = [[0; 256];256];
     let mut row = 1;
-    while row < 128 {
+    while row < 256 {
         let mut i = 1;
-        while i < 128 {
+        while i < 256 {
             dst[row][i] = dst[row][i-1] + (i as u32)*(row as u32);
             i += 1;
         }
@@ -6125,11 +6125,11 @@ const fn mmt_crossed() -> [[u32; 128];128] {
     dst
 }
 
-const MMT_ORD_1 : [u32; 128] = mmt_incr();
+const MMT_ORD_1 : [u32; 2048] = mmt_incr();
 
-const MMT_ORD_2 : [u32; 128] = mmt_incr_sq();
+const MMT_ORD_2 : [u32; 2048] = mmt_incr_sq();
 
-const MMT_CROSSED : [[u32; 128];128] = mmt_crossed();
+const MMT_CROSSED : [[u32; 256];256] = mmt_crossed();
 
 fn rle_contrib_mmt(rle : &RunLength, mmt : &mut CentralMoments) {
     mmt.zero += rle.length as f32;

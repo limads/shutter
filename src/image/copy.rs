@@ -135,7 +135,7 @@ where
         T : Storage<P>
     {
         assert!(self.same_size(other));
-        #[cfg(feature="ipp")]
+        /*#[cfg(feature="ipp")]
         unsafe {
             let (src_step, src_sz) = crate::image::ipputils::step_and_size_for_image(other);
             let (dst_step, dst_sz) = crate::image::ipputils::step_and_size_for_image(self);
@@ -186,11 +186,11 @@ where
                 assert!(ans == 0);
                 return;
             }
-        }
+        }*/
 
-        //self.rows_mut().zip(other.rows())
-        //    .for_each(|(this, other)| this.copy_from_slice(other) );
-        unimplemented!()
+        self.rows_mut().zip(other.rows())
+            .for_each(|(this, other)| this.copy_from_slice(other) );
+        // unimplemented!()
     }
 }
 
